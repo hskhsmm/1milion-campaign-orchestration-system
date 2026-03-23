@@ -1,0 +1,32 @@
+# 파티션 2개 실험용 설정
+# 사용법: SPRING_PROFILES_ACTIVE=local,p2 ./gradlew bootRun
+
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 25     # 20 → 25 (Consumer 스레드 2개 + 여유)
+      minimum-idle: 12
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1800000
+
+# Kafka 설정 (파티션 2개 최적화)
+kafka:
+  producer:
+    buffer-memory: 134217728    # 128MB (유지)
+    batch-size: 65536           # 64KB (유지)
+    linger-ms: 20               # 20ms (유지)
+    compression-type: none
+    max-block-ms: 60000
+
+  consumer:
+    max-poll-records: 300       # 500 → 300 (스레드당 부하 감소)
+    max-poll-interval-ms: 600000  # 10분 (유지)
+    session-timeout-ms: 45000    # 45초 (유지)
+
+# 실험 메모
+# 파티션: 2개
+# Consumer 스레드: 2개 (자동)
+# 예상 TPS: 1,500 ~ 1,800
+# 예상 CPU: 50~55%
+# 순서 보장: 파티션별로만 보장 (전체 순서 깨짐 시작)

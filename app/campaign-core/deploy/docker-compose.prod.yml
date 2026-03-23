@@ -1,0 +1,19 @@
+version: "3.8"
+
+services:
+  app:
+    image: ${ECR_IMAGE}
+    container_name: campaign-core-app
+    ports:
+      - "8080:8080"
+    mem_limit: 6g
+    memswap_limit: 6g
+    environment:
+      SPRING_PROFILES_ACTIVE: prod
+
+      # JVM 메모리 제한 (t3.large 8GB 최적화 - 100만 트래픽 처리)
+      # Heap 5GB (컨테이너 6GB 중 안전 마진 1GB 확보, Non-Heap 영역 보장)
+      JAVA_TOOL_OPTIONS: -Xms2g -Xmx5g -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=256m -XX:+UseG1GC -XX:MaxGCPauseMillis=200 -XX:+ParallelRefProcEnabled -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8
+    env_file:
+      - /opt/campaign-core/.env.prod
+    restart: unless-stopped

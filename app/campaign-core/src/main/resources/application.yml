@@ -1,0 +1,43 @@
+
+spring:
+  config:
+    import: optional:file:.env[.properties]
+  application:
+    name: campaign-orchestration
+
+  profiles:
+    active: local
+
+  # Virtual Thread 활성화 (Java 25 + Spring Boot 4.0.1)
+  # 역할: 대량의 HTTP 요청을 저비용으로 처리 (트래픽 유입 최적화)
+  threads:
+    virtual:
+      enabled: true
+
+  # Jackson 타임존 설정 (서버 시간 맞추기)
+  jackson:
+    time-zone: Asia/Seoul
+    date-format: yyyy-MM-dd'T'HH:mm:ss
+
+  kafka:
+    bootstrap-servers: localhost:9092
+
+  # Redis 설정 (기본값 - 로컬 개발용)
+  data:
+    redis:
+      host: ${SPRING_DATA_REDIS_HOST:localhost}
+      port: ${SPRING_DATA_REDIS_PORT:6379}
+
+  # HTTP 응답 인코딩 설정 (한글 깨짐 방지)
+  servlet:
+    encoding:
+      charset: UTF-8
+      enabled: true
+      force: true
+
+# 배치 작업 설정
+batch:
+  aggregation:
+    max-past-years: 1  # 집계 가능한 최대 과거 기간 (년)
+  metadata:
+    retention-days: 90  # 배치 메타데이터 보관 기간 (일)

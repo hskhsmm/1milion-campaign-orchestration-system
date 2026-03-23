@@ -1,0 +1,10 @@
+# IDE
+.idea/
+*.iml
+
+# Claude Code memory
+.claude/
+
+# k6 binary (stress-test JS는 나중에 별도 커밋)
+stress-test/k6.exe
+stress-test/

@@ -1,0 +1,36 @@
+# 파티션 10개 실험용 설정 (오버 프로비저닝 테스트)
+# 사용법: SPRING_PROFILES_ACTIVE=local,p10 ./gradlew bootRun
+
+spring:
+  datasource:
+    hikari:
+      maximum-pool-size: 60     # 40 → 60 (Consumer 스레드 10개 + 여유)
+      minimum-idle: 30
+      connection-timeout: 30000  # 20000 → 30000 (타임아웃 증가)
+      idle-timeout: 300000
+      max-lifetime: 1800000
+
+# Kafka 설정 (파티션 10개 최적화)
+kafka:
+  producer:
+    buffer-memory: 536870912    # 512MB (128MB × 4배)
+    batch-size: 131072          # 128KB (96KB → 128KB)
+    linger-ms: 5                # 10ms → 5ms (최대한 빠른 전송)
+    compression-type: none
+    max-block-ms: 60000
+
+  consumer:
+    max-poll-records: 100       # 200 → 100 (타임아웃 방지)
+    max-poll-interval-ms: 600000  # 10분 (유지)
+    session-timeout-ms: 45000    # 45초 (유지)
+
+# 실험 메모
+# 파티션: 10개
+# Consumer 스레드: 10개 (자동)
+# 예상 TPS: 4,000 ~ 5,000 (한계 도달)
+# 예상 CPU: 90~100%
+# 순서 보장: 파티션별로만 보장
+# ⚠️ 수익 체감 구간 (10개가 5개보다 2배 빠르지 않음)
+# ⚠️ 스레드 경합, 컨텍스트 스위칭 오버헤드
+# ⚠️ DB가 가장 큰 병목 예상
+# ⚠️ 인프라: 8코어, 8GB 필수!

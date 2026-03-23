@@ -1,0 +1,47 @@
+spring:
+  datasource:
+    # Docker Compose로 띄운 MySQL에 접속 (localhost)
+    url: jdbc:mysql://localhost:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul&defaultAuthenticationPlugin=mysql_native_password
+    username: ${MYSQL_USER}
+    password: ${MYSQL_PASSWORD}
+    driver-class-name: com.mysql.cj.jdbc.Driver
+    hikari:
+      maximum-pool-size: 20     # 10만 트래픽 처리 최적화
+      minimum-idle: 10
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1800000
+
+  batch:
+    job:
+      enabled: false  # 애플리케이션 시작 시 자동 Job 실행 비활성화
+
+  jpa:
+    hibernate:
+      ddl-auto: update
+    show-sql: true
+    properties:
+      hibernate:
+        format_sql: true
+        dialect: org.hibernate.dialect.MySQLDialect
+        default_batch_fetch_size: 100  # N+1 문제 방지: IN 절로 한 번에 조회
+
+  kafka:
+    bootstrap-servers: localhost:9092
+    consumer:
+      group-id: campaign-group
+      auto-offset-reset: earliest
+
+# Kafka 설정 (파티션 1개 - Baseline)
+kafka:
+  producer:
+    buffer-memory: 134217728    # 128MB
+    batch-size: 65536           # 64KB
+    linger-ms: 20               # 20ms
+    compression-type: none
+    max-block-ms: 60000         # 60초
+
+  consumer:
+    max-poll-records: 500       # 한 번에 500개씩 처리
+    max-poll-interval-ms: 600000  # 10분
+    session-timeout-ms: 45000    # 45초
