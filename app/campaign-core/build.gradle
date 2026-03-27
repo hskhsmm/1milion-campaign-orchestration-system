@@ -24,27 +24,49 @@ repositories {
 }
 
 dependencies {
-	implementation 'org.springframework.boot:spring-boot-starter-actuator'
-	implementation 'org.springframework.boot:spring-boot-starter-aop'
-	implementation 'org.springframework.boot:spring-boot-starter-batch'
-	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+	// HTTP API 서버 — REST 엔드포인트 제공
+	implementation 'org.springframework.boot:spring-boot-starter-web'
+
+	// 재고 차감(Lua DECR), Rate Limiter(SET NX EX), Queue(LPUSH/RPOP), 결과 캐시
 	implementation 'org.springframework.boot:spring-boot-starter-data-redis'
-	implementation 'org.springframework.boot:spring-boot-starter-kafka'
-	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+
+	// PENDING → SUCCESS 확정, 캠페인/참여이력 영속
+	implementation 'org.springframework.boot:spring-boot-starter-data-jpa'
+
+	// Bridge → Kafka 배치 발행, Consumer PENDING 확정 처리
+	implementation 'org.springframework.kafka:spring-kafka'
+
+	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션
+	implementation 'org.flywaydb:flyway-mysql'
+
+	// PendingRetryScheduler(@Scheduled), RedisSyncScheduler(@Scheduled) — @EnableScheduling 활성화
+	implementation 'org.springframework.boot:spring-boot-starter-batch'
+
+	// AOP 기반 트랜잭션/로깅 처리 (Spring Boot 4.0 신규 스타터)
+	implementation 'org.springframework.boot:spring-boot-starter-aspectj'
+
+	// /actuator/prometheus 엔드포인트 — Micrometer → Prometheus 스크래핑
+	// 모니터링 문서 2장: Spring Boot(Micrometer) → Prometheus → Grafana 파이프라인 필수
+	implementation 'io.micrometer:micrometer-registry-prometheus'
+
+	// /actuator/health, /actuator/metrics — 헬스체크 및 커스텀 메트릭(TPS, p99, DLQ 등) 노출
+	implementation 'org.springframework.boot:spring-boot-starter-actuator'
+
+	// @RequestBody 유효성 검증 (@Valid, @NotNull 등)
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
-	implementation 'org.springframework.boot:spring-boot-starter-webmvc'
+
+	// TODO: 현재 설계 문서(DESIGN_GUIDE_V2.md)에 템플릿 엔진 사용 계획 없음
+	// REST API + 폴링 구조로 서버사이드 렌더링 불필요해 보이나,
+	// 관리자 페이지 또는 이벤트 결과 페이지 계획이 있다면 유지 필요 — 확인 요청
+	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
+
 	compileOnly 'org.projectlombok:lombok'
 	developmentOnly 'org.springframework.boot:spring-boot-devtools'
 	runtimeOnly 'com.mysql:mysql-connector-j'
 	annotationProcessor 'org.projectlombok:lombok'
-	testImplementation 'org.springframework.boot:spring-boot-starter-actuator-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-batch-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-data-jpa-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-data-redis-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-kafka-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-thymeleaf-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-validation-test'
-	testImplementation 'org.springframework.boot:spring-boot-starter-webmvc-test'
+
+	testImplementation 'org.springframework.boot:spring-boot-starter-test'
+	testImplementation 'org.springframework.kafka:spring-kafka-test'
 	testRuntimeOnly 'org.junit.platform:junit-platform-launcher'
 }
 

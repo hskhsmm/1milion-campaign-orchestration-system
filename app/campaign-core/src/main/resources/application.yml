@@ -35,6 +35,23 @@ spring:
       enabled: true
       force: true
 
+# 모니터링 공통 설정
+management:
+  metrics:
+    tags:
+      application: ${spring.application.name}
+      env: ${spring.profiles.active:local}
+    distribution:
+      percentiles-histogram:
+        "[http.server.requests]": true        # p95/p99 히스토그램 활성화
+      percentiles:
+        "[http.server.requests]": 0.95, 0.99  # PDF 3-1: API 응답시간 p95/p99
+      slo:
+        "[http.server.requests]": 1s, 3s      # PDF 알람 임계값: WARNING 1초 / CRITICAL 3초
+    export:
+      prometheus:
+        enabled: true
+
 # 배치 작업 설정
 batch:
   aggregation:
