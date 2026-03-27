@@ -20,7 +20,7 @@ v2(`1milion-campaign-orchestration-system`, 100만 트래픽 + AI 자율 운영)
 
 ```
 app/campaign-core/     ← Spring Boot 앱 (v1 코드 마이그레이션 완료)
-infra/                 ← Terraform (현재 비어있음, Phase 1 작업 대상)
+infra/                 ← Terraform (Phase 1 진행 중 — OIDC, EC2 완료)
 mcp-server/            ← Python/FastAPI AI 운영 서버 (Phase 3, 미작성)
 stress-test/           ← k6 부하 테스트 스크립트
 .github/workflows/     ← deploy.yml (루트에 있어야 GitHub Actions 인식)
@@ -124,9 +124,12 @@ Kafka Consumer (10 파티션)
 - [ ] `application-prod.yml` Kafka 3-broker, partitions=10, replication-factor=3
 
 ### Phase 1: Terraform (infra/ 전체 작성)
-- [ ] vpc.tf, ec2.tf (App + Kafka 3-broker EC2)
-- [ ] rds.tf, elasticache.tf (Redis Cluster 3샤드)
-- [ ] alb.tf, iam.tf (OIDC role), ssm.tf, variables.tf
+- [x] `main.tf` — provider, S3 backend (campaign-terraform-state-631124976154)
+- [x] `iam.tf` — GitHub Actions OIDC 신규 레포 연동, IAM Role 생성
+- [x] `ec2.tf` — terraform-mcp EC2 생성 (i-00ec03ad5c52e0a3a, AL2023, t3.small)
+- [x] `variables.tf`, `outputs.tf`, `terraform.tfvars.example`
+- [ ] 기존 리소스 import — 앱 EC2, RDS, ElastiCache (내일 예정)
+- [ ] vpc.tf, rds.tf, elasticache.tf (Kafka 3-broker, Redis Cluster 3샤드)
 
 ### Phase 3: MCP 서버 (mcp-server/)
 - [ ] Python/FastAPI MCP 서버
@@ -156,15 +159,17 @@ Kafka Consumer (10 파티션)
 | Account ID | 631124976154 |
 | Region | ap-northeast-2 |
 | ECR | campaign-core |
-| S3 | campaign-deploy-631124976154 |
+| S3 (배포) | campaign-deploy-631124976154 |
+| S3 (tfstate) | campaign-terraform-state-631124976154 |
 | CodeDeploy App | campaign-core-app |
 | Deployment Group | campaign-prod-dg |
-| IAM Role | github-actions-campaign-deploy-role |
+| IAM Role (CI/CD) | github-actions-campaign-deploy-role ✅ 신규 레포 연동 완료 |
+| IAM Role (MCP EC2) | terraform-mcp-role |
+| EC2 (MCP) | terraform-mcp (i-00ec03ad5c52e0a3a, 3.35.175.15) |
 | SSM prefix | /campaign/prod/ |
 
-### OIDC Trust Policy 수정 필요
-IAM → github-actions-campaign-deploy-role → Trust relationships에서
-`repo:hskhsmm/1milion-campaign-orchestration-system:*` 로 업데이트 (레포 이동됨)
+### OIDC 상태
+Terraform으로 완료 — `repo:hskhsmm/1milion-campaign-orchestration-system:*` 적용됨
 
 ---
 
