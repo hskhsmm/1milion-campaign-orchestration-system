@@ -2,13 +2,23 @@ management:
   endpoints:
     web:
       exposure:
-        include: health
+        include: health, prometheus        # Prometheus scrape 엔드포인트 노출
   endpoint:
     health:
-      show-details: never
+      show-details: when-authorized        # 인증된 요청만 상세 노출
+    prometheus:
+      enabled: true
   health:
     kafka:
-      enabled: false   #  Actuator Kafka Health 완전 제거
+      enabled: false                       # Actuator Kafka Health 완전 제거
+  metrics:
+    export:
+      cloudwatch:
+        enabled: true
+        namespace: CampaignSystem/V2       # CloudWatch 콘솔 네임스페이스
+        step: 1m                           # 이벤트 중 실시간 감지 (PDF 목적 1번)
+      prometheus:
+        enabled: true
 
 spring:
   datasource:
