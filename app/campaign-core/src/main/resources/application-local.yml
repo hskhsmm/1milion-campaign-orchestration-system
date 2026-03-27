@@ -1,3 +1,18 @@
+management:
+  endpoints:
+    web:
+      exposure:
+        include: health, prometheus, metrics  # 로컬은 모두 노출
+  endpoint:
+    prometheus:
+      enabled: true
+  metrics:
+    export:
+      cloudwatch:
+        enabled: false                        # 로컬에서 CloudWatch 비활성화
+      prometheus:
+        enabled: true
+
 spring:
   datasource:
     # Docker Compose로 띄운 MySQL에 접속 (localhost)
