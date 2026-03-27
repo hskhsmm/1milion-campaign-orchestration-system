@@ -1,0 +1,6 @@
+# 이 파일을 복사해서 terraform.tfvars로 만들고 값을 채워주세요.
+# cp terraform.tfvars.example terraform.tfvars
+
+account_id = "YOUR_AWS_ACCOUNT_ID"
+vpc_id     = "YOUR_VPC_ID"
+subnet_id  = "YOUR_SUBNET_ID"
