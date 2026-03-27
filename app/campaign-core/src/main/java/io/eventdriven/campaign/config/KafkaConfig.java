@@ -56,20 +56,6 @@ public class KafkaConfig {
     public static final String TOPIC_NAME = "campaign-participation-topic";
 
     /**
-     * Kafka Admin 설정 - 주석 처리 (파티션 수동 관리로 변경)
-     * kafka-clients 4.1.1의 AdminClient OAuth 버그로 인해 자동 파티션 관리 비활성화
-     * 파티션은 Docker 명령어로 수동 관리:
-     * docker exec kafka kafka-topics --bootstrap-server kafka:29092 --alter --topic campaign-participation-topic --partitions <개수>
-     */
-    // @Bean
-    // public KafkaAdmin kafkaAdmin() {
-    //     Map<String, Object> configs = new HashMap<>();
-    //     configs.put("bootstrap.servers", bootstrapServers);
-    //     configs.put("security.protocol", "PLAINTEXT");
-    //     return new KafkaAdmin(configs);
-    // }
-
-    /**
      * Kafka Producer 설정
      * - Key: String (Campaign ID 등)
      * - Value: String (JSON 문자열)
@@ -105,19 +91,6 @@ public class KafkaConfig {
     public KafkaTemplate<String, String> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
     }
-
-    /**
-     * 토픽 자동 생성 설정 제거
-     * - 이유: 파티션 수를 동적으로 관리하기 위해 KafkaTopicService에서 처리
-     * - KafkaTopicService.ensurePartitions()에서 토픽 생성 및 파티션 증가를 처리
-     */
-    // @Bean 제거: 동적 파티션 관리를 위해 토픽 자동 생성 비활성화
-    // public NewTopic campaignParticipationTopic() {
-    //     return TopicBuilder.name(TOPIC_NAME)
-    //             .partitions(1)
-    //             .replicas(1)
-    //             .build();
-    // }
 
     /**
      * Kafka Consumer 설정

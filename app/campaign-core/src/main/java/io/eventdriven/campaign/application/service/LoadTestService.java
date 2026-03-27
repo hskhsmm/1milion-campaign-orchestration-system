@@ -22,8 +22,6 @@ import java.util.regex.Pattern;
 @RequiredArgsConstructor
 public class LoadTestService {
 
-    private final KafkaTopicService kafkaTopicService;
-
     // 테스트 결과를 메모리에 저장 (실제 환경에서는 Redis 사용 권장)
     private final Map<String, LoadTestResult> testResults = new ConcurrentHashMap<>();
 
