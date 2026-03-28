@@ -56,7 +56,7 @@ resource "aws_instance" "terraform_mcp" {
   vpc_security_group_ids = [aws_security_group.terraform_mcp.id]
   iam_instance_profile   = aws_iam_instance_profile.terraform_mcp.name
 
-  associate_public_ip_address = true
+  associate_public_ip_address = false
 
   root_block_device {
     volume_type = "gp3"
