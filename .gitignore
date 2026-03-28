@@ -7,3 +7,13 @@
 
 # k6 binary
 stress-test/k6.exe
+
+# Terraform
+infra/.terraform/
+infra/terraform.tfstate
+infra/terraform.tfstate.backup
+infra/*.tfvars
+
+# 환경변수 (민감정보)
+.env
+app/campaign-core/.env
