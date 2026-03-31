@@ -7,9 +7,10 @@ terraform {
   }
 
   backend "s3" {
-    bucket = "campaign-terraform-state-631124976154"
-    key    = "infrastructure/terraform.tfstate"
-    region = "ap-northeast-2"
+    bucket         = "campaign-terraform-state-631124976154"
+    key            = "infrastructure/terraform.tfstate"
+    region         = "ap-northeast-2"
+    dynamodb_table = "terraform-lock"
   }
 }
 

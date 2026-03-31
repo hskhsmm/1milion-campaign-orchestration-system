@@ -19,8 +19,8 @@ v2(`1milion-campaign-orchestration-system`, 100만 트래픽 + AI 자율 운영)
 ## 레포 구조
 
 ```
-app/campaign-core/     ← Spring Boot 앱 (v1 코드 마이그레이션 완료)
-infra/                 ← Terraform (Phase 1 진행 중 — OIDC, EC2 완료)
+app/campaign-core/     ← Spring Boot 앱 (v1 코드 + Kafka 수동 관리 전환 완료)
+infra/                 ← Terraform (Phase 1 진행 중 — v1 기존 리소스 import 완료)
 mcp-server/            ← Python/FastAPI AI 운영 서버 (Phase 3, 미작성)
 stress-test/           ← k6 부하 테스트 스크립트
 .github/workflows/     ← deploy.yml (루트에 있어야 GitHub Actions 인식)
@@ -38,6 +38,15 @@ stress-test/           ← k6 부하 테스트 스크립트
 - Spring Batch 새벽 2시 통계 집계 (participation_history → campaign_stats)
 - GitHub Actions → ECR → S3 → CodeDeploy Blue-Green CI/CD
 - SSH 차단 + SSM Session Manager + Parameter Store
+
+### 최근 변경 (2026-03-27)
+- **Kafka 수동 파티션 관리 전환**: `KafkaTopicService` 삭제, `KafkaAdmin` Bean 제거
+  - 이유: 서버 기동 시 Kafka 브로커 연결 필수 → 로컬/테스트 환경 불편
+  - 토픽 생성은 Kafka CLI로 수동 관리 (`kafka-topics.sh --create`)
+  - `KafkaConfig.java`에서 `KafkaAdmin`, `NewTopic` 빈 제거
+  - `LoadTestService`에서 `KafkaTopicService` 의존성 제거
+- **모니터링 추가**: `micrometer-registry-prometheus` 의존성 추가 (build.gradle)
+  - `/actuator/prometheus` 엔드포인트 노출 → Prometheus 수집 예정
 
 ### 실험 결과 (핵심)
 | 파티션 | DB TPS | switch_ratio | violation_count |
@@ -124,12 +133,31 @@ Kafka Consumer (10 파티션)
 - [ ] `application-prod.yml` Kafka 3-broker, partitions=10, replication-factor=3
 
 ### Phase 1: Terraform (infra/ 전체 작성)
-- [x] `main.tf` — provider, S3 backend (campaign-terraform-state-631124976154)
-- [x] `iam.tf` — GitHub Actions OIDC 신규 레포 연동, IAM Role 생성
-- [x] `ec2.tf` — terraform-mcp EC2 생성 (i-00ec03ad5c52e0a3a, AL2023, t3.small)
-- [x] `variables.tf`, `outputs.tf`, `terraform.tfvars.example`
-- [ ] 기존 리소스 import — 앱 EC2, RDS, ElastiCache (내일 예정)
-- [ ] vpc.tf, rds.tf, elasticache.tf (Kafka 3-broker, Redis Cluster 3샤드)
+
+#### ✅ 완료된 작업 (2026-03-27 기준, terraform plan → No changes 확인)
+
+| 파일 | 리소스 수 | 내용 |
+|------|-----------|------|
+| `main.tf` | - | provider, S3 backend + **DynamoDB lock** (terraform-lock) |
+| `variables.tf` | - | region, account_id, vpc_id, subnet_id, github_repo |
+| `vpc.tf` | 8개 | VPC(172.31.0.0/16), IGW, Route Table, 퍼블릭 서브넷 4개(2a~2d), private_app_2a |
+| `security_groups.tf` | 5개 | alb-public(80/443), app-sg(8080), rds-mysql(3306), Kafka-SG(9092/9094), elasticache-redis(6379) |
+| `ec2.tf` | 11개 | IAM Role×2, Instance Profile×2, Policy×1, Policy Attachment×6, EC2×3 (batch-kafka-app, kafka-1, terraform-mcp) |
+| `rds.tf` | 1개 | batch-kafka-db (MySQL 8.0.43, db.t3.micro, SSM Parameter Store 비밀번호 연동) |
+| `dynamodb.tf` | 1개 | terraform-lock (PAY_PER_REQUEST, Terraform state lock용) |
+
+**핵심 결정 사항:**
+- Route Table Association: 암시적 메인 라우팅 테이블 연결 유지 (명시적 association 코드 없음)
+- RDS 비밀번호: SSM `/batch-kafka/prod/SPRING_DATASOURCE_PASSWORD` 에서 가져옴 + `lifecycle { ignore_changes = [password] }`
+- kafka-1 EC2: `associate_public_ip_address = false` (public 서브넷이지만 IGW로 외부 통신, 퍼블릭 IP 불필요)
+- security_groups description: 실제 AWS 값 그대로 사용 (forces replacement 방지)
+
+#### 🔲 남은 작업
+- [ ] `alb.tf` — alb-batch-kafka-api import
+- [ ] `elasticache.tf` — Redis ElastiCache import
+- [ ] IAM 과잉권한 수정 (S3FullAccess, SSMFullAccess → 최소권한으로 교체)
+- [ ] terraform-mcp EC2 서브넷 검토 (현재 var.subnet_id, public 서브넷 권장)
+- [ ] Kafka 3-broker EC2 추가 (v2 목표)
 
 ### Phase 3: MCP 서버 (mcp-server/)
 - [ ] Python/FastAPI MCP 서버
@@ -158,15 +186,22 @@ Kafka Consumer (10 파티션)
 |--------|---------|
 | Account ID | 631124976154 |
 | Region | ap-northeast-2 |
+| VPC | vpc-02bacd8c658dc632e (172.31.0.0/16) |
 | ECR | campaign-core |
 | S3 (배포) | campaign-deploy-631124976154 |
 | S3 (tfstate) | campaign-terraform-state-631124976154 |
+| DynamoDB (lock) | terraform-lock |
 | CodeDeploy App | campaign-core-app |
 | Deployment Group | campaign-prod-dg |
 | IAM Role (CI/CD) | github-actions-campaign-deploy-role ✅ 신규 레포 연동 완료 |
+| IAM Role (앱 EC2) | ec2-batchkafka-role |
 | IAM Role (MCP EC2) | terraform-mcp-role |
-| EC2 (MCP) | terraform-mcp (i-00ec03ad5c52e0a3a, 3.35.175.15) |
-| SSM prefix | /campaign/prod/ |
+| EC2 (앱) | batch-kafka-app (t3.small, private-app-subnet-1) |
+| EC2 (Kafka) | kafka-1 (t3.small, public-2a) |
+| EC2 (MCP) | terraform-mcp (t3.small, AL2023) |
+| RDS | batch-kafka-db (MySQL 8.0.43, db.t3.micro, ap-northeast-2b) |
+| SSM (앱) | /batch-kafka/prod/* |
+| SSM (CI/CD) | /campaign/prod/ |
 
 ### OIDC 상태
 Terraform으로 완료 — `repo:hskhsmm/1milion-campaign-orchestration-system:*` 적용됨
