@@ -134,7 +134,7 @@ Kafka Consumer (10 파티션)
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 
-#### ✅ 완료된 작업 (2026-03-27 기준, terraform plan → No changes 확인)
+#### ✅ 완료된 작업 (2026-03-31 기준, terraform plan → No changes 확인)
 
 | 파일 | 리소스 수 | 내용 |
 |------|-----------|------|
@@ -143,21 +143,24 @@ Kafka Consumer (10 파티션)
 | `vpc.tf` | 8개 | VPC(172.31.0.0/16), IGW, Route Table, 퍼블릭 서브넷 4개(2a~2d), private_app_2a |
 | `security_groups.tf` | 5개 | alb-public(80/443), app-sg(8080), rds-mysql(3306), Kafka-SG(9092/9094), elasticache-redis(6379) |
 | `ec2.tf` | 11개 | IAM Role×2, Instance Profile×2, Policy×1, Policy Attachment×6, EC2×3 (batch-kafka-app, kafka-1, terraform-mcp) |
-| `rds.tf` | 1개 | batch-kafka-db (MySQL 8.0.43, db.t3.micro, SSM Parameter Store 비밀번호 연동) |
+| `rds.tf` | 1개 | batch-kafka-db (MySQL 8.0.44, db.t3.micro, SSM Parameter Store 비밀번호 연동) |
 | `dynamodb.tf` | 1개 | terraform-lock (PAY_PER_REQUEST, Terraform state lock용) |
+| `alb.tf` | 3개 | alb-batch-kafka-api, tg-api-8080, HTTP 리스너 — import 완료 |
+| `elasticache.tf` | 2개 | batch-kafka 서브넷 그룹 import 완료, Redis 7.1 클러스터 코드 작성 (apply 대기) |
 
 **핵심 결정 사항:**
 - Route Table Association: 암시적 메인 라우팅 테이블 연결 유지 (명시적 association 코드 없음)
 - RDS 비밀번호: SSM `/batch-kafka/prod/SPRING_DATASOURCE_PASSWORD` 에서 가져옴 + `lifecycle { ignore_changes = [password] }`
 - kafka-1 EC2: `associate_public_ip_address = false` (public 서브넷이지만 IGW로 외부 통신, 퍼블릭 IP 불필요)
 - security_groups description: 실제 AWS 값 그대로 사용 (forces replacement 방지)
+- ALB Listener: `default_action` `ignore_changes` 추가 (stickiness 속성 Terraform provider 충돌 방지)
+- RDS engine_version: AWS 자동 업그레이드로 8.0.43 → 8.0.44 반영
 
 #### 🔲 남은 작업
-- [ ] `alb.tf` — alb-batch-kafka-api import
-- [ ] `elasticache.tf` — Redis ElastiCache import
-- [ ] IAM 과잉권한 수정 (S3FullAccess, SSMFullAccess → 최소권한으로 교체)
-- [ ] terraform-mcp EC2 서브넷 검토 (현재 var.subnet_id, public 서브넷 권장)
-- [ ] Kafka 3-broker EC2 추가 (v2 목표)
+- [ ] IAM 과잉권한 수정 (S3FullAccess, SSMFullAccess → 최소권한으로 교체) — `iam.tf`
+- [ ] terraform-mcp EC2 서브넷 검토 (현재 private_app_2a, public 서브넷 권장)
+- [ ] Kafka 3-broker EC2 추가 (v2 목표) — `ec2.tf`
+- [ ] ElastiCache Redis 클러스터 apply (현재 비용 절감으로 삭제 상태)
 
 ### Phase 3: MCP 서버 (mcp-server/)
 - [ ] Python/FastAPI MCP 서버
@@ -199,7 +202,9 @@ Kafka Consumer (10 파티션)
 | EC2 (앱) | batch-kafka-app (t3.small, private-app-subnet-1) |
 | EC2 (Kafka) | kafka-1 (t3.small, public-2a) |
 | EC2 (MCP) | terraform-mcp (t3.small, AL2023) |
-| RDS | batch-kafka-db (MySQL 8.0.43, db.t3.micro, ap-northeast-2b) |
+| RDS | batch-kafka-db (MySQL 8.0.44, db.t3.micro, ap-northeast-2b) |
+| ALB | alb-batch-kafka-api (internet-facing, 2a/2b, HTTP 80 → tg-api-8080) |
+| ElastiCache | 서브넷 그룹 batch-kafka (존재), 클러스터 삭제 상태 (비용 절감) |
 | SSM (앱) | /batch-kafka/prod/* |
 | SSM (CI/CD) | /campaign/prod/ |
 
