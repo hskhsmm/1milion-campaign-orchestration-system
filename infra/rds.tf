@@ -8,7 +8,7 @@ data "aws_ssm_parameter" "db_password" {
 resource "aws_db_instance" "batch_kafka_db" {
   identifier        = "batch-kafka-db"
   engine            = "mysql"
-  engine_version    = "8.0.43"
+  engine_version    = "8.0.44"
   instance_class    = "db.t3.micro"
   username          = "batchuser"
   password          = data.aws_ssm_parameter.db_password.value
