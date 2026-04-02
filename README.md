@@ -81,6 +81,8 @@ PENDING → 자리 선점                          (장애 복구의 기준점)
 | **감사 로그** | AWS DynamoDB |
 | **시크릿 관리** | AWS SSM Parameter Store |
 | **Load Test** | k6 |
+| **Monitoring** | Prometheus + Grafana |
+| **Metrics** | Micrometer (Spring Boot Actuator 연동) |
 | **Cloud** | AWS (EC2, RDS, ElastiCache, ALB, CodeDeploy, SSM) |
 | **CI/CD** | GitHub Actions + CodeDeploy (Blue-Green) |
 
