@@ -111,26 +111,40 @@ Kafka Consumer (10 파티션)
 
 ---
 
-## v2 구현 TODO (우선순위 순)
+## v2 구현 TODO (이슈 기준)
 
-### Phase 2-A: 핵심 흐름 재설계 (최우선)
-- [ ] `ParticipationController` 전면 재설계 (DECR → PENDING → Queue → 202)
+### #2 선행 — 공통 인터페이스 확정 (브랜치 분기 전, 한 명이 처리)
+- [ ] `ParticipationStatus.java` — PENDING 추가
+- [ ] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
+- [ ] `ParticipationEvent.java` — historyId 필드 추가
+- [ ] `db/migration/V2__add_sequence_to_participation_history.sql` — Flyway 마이그레이션
+- Redis Queue 키 형식 합의: `queue:campaign:{campaignId}`
+
+### #3 A파트 — API 진입 ~ Queue 적재 (leepg 담당)
+- [ ] `RateLimitService` 신규 (SET NX EX 10, 캠페인+유저 조합 중복 차단)
 - [ ] `RedisQueueService` 신규 (LPUSH/RPOP, MAX_QUEUE_SIZE=100,000)
-- [ ] `ParticipationBridge` 신규 (@Scheduled 100ms, Queue 드레인 → Kafka 발행)
-- [ ] `ParticipationEventConsumer` 단순화 (historyId PK UPDATE만)
-- [ ] Kafka 메시지 구조 변경 (historyId 추가)
-- [ ] Kafka Producer 파티션 키 변경 (null → campaignId % partitionCount)
+- [ ] `ParticipationService` 전면 재작성 (DECR → PENDING INSERT → LPUSH → 202)
+- [ ] `ParticipationController` 수정 (응답 200 → 202)
 
-### Phase 2-B: 신규 컴포넌트
-- [ ] `RateLimitService` 신규 (SET NX EX 10, 캠페인+유저 조합)
-- [ ] `PendingRetryScheduler` 신규 (Spring Batch Chunk: 5분 초과 PENDING 재처리)
-- [ ] `RedisSyncScheduler` 신규 (Redis stock vs DB 정합성 검증)
+### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당)
+- [ ] `ParticipationBridge` 신규 (@Scheduled 100ms, RPOP → Kafka produce)
+- [ ] `ParticipationEventConsumer` 단순화 (historyId PK UPDATE만, Redis DECR 제거, 멱등성 보장)
+- [ ] `KafkaConfig` 수정 (파티션 키 null → campaignId % partitionCount)
+- [ ] `application-prod.yml` 수정 (partitions=10, replication-factor=3)
+- [ ] Bridge 예외처리 + DLQ 신규 로직 (Kafka produce 실패 시 재시도 / DLQ 적재)
 
-### Phase 2-C: DB 스키마
-- [ ] `participation_history`에 `sequence BIGINT` 컬럼 추가
+### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
+- [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
+- [ ] `RedisConfig.java` 수정 (RedisClusterConfiguration 적용)
+- [ ] `application-prod.yml` Redis Cluster 엔드포인트 반영
 
-### Phase 2-D: 설정
-- [ ] `application-prod.yml` Kafka 3-broker, partitions=10, replication-factor=3
+### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
+- [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
+- [ ] `application-prod.yml` broker 설정 반영
+
+### 모니터링 (A/B 코드 완성 후)
+- [ ] Prometheus + Grafana 구성
+- [ ] 메트릭 포인트 확정 (Bridge 드레인 속도, PENDING→SUCCESS 지연시간, Queue 적재량)
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 
