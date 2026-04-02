@@ -5,8 +5,8 @@ resource "aws_lb" "main" {
   load_balancer_type = "application"
   security_groups    = [aws_security_group.alb_public.id]
   subnets            = [
-    "subnet-01b092eda6da614fc",  # public-2a
-    "subnet-095abce6c4befae62",  # public-2b
+    aws_subnet.public_2a.id,
+    aws_subnet.public_2b.id,
   ]
 
   ip_address_type = "ipv4"
