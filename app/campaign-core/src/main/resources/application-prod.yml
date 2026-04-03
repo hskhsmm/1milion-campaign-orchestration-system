@@ -50,6 +50,10 @@ spring:
     admin:
       auto-create: true         # (있어도 되고 없어도 됨)
 
+  flyway:
+    baseline-on-migrate: true    # 기존 DB를 V1 베이스라인으로 인식, V2부터 적용
+    baseline-version: 1
+
   batch:
     job:
       enabled: false             #  Batch 자동 실행 차단

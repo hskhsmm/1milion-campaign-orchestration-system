@@ -132,6 +132,7 @@ Kafka Consumer (10 파티션)
 - [ ] `KafkaConfig` 수정 (파티션 키 null → campaignId % partitionCount)
 - [ ] `application-prod.yml` 수정 (partitions=10, replication-factor=3)
 - [ ] Bridge 예외처리 + DLQ 신규 로직 (Kafka produce 실패 시 재시도 / DLQ 적재)
+- [ ] DLQ 메시지 적재 시 Slack 알림 (Consumer에서 감지 → SlackNotificationService)
 
 ### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
 - [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
