@@ -53,17 +53,17 @@ public class PollingController {
         }
 
         // ② DB fallback
-        return participationHistoryRepository.findByCampaignIdAndUserId(campaignId, userId)
-                .map(history -> {
-                    log.debug("DB fallback. userId={}, campaignId={}, status={}", userId, campaignId, history.getStatus());
-                    return ResponseEntity.ok(
-                            ApiResponse.success(Map.of("status", history.getStatus().name()))
-                    );
-                })
-                .orElseGet(() -> {
-                    log.warn("참여 이력 없음. userId={}, campaignId={}", userId, campaignId);
-                    return ResponseEntity.status(404)
-                            .body(ApiResponse.fail("HISTORY_NOT_FOUND", "참여 이력을 찾을 수 없습니다."));
-                });
+        ParticipationHistory history = participationHistoryRepository
+                .findByCampaignIdAndUserId(campaignId, userId)
+                .orElse(null);
+
+        if (history == null) {
+            log.warn("참여 이력 없음. userId={}, campaignId={}", userId, campaignId);
+            return ResponseEntity.status(404)
+                    .body(ApiResponse.fail("HISTORY_NOT_FOUND", "참여 이력을 찾을 수 없습니다."));
+        }
+
+        log.debug("DB fallback. userId={}, campaignId={}, status={}", userId, campaignId, history.getStatus());
+        return ResponseEntity.ok(ApiResponse.success(Map.of("status", history.getStatus().name())));
     }
 }
