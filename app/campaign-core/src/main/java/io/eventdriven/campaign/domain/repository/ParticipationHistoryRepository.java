@@ -45,7 +45,7 @@ public interface ParticipationHistoryRepository extends JpaRepository<Participat
      */
     @Modifying
     @Transactional
-    @Query("UPDATE ParticipationHistory ph SET ph.status = 'SUCCESS' WHERE ph.id IN :historyIds")
+    @Query("UPDATE ParticipationHistory ph SET ph.status = 'SUCCESS' WHERE ph.id IN :historyIds AND ph.status = 'PENDING'")
     int bulkUpdateSuccess(@Param("historyIds") List<Long> historyIds);
 
     /**
