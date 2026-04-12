@@ -44,7 +44,7 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
 
   kafka:
-    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS}
+    bootstrap-servers: ${KAFKA_BROKER_1:localhost}:9092,${KAFKA_BROKER_2:localhost}:9092,${KAFKA_BROKER_3:localhost}:9092
     listener:
       auto-startup: true        #  Consumer 기동
     admin:
@@ -72,4 +72,8 @@ kafka:
     max-poll-records: 500       # 한 번에 500개씩 처리
     max-poll-interval-ms: 600000  # 10분
     session-timeout-ms: 45000    # 45초
-    # v2 고도화 시점에 Kafka 3-broker 클러스터 설정으로 교체 예정
+    replication-factor: 3       # 3-broker 클러스터 운영 시 적용
+    partitions: 10              # v2 목표 파티션 수
+
+slack:
+  webhook-url: ${SLACK_WEBHOOK_URL:}
