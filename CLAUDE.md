@@ -113,12 +113,12 @@ Kafka Consumer (10 파티션)
 
 ## v2 구현 TODO (이슈 기준)
 
-### #2 선행 — 공통 인터페이스 확정 (브랜치 분기 전, 한 명이 처리)
-- [ ] `ParticipationStatus.java` — PENDING 추가
-- [ ] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
-- [ ] `ParticipationEvent.java` — historyId 필드 추가
-- [ ] `db/migration/V2__add_sequence_to_participation_history.sql` — Flyway 마이그레이션
-- Redis Queue 키 형식 합의: `queue:campaign:{campaignId}`
+### #2 선행 — 공통 인터페이스 확정 ✅ 완료 (B파트에서 처리)
+- [x] `ParticipationStatus.java` — PENDING 추가
+- [x] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
+- [x] `ParticipationEvent.java` — historyId 필드 추가
+- [x] `db/migration/V2__add_sequence_to_participation_history.sql` — Flyway 마이그레이션
+- Redis Queue 키 형식: `queue:campaign:{campaignId}` 확정
 
 ### #3 A파트 — API 진입 ~ Queue 적재 (leepg 담당)
 - [ ] `RateLimitService` 신규 (SET NX EX 10, 캠페인+유저 조합 중복 차단)
@@ -126,15 +126,33 @@ Kafka Consumer (10 파티션)
 - [ ] `ParticipationService` 전면 재작성 (DECR → PENDING INSERT → LPUSH → 202)
 - [ ] `ParticipationController` 수정 (응답 200 → 202)
 
-### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당)
-- [ ] `ParticipationEvent.java` 수정 (processingSequence 필드 제거)
-- [ ] `KafkaConfig.java` 수정 (파티션 키 null → campaignId, concurrency=10)
-- [ ] `ParticipationBridge.java` 신규 (@Scheduled 100ms, RPOP → Kafka produce, 동적 batchSize, MAX_RETRY, DLQ + Slack)
-- [ ] `ParticipationHistoryRepository.java` 수정 (bulkUpdateSuccess @Modifying @Query 추가, findByCampaignIdAndUserId 추가)
-- [ ] `ParticipationEventConsumer.java` 전면 재작성 (Redis DECR 제거, DB INSERT 제거, 배치 UPDATE, Redis pipeline, 트랜잭션 분리, Poison Pill fallback Direction B)
-- [ ] `SlackNotificationService.java` 신규 (IncomingWebhook URL SSM 주입, DLQ 적재 알림 + historyId 포함)
-- [ ] `PollingController.java` 신규 (GET /api/campaigns/{id}/participation/{userId}/result, Redis → DB fallback)
-- [ ] `application-prod.yml` 수정 (bootstrap-servers 3-broker, partitions=10, replication-factor=3)
+### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당) ✅ 코드 완료
+
+> 설계 문서: `C:/Users/user/Downloads/B파트_장애시나리오_설계_v4_최종.pdf`
+> 브랜치: `feature/phase2-part-b`
+> 현재 상태: 전체 완료 (2026-04-12), 커밋 후 PR 머지만 남음
+
+#### ✅ 완료
+- [x] `ParticipationStatus.java` — PENDING 추가
+- [x] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
+- [x] `ParticipationEvent.java` — historyId 필드 추가
+- [x] `ParticipationHistoryRepository.java` — bulkUpdateSuccess(AND status=PENDING 멱등성), findByCampaignIdAndUserId 추가
+- [x] `ParticipationEventConsumer.java` — v2 전면 재작성 + Redis 결과 캐시 + Slack 연동 + fallbackIndividual
+- [x] `SlackNotificationService.java` — 신규 생성
+- [x] `ParticipationBridge.java` — 신규 작성
+  - @Scheduled(fixedDelay=100ms), active:campaigns 순회, RPOP, batchSize=500 (yml 오버라이드 가능)
+  - MAX_RETRY 3회 + exponential backoff (200ms→400ms), DLQ+Slack
+  - 파티션 키: String.valueOf(campaignId), LPUSH 재적재 금지
+- [x] `PollingController.java` — 신규 작성
+  - GET /api/campaigns/{campaignId}/participation/{userId}/result
+  - Redis cache 우선 → DB fallback
+- [x] `CampaignCoreApplication.java` — @EnableScheduling 추가
+- [x] `application-prod.yml` — 3-broker 플레이스홀더, partitions=10, replication-factor=3, slack.webhook-url 추가
+- [x] `application-local.yml` — slack.webhook-url 추가
+
+#### 📌 배포 전 AWS 작업 (인프라 올릴 때)
+- Slack Incoming Webhook URL 발급 → SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록
+- SSM에 `KAFKA_BROKER_1`, `KAFKA_BROKER_2`, `KAFKA_BROKER_3` 등록 (3-broker 구성 후)
 
 ### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
 - [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
