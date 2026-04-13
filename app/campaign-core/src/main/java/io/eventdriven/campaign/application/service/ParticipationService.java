@@ -1,98 +1,136 @@
 package io.eventdriven.campaign.application.service;
 
-import io.eventdriven.campaign.api.exception.infrastructure.KafkaPublishException;
-import io.eventdriven.campaign.api.exception.infrastructure.KafkaSerializationException;
-import io.eventdriven.campaign.application.event.ParticipationEvent;
+import io.eventdriven.campaign.api.exception.business.CampaignNotFoundException;
+import io.eventdriven.campaign.api.exception.business.DuplicateParticipationException;
+import io.eventdriven.campaign.api.exception.business.RateLimitExceededException;
+import io.eventdriven.campaign.api.exception.business.StockExhaustedException;
+import io.eventdriven.campaign.api.exception.infrastructure.ParticipationServiceUnavailableException;
+import io.eventdriven.campaign.domain.entity.Campaign;
+import io.eventdriven.campaign.domain.entity.ParticipationHistory;
+import io.eventdriven.campaign.domain.repository.CampaignRepository;
+import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.kafka.core.KafkaTemplate;
-import org.springframework.kafka.support.SendResult;
+import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.util.concurrent.CompletableFuture;
+import java.util.HashMap;
+import java.util.Map;
+import java.util.Optional;
 
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class ParticipationService {
-
-    private final KafkaTemplate<String, String> kafkaTemplate;
+    private final CampaignRepository campaignRepository;
+    private final ParticipationHistoryRepository participationHistoryRepository;
+    private final RateLimitService rateLimitService;
+    private final RedisQueueService redisQueueService;
+    private final RedisStockService redisStockService;
     private final JsonMapper jsonMapper;
 
-    private static final String TOPIC = "campaign-participation-topic";
+    private static final int MAX_RETRY = 3;
 
-    /**
-     * 선착순 참여 요청 처리 (비동기 + 콜백)
-     * - Kafka로 이벤트 발행
-     * - 전송 결과를 비동기로 확인하여 실패 시 로깅 및 알림
-     */
-    public void participate(Long campaignId, Long userId) {
-        ParticipationEvent event = new ParticipationEvent(campaignId, userId);
 
-        try {
-            // 1. JSON 직렬화
-            String message = jsonMapper.writeValueAsString(event);
+    public void participate(Long campaignId, Long userId){
+        //  RateLimit: SET NX EX 10 — 10초 내 동일 요청 차단
+        if(!rateLimitService.isAllowed(campaignId, userId)) {
+            throw new RateLimitExceededException(campaignId, userId);
+        }
+        // 캠페인 조회 — sequence 계산에 totalStock 필요
+        Campaign campaign = campaignRepository.findById(campaignId)
+                .orElseThrow(() -> new CampaignNotFoundException(campaignId));
 
-            // Key를 null로 설정하여 round-robin 방식으로 파티션 분산
-            // 같은 campaignId를 key로 사용하면 모든 메시지가 같은 파티션으로 가서 순서 보장됨
-            // null을 사용하면 3개 파티션에 균등 분산되어 순서가 섞임
-            String key = null;
 
-            // 2. Kafka 전송 (비동기 + 콜백)
-            CompletableFuture<SendResult<String, String>> future =
-                    kafkaTemplate.send(TOPIC, key, message);
+        // Redis DECR — 원자적 재고 차감
+        Long remaining = redisStockService.decreaseStock(campaignId);
+        if (remaining < 0) {
+            redisStockService.incrementStock(campaignId); // 보상 INCR
+            throw new StockExhaustedException(campaignId);
+        }
 
-            // 3. 전송 결과 콜백 처리
-            future.whenComplete((result, ex) -> {
-                if (ex != null) {
-                    // 전송 실패
-                    handleKafkaPublishFailure(campaignId, userId, message, ex);
-                } else {
-                    // 전송 성공
-                    handleKafkaPublishSuccess(campaignId, userId, result);
-                }
-            });
+        // sequence = totalStock - remaining (선착순 번호, DECR 시점에 원자적 확정)
+        long sequence = campaign.getTotalStock() - remaining;
 
-        } catch (Exception e) {
-            // JSON 직렬화 실패
-            log.error("🚨 JSON 직렬화 실패 - Campaign ID: {}, User ID: {}", campaignId, userId, e);
-            throw new KafkaSerializationException(e);
+        //  PENDING INSERT  (지수 백오프 재시도)
+        Long historyId = insertPendingWithRetry(campaign, userId, sequence, campaignId);
+
+        //  Redis Queue LPUSH: Bridge가 RPOP 후 Kafka 발행
+        String message = buildMessage(campaignId, userId, historyId);
+        boolean pushed = redisQueueService.push(campaignId, message);
+        if (!pushed) {
+            // Queue 100,000 초과: PENDING은 DB에 있으므로 Spring Batch 안전망이 처리
+            log.warn("Redis Queue 적재 실패 (Spring Batch 안전망). campaignId={}, userId={}, historyId={}",
+                    campaignId, userId, historyId);
         }
     }
 
-    /**
-     * Kafka 전송 성공 처리
-     */
-    private void handleKafkaPublishSuccess(Long campaignId, Long userId, SendResult<String, String> result) {
-        log.info("✅ Kafka 전송 성공 - Campaign ID: {}, User ID: {}, Offset: {}, Partition: {}",
-                campaignId,
-                userId,
-                result.getRecordMetadata().offset(),
-                result.getRecordMetadata().partition());
 
-        // TODO: 메트릭 수집 (Prometheus 등)
-        // meterRegistry.counter("kafka.publish.success", "topic", TOPIC).increment();
+
+
+    private Long insertPendingWithRetry(Campaign campaign, Long userId, long sequence, Long campaignId) {
+        for (int attempt = 1; attempt <= MAX_RETRY; attempt++) {
+            try {                                                                                                                                                                                 ParticipationHistory history = new ParticipationHistory(campaign, userId, sequence);                                                                                              ParticipationHistory saved = participationHistoryRepository.save(history);
+                log.info("PENDING INSERT 성공. campaignId={}, userId={}, historyId={}, attempt={}",                                                                                                       campaignId, userId, saved.getId(), attempt);
+                return saved.getId();
+
+            } catch (DataIntegrityViolationException e) {
+                // UNIQUE 제약 위반 (campaign_id + user_id 중복)
+                Optional<ParticipationHistory> existing =
+                        participationHistoryRepository.findByCampaignIdAndUserId(campaignId, userId);
+
+                if (existing.isPresent() && !existing.get().getSequence().equals(sequence)) {
+                    // TTL 만료 후 새 요청: 이미 다른 sequence로 참여 완료
+                    // 이번 DECR 보상 후 409
+                    redisStockService.incrementStock(campaignId);
+                    log.warn("TTL 만료 재요청. campaignId={}, userId={}, newSeq={}, existingSeq={}",
+                            campaignId, userId, sequence, existing.get().getSequence());
+                    throw new DuplicateParticipationException(campaignId, userId);
+                }
+
+                // 같은 sequence: 이전 시도에서 이미 INSERT 완료, 기존 historyId 반환
+                log.warn("DuplicateKey 동일 sequence. campaignId={}, userId={}, historyId={}",
+                        campaignId, userId, existing.get().getId());
+                return existing.get().getId();
+
+            } catch (Exception e) {
+                // DB 타임아웃, 연결 실패 등 일반 장애 — 재시도
+                log.warn("INSERT 실패. attempt={}/{}, campaignId={}, userId={}",
+                        attempt, MAX_RETRY, campaignId, userId, e);
+
+                if (attempt < MAX_RETRY) {
+                    // exponential backoff: attempt=1 > 200ms, attempt=2 > 400ms
+                    long backoffMs = (long) Math.pow(2, attempt) * 100L;
+                    try {
+                        Thread.sleep(backoffMs);
+                    } catch (InterruptedException ie) {
+                        Thread.currentThread().interrupt();
+                        redisStockService.incrementStock(campaignId);
+                        throw new ParticipationServiceUnavailableException(campaignId, userId);
+                    }
+                }
+            }
+        }
+
+        // MAX_RETRY 3회 소진 — 보상 INCR + 503
+        redisStockService.incrementStock(campaignId);
+        throw new ParticipationServiceUnavailableException(campaignId, userId);
     }
 
-    /**
-     * Kafka 전송 실패 처리
-     */
-    private void handleKafkaPublishFailure(Long campaignId, Long userId, String message, Throwable ex) {
-        log.error("🚨 Kafka 전송 실패 - Campaign ID: {}, User ID: {}, Message: {}",
-                campaignId, userId, message, ex);
 
-        // 운영자 알림 (실제 환경에서는 Slack, Email 등으로 전송)
-        log.error("🔔 [ALERT] Kafka 전송 실패 - 데이터 손실 위험! Campaign ID: {}, User ID: {}",
-                campaignId, userId);
 
-        // TODO: 실패한 메시지를 별도 저장 (DB 또는 파일)
-        // failureRepository.save(new KafkaFailureLog(campaignId, userId, message, ex.getMessage()));
-
-        // TODO: 메트릭 수집
-        // meterRegistry.counter("kafka.publish.failure", "topic", TOPIC).increment();
-
-        // 사용자에게는 일반적인 오류 메시지를 던짐 (GlobalExceptionHandler가 처리)
-        throw new KafkaPublishException(TOPIC, ex);
+    private String buildMessage(Long campaignId, Long userId, Long historyId) {
+        try {
+            Map<String, Object> msg = new HashMap<>();
+            msg.put("campaignId", campaignId);
+            msg.put("userId", userId);
+            msg.put("historyId", historyId);
+            return jsonMapper.writeValueAsString(msg);
+        } catch (Exception e) {
+            log.error("메시지 직렬화 실패. campaignId={}, userId={}, historyId={}", campaignId, userId, historyId, e);
+            throw new RuntimeException("메시지 직렬화 실패", e);
+        }
     }
+
 }

@@ -21,6 +21,10 @@ public enum ErrorCode {
     // 참여 관련
     DUPLICATE_PARTICIPATION(HttpStatus.CONFLICT, "PARTICIPATION_001", "이미 참여한 캠페인입니다."),
     INVALID_USER(HttpStatus.BAD_REQUEST, "PARTICIPATION_002", "유효하지 않은 사용자입니다."),
+    RATE_LIMIT_EXCEEDED(HttpStatus.TOO_MANY_REQUESTS, "PARTICIPATION_003", "중복 요청입니다. 잠시 후 다시 시도해주세요."),
+    STOCK_EXHAUSTED(HttpStatus.BAD_REQUEST, "PARTICIPATION_004", "재고가 소진되었습니다."),
+    PARTICIPATION_SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PARTICIPATION_005", "일시적으로 참여 처리에 실패했습니다."),
+
 
     // 배치 관련
     BATCH_ALREADY_EXECUTED(HttpStatus.CONFLICT, "BATCH_001", "해당 날짜는 이미 집계되었습니다."),

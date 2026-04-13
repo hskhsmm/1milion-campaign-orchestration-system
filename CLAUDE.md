@@ -89,11 +89,15 @@ v2:       Redis DECR 시점에 선착순 확정 → Kafka 순서 무관
 ### v2 처리 흐름
 ```
 POST /api/campaigns/{id}/participation
-  1. RateLimitService (중복 요청 차단, SET NX EX 10)
-  2. Redis Lua DECR → remaining < 0이면 즉시 400
-  3. DB PENDING INSERT → historyId 획득 (자리 선점)
-  4. Redis Queue LPUSH (queue:campaign:{id})
-  5. 202 반환
+  1. RateLimitService (SET NX EX 10, 10초 내 동일 요청 차단)
+  2. Redis DECR → remaining < 0이면 보상 INCR + 즉시 400
+  3. sequence = totalStock - remaining (선착순 번호 원자적 확정)
+  4. DB PENDING INSERT → historyId 획득 (자리 선점, 지수 백오프 재시도 3회)
+     - DuplicateKeyException + 같은 sequence → 기존 historyId 반환
+     - DuplicateKeyException + 다른 sequence → 보상 INCR + 409
+     - INSERT 실패(DB 장애) → 재시도, MAX_RETRY 소진 시 보상 INCR + 503
+  5. Redis Queue LPUSH (queue:campaign:{id}) → 실패 시 Spring Batch 안전망
+  6. 202 반환
 
 ParticipationBridge (@Scheduled 100ms)
   → active:campaigns 순회 → RPOP batchSize개 → Kafka 발행
@@ -120,17 +124,31 @@ Kafka Consumer (10 파티션)
 - [x] `db/migration/V2__add_sequence_to_participation_history.sql` — Flyway 마이그레이션
 - Redis Queue 키 형식: `queue:campaign:{campaignId}` 확정
 
-### #3 A파트 — API 진입 ~ Queue 적재 (leepg 담당)
-- [ ] `RateLimitService` 신규 (SET NX EX 10, 캠페인+유저 조합 중복 차단)
-- [ ] `RedisQueueService` 신규 (LPUSH/RPOP, MAX_QUEUE_SIZE=100,000)
-- [ ] `ParticipationService` 전면 재작성 (DECR → PENDING INSERT → LPUSH → 202)
-- [ ] `ParticipationController` 수정 (응답 200 → 202)
+### #3 A파트 — API 진입 ~ Queue 적재 (leepg 담당) ✅ 완료 (2026-04-13, PR 올리기 전)
+
+#### ✅ 완료
+- [x] `RateLimitService` 신규 — SET NX EX 10, 키: `ratelimit:campaign:{id}:user:{userId}`
+- [x] `RedisQueueService` 신규 — Lua LLEN+LPUSH 원자적 실행, MAX_QUEUE_SIZE=100,000
+- [x] `scripts/push-queue.lua` 신규 — LLEN 체크 후 LPUSH, 100,000 초과 시 return 0
+- [x] `RedisStockService` v2 전환 — Lua DECR 제거 → 단순 DECR + `incrementStock()` 보상 INCR 추가
+- [x] `RedisConfig` 정리 — `decreaseStockScript` Bean 제거, `pushQueueScript` Bean 추가
+- [x] `CampaignService` — 캠페인 생성 시 `SADD active:campaigns` 추가 (Bridge 인식용)
+- [x] `ParticipationHistory` — PENDING 생성자 `sequence` 파라미터 추가
+- [x] `V3__add_unique_constraint_campaign_user.sql` — (campaign_id, user_id) UNIQUE 제약 추가
+- [x] `ErrorCode` 추가 — RATE_LIMIT_EXCEEDED(429), STOCK_EXHAUSTED(400), PARTICIPATION_SERVICE_UNAVAILABLE(503), DUPLICATE_PARTICIPATION(409)
+- [x] 예외 클래스 4개 신규 — `RateLimitExceededException`, `StockExhaustedException`, `DuplicateParticipationException`, `ParticipationServiceUnavailableException`
+- [x] `ParticipationService` 전면 재작성 — RateLimit → DECR → PENDING INSERT → LPUSH → 202
+  - `@Transactional` 제거: `save()` 즉시 커밋 → LPUSH는 반드시 커밋 이후 실행 보장
+  - DuplicateKeyException sequence 비교로 TTL 만료 재요청 vs 동일 요청 구분
+  - INSERT 실패 시 exponential backoff 재시도 (200ms → 400ms, 최대 3회)
+  - 보상 INCR 3경로 모두 처리 (재고 소진 / DuplicateKey 다른 sequence / MAX_RETRY 소진)
+- [x] `ParticipationController` — 200 OK → 202 Accepted
 
 ### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당) ✅ 코드 완료
 
-> 설계 문서: `C:/Users/user/Downloads/B파트_장애시나리오_설계_v4_최종.pdf`
-> 브랜치: `feature/phase2-part-b`
-> 현재 상태: 전체 완료 (2026-04-12), 커밋 후 PR 머지만 남음
+> 설계 문서: `A파트_장애시나리오_설계_v4.pdf` (루트)
+> 브랜치: `feature/phase2-part-a` (A파트 브랜치에 B파트 merge 완료)
+> 현재 상태: A/B 전체 코드 완료 (2026-04-13), PR 올리기 전
 
 #### ✅ 완료
 - [x] `ParticipationStatus.java` — PENDING 추가
@@ -162,6 +180,11 @@ Kafka Consumer (10 파티션)
 ### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
 - [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
 - [ ] `application-prod.yml` broker 설정 반영
+
+### Spring Batch v2 PENDING 재처리 (A/B 머지 + 인프라 구성 후)
+- [ ] ItemReader: 5분 초과 PENDING 조회
+- [ ] ItemProcessor: Redis Queue 재발행 가능 여부 판단
+- [ ] ItemWriter: 재발행 성공 → 유지, 실패 → FAIL UPDATE
 
 ### 모니터링 (A/B 코드 완성 후)
 - [ ] Prometheus + Grafana 구성

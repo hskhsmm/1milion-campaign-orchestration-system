@@ -39,7 +39,7 @@ public class ParticipationController {
             @RequestBody @Valid ParticipationRequest request
     ) {
         participationService.participate(campaignId, request.getUserId());
-        return ResponseEntity.ok(
+        return ResponseEntity.accepted().body(
                 ApiResponse.success("참여 요청이 접수되었습니다.")
         );
     }
