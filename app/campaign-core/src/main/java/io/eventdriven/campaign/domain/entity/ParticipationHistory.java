@@ -49,9 +49,11 @@ public class ParticipationHistory extends BaseTimeEntity {
     private Long sequence;
 
     // PENDING 선점용 생성자 (v2 — A파트에서 사용)
-    public ParticipationHistory(Campaign campaign, Long userId) {
+    // sequence 파라미터 추가
+    public ParticipationHistory(Campaign campaign, Long userId, Long sequence) {
         this.campaign = campaign;
         this.userId = userId;
+        this.sequence = sequence;
         this.status = ParticipationStatus.PENDING;
     }
 
