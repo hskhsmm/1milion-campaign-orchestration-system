@@ -41,9 +41,32 @@ resource "aws_iam_role_policy_attachment" "github_actions_ecr" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonEC2ContainerRegistryFullAccess"
 }
 
+resource "aws_iam_policy" "github_actions_s3_minimal" {
+  name = "GitHubActions-S3-Deploy-campaign"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "s3:PutObject",
+          "s3:GetObject",
+          "s3:DeleteObject",
+          "s3:ListBucket"
+        ]
+        Resource = [
+          "arn:aws:s3:::campaign-deploy-${var.account_id}",
+          "arn:aws:s3:::campaign-deploy-${var.account_id}/*"
+        ]
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "github_actions_s3" {
   role       = aws_iam_role.github_actions.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonS3FullAccess"
+  policy_arn = aws_iam_policy.github_actions_s3_minimal.arn
 }
 
 resource "aws_iam_role_policy_attachment" "github_actions_codedeploy" {
@@ -51,7 +74,26 @@ resource "aws_iam_role_policy_attachment" "github_actions_codedeploy" {
   policy_arn = "arn:aws:iam::aws:policy/AWSCodeDeployFullAccess"
 }
 
+resource "aws_iam_policy" "github_actions_ssm_minimal" {
+  name = "GitHubActions-SSM-Read-campaign"
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [
+      {
+        Effect = "Allow"
+        Action = [
+          "ssm:GetParameter",
+          "ssm:GetParameters",
+          "ssm:GetParametersByPath"
+        ]
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/campaign/prod/*"
+      }
+    ]
+  })
+}
+
 resource "aws_iam_role_policy_attachment" "github_actions_ssm" {
   role       = aws_iam_role.github_actions.name
-  policy_arn = "arn:aws:iam::aws:policy/AmazonSSMFullAccess"
+  policy_arn = aws_iam_policy.github_actions_ssm_minimal.arn
 }
