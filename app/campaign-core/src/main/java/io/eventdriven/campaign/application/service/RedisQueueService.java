@@ -36,13 +36,13 @@ public class RedisQueueService {
      * @param campaignId
      * @return
      */
-    public boolean push(Long campaignId, Long historyId) {
+    public boolean push(Long campaignId, String message) {
         String key = QUEUE_KEY_PREFIX + campaignId;
         Long result = redisTemplate.execute(
                 pushQueueScript,
                 Collections.singletonList(key),  // 루아는 키 값을 반드시 배열(리스트) 형태로 받음
                 String.valueOf(MAX_QUEUE_SIZE), //가변인자도 스프링이 자동으로 배열로 만들어 전달.
-                String.valueOf(historyId)
+                message
         );
         return Long.valueOf(1).equals(result);
     }
