@@ -9,7 +9,6 @@ public class ParticipationEvent {
     private Long kafkaOffset;
     private Integer kafkaPartition;
     private Long kafkaTimestamp;
-    private Long processingSequence; // 처리 순서 번호
 
     public ParticipationEvent() {
     }
@@ -65,11 +64,4 @@ public class ParticipationEvent {
         this.kafkaTimestamp = kafkaTimestamp;
     }
 
-    public Long getProcessingSequence() {
-        return processingSequence;
-    }
-
-    public void setProcessingSequence(Long processingSequence) {
-        this.processingSequence = processingSequence;
-    }
 }
