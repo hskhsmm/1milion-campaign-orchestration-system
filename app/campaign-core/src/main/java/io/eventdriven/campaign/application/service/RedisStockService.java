@@ -3,10 +3,8 @@ package io.eventdriven.campaign.application.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
-import java.util.Collections;
 
 /**
  * Redis 기반 재고 관리 서비스
@@ -21,9 +19,8 @@ import java.util.Collections;
 public class RedisStockService {
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DefaultRedisScript<Long> decreaseStockScript;
-
     private static final String STOCK_KEY_PREFIX = "stock:campaign:";
+
 
     /**
      * 캠페인 재고 초기화
@@ -32,27 +29,40 @@ public class RedisStockService {
      * @param campaignId 캠페인 ID
      * @param stock 초기 재고 수량
      */
+
+    // 캠페인 새롭게 생성시 재고 초기화, 및 캠페인 ID로 키값 생성 후 , 레디스 서버와 통신하여 재고 수 초기화.
     public void initializeStock(Long campaignId, Long stock) {
-        String key = getStockKey(campaignId);
-        redisTemplate.opsForValue().set(key, String.valueOf(stock));
+        String key = getStockKey(campaignId); // 키 생성
+        redisTemplate.opsForValue().set(key, String.valueOf(stock)); // 스트링 타입으로 키-값 셋(캠페인, 재고)
         log.info("Redis 재고 초기화 - Campaign: {}, Stock: {}", campaignId, stock);
     }
 
     /**
      * 재고 차감 (원자적 연산)
-     * Lua 스크립트로 재고 확인 + 차감을 원자적으로 처리
+     * decr 연산 수행
      *
      * @param campaignId 캠페인 ID
      * @return 차감 후 남은 재고 (0 이상: 성공, -1: 실패)
      */
+
+
+
+
+
     public Long decreaseStock(Long campaignId) {
-        String key = getStockKey(campaignId);
-        Long remainingStock = redisTemplate.execute(
-                decreaseStockScript,
-                Collections.singletonList(key)
-        );
-        return remainingStock != null ? remainingStock : -1L;
+        String key = getStockKey(campaignId); // 특정 캠페인의 키
+        // 캠페인의 키를 통해서 재고 감소 실행.
+
+        // 음수 포함하여 리턴(컷오프 동작 활용)
+        return redisTemplate. opsForValue().decrement(key);
     }
+
+    // INCR 보상용 메서드 추가
+    public void incrementStock(Long campaignId) {
+        String key = getStockKey(campaignId);
+        redisTemplate.opsForValue().increment(key);
+    }
+
 
     /**
      * 현재 재고 조회
