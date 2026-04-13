@@ -177,11 +177,11 @@ resource "aws_instance" "kafka_1" {
 resource "aws_instance" "terraform_mcp" {
   ami                    = "ami-0ecfdfd1c8ae01aec" # Amazon Linux 2023 ap-northeast-2 (2026-03-27)
   instance_type          = "t3.small"
-  subnet_id              = var.subnet_id
+  subnet_id              = aws_subnet.public_2a.id
   vpc_security_group_ids = [aws_security_group.terraform_mcp.id]
   iam_instance_profile   = aws_iam_instance_profile.terraform_mcp.name
 
-  associate_public_ip_address = false
+  associate_public_ip_address = true
 
   root_block_device {
     volume_type = "gp3"
