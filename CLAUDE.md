@@ -186,9 +186,23 @@ Kafka Consumer (10 파티션)
 - [ ] ItemProcessor: Redis Queue 재발행 가능 여부 판단
 - [ ] ItemWriter: 재발행 성공 → 유지, 실패 → FAIL UPDATE
 
-### 모니터링 (A/B 코드 완성 후)
-- [ ] Prometheus + Grafana 구성
-- [ ] 메트릭 포인트 확정 (Bridge 드레인 속도, PENDING→SUCCESS 지연시간, Queue 적재량)
+### #22 로컬 모니터링 인프라 ✅ 완료 (2026-04-15, feature/monitoring 브랜치)
+- [x] `docker-compose.yml` — kafka-exporter(:9308), redis-exporter(:9121), Prometheus(:9090), Grafana(:3000) 추가
+- [x] `monitoring/prometheus.yml` — spring-boot(app:8080/actuator/prometheus), kafka, redis 스크레이프 타겟 3개
+- [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — Grafana 기동 시 Prometheus 데이터소스 자동 프로비저닝
+- [x] `.env` — 모니터링 포트 환경변수 추가
+- 로컬 검증 완료: Prometheus 타겟 3개 UP, Grafana :3000 접속 확인
+
+### #23 커스텀 비즈니스 메트릭 ✅ 완료 (2026-04-15, feature/monitoring 브랜치)
+- [x] `ParticipationBridge.java` — `bridge.drain.duration` (Timer), `bridge.messages.published` (Counter, campaignId 태그)
+- [x] `ParticipationEventConsumer.java` — `consumer.pending_to_success.latency` (Timer)
+- [x] `QueueMetricsScheduler.java` 신규 — `redis.queue.size` (Gauge, campaignId 태그, 10초 주기 LLEN 수집)
+- 로컬 검증 완료: /actuator/prometheus에서 4개 메트릭 전부 수집 확인
+  - `bridge_drain_duration_seconds` — count=5062, sum=18.77s
+  - `bridge_messages_published_total{campaignId="1"}` — 1.0
+  - `consumer_pending_to_success_latency_seconds` — count=1, sum=2.683s
+  - `redis_queue_size{campaignId="1"}` — 0.0 (큐 소진 정상)
+
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 
@@ -223,6 +237,9 @@ Kafka Consumer (10 파티션)
 
 #### 📌 배포 전 AWS 작업 완료
 - [x] SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록 완료
+
+#### 🔲 남은 작업 (모니터링 관련)
+- [ ] Grafana 대시보드 구성 (Bridge 드레인 속도, PENDING→SUCCESS 지연시간, Queue 적재량 패널)
 
 ### Phase 3: MCP 서버 (mcp-server/)
 - [ ] Python/FastAPI MCP 서버
