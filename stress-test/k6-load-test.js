@@ -62,21 +62,13 @@ export default function () {
     params
   );
 
-  // 응답 검증
+  // 응답 검증 (v2: 202 Accepted 반환)
   const isSuccess = check(response, {
-    'status is 200': (r) => r.status === 200,
-    'response has success field': (r) => {
-      try {
-        const body = JSON.parse(r.body);
-        return body.hasOwnProperty('success');
-      } catch (e) {
-        return false;
-      }
-    },
+    'status is 202': (r) => r.status === 202,
   });
 
-  // 성공/실패 카운트 (참고: Kafka 비동기 처리라 즉시 결과는 모름)
-  if (response.status === 200) {
+  // 성공/실패 카운트
+  if (response.status === 202) {
     successCount.add(1);
   } else {
     failCount.add(1);
