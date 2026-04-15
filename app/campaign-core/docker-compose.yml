@@ -118,6 +118,71 @@ services:
       redis:
         condition: service_healthy
 
+  # ===== 모니터링 스택 =====
+
+  kafka-exporter:
+    image: danielqsj/kafka-exporter:latest
+    container_name: kafka-exporter
+    ports:
+      - "${KAFKA_EXPORTER_PORT:-9308}:9308"
+    command:
+      - --kafka.server=kafka:29092
+    networks:
+      - campaign-net
+    depends_on:
+      kafka:
+        condition: service_healthy
+
+  redis-exporter:
+    image: oliver006/redis_exporter:latest
+    container_name: redis-exporter
+    ports:
+      - "${REDIS_EXPORTER_PORT:-9121}:9121"
+    environment:
+      REDIS_ADDR: redis:6379
+    networks:
+      - campaign-net
+    depends_on:
+      redis:
+        condition: service_healthy
+
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "${PROMETHEUS_PORT:-9090}:9090"
+    volumes:
+      - ./monitoring/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - prometheus_data:/prometheus
+    command:
+      - --config.file=/etc/prometheus/prometheus.yml
+      - --storage.tsdb.path=/prometheus
+      - --web.console.libraries=/usr/share/prometheus/console_libraries
+      - --web.console.templates=/usr/share/prometheus/consoles
+    networks:
+      - campaign-net
+    depends_on:
+      - app
+      - kafka-exporter
+      - redis-exporter
+
+  grafana:
+    image: grafana/grafana:latest
+    container_name: grafana
+    ports:
+      - "${GRAFANA_PORT:-3000}:3000"
+    environment:
+      GF_SECURITY_ADMIN_USER: ${GRAFANA_USER:-admin}
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: 'false'
+    volumes:
+      - ./monitoring/grafana/provisioning:/etc/grafana/provisioning:ro
+      - grafana_data:/var/lib/grafana
+    networks:
+      - campaign-net
+    depends_on:
+      - prometheus
+
 networks:
   campaign-net:
     driver: bridge
@@ -126,3 +191,5 @@ volumes:
   mysql_data:
   kafka_data:
   redis_data:
+  prometheus_data:
+  grafana_data:
