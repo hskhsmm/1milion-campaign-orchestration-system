@@ -2,6 +2,7 @@ import http from 'k6/http';
 import { check, sleep } from 'k6';
 import { Counter } from 'k6/metrics';
 import { SharedArray } from 'k6/data';
+import exec from 'k6/execution';
 
 // 커스텀 메트릭
 const successCount = new Counter('participation_success');
@@ -41,8 +42,8 @@ const BASE_URL = 'http://localhost:8080';
 const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1; // 환경변수로 캠페인 ID 전달 가능
 
 export default function () {
-  // 현재 iteration 번호를 userId로 사용 (1부터 TOTAL_REQUESTS까지 유니크)
-  const userId = userIds[__ITER];
+  // 전역 iteration 인덱스로 userId 결정 (VU 간 중복 없이 유니크)
+  const userId = userIds[exec.scenario.iterationInTest];
 
   const payload = JSON.stringify({
     userId: userId,
@@ -75,8 +76,8 @@ export default function () {
   }
 
   // 응답 로그 (샘플링 - 100번째마다)
-  if (__ITER % 100 === 0) {
-    console.log(`[Iteration ${__ITER}] UserID: ${userId}, Status: ${response.status}`);
+  if (exec.scenario.iterationInTest % 100 === 0) {
+    console.log(`[Iteration ${exec.scenario.iterationInTest}] UserID: ${userId}, Status: ${response.status}`);
   }
 }
 
