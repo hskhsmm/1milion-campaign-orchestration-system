@@ -105,7 +105,7 @@ services:
       SPRING_DATA_REDIS_HOST: redis
       SPRING_DATA_REDIS_PORT: 6379
       TZ: Asia/Seoul
-      JAVA_TOOL_OPTIONS: -Xms256m -Xmx512m -XX:MaxMetaspaceSize=128m -XX:MaxDirectMemorySize=128m -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8
+      JAVA_TOOL_OPTIONS: -Xms256m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8
     ports:
       - "8080:8080"
     networks:
