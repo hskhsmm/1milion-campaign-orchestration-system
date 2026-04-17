@@ -37,6 +37,7 @@ dependencies {
 	implementation 'org.springframework.kafka:spring-kafka'
 
 	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션
+	implementation 'org.flywaydb:flyway-core'
 	implementation 'org.flywaydb:flyway-mysql'
 
 	// PendingRetryScheduler(@Scheduled), RedisSyncScheduler(@Scheduled) — @EnableScheduling 활성화
