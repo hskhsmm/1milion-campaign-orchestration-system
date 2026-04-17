@@ -87,7 +87,12 @@ resource "aws_iam_policy" "github_actions_ssm_minimal" {
           "ssm:GetParameters",
           "ssm:GetParametersByPath"
         ]
-        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/campaign/prod/*"
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/batch-kafka/prod/*"
+      },
+      {
+        Effect   = "Allow"
+        Action   = ["ssm:PutParameter"]
+        Resource = "arn:aws:ssm:${var.region}:${var.account_id}:parameter/batch-kafka/prod/ECR_IMAGE"
       }
     ]
   })
