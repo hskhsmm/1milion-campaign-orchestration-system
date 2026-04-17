@@ -264,9 +264,18 @@ Kafka Consumer (10 파티션)
 - [x] `docker-compose.prod.yml` — redis-exporter 추가 (CI/CD 시 자동 실행, 포트 9121)
 - [x] terraform-mcp — kafka-exporter 정상 연결 확인 (Up 상태)
 
-##### 🔲 남은 작업 (CI/CD 테스트만 하면 #25 완성)
-- [ ] feature/monitoring → main PR 머지 → CI/CD 자동 배포
-- [ ] CodeDeploy 배포 성공 확인 → 앱 기동 확인
+##### CI/CD 트러블슈팅 기록 (2026-04-18)
+- ECR 레포명 `campaign-core` → `batch-kafka-system` 수정
+- S3 버킷명 `campaign-deploy-` → `batch-kafka-deploy-` 수정
+- CodeDeploy 앱명 `campaign-core-app` → `batch-kafka-app`, 배포그룹 `campaign-prod-dg` → `batch-kafka-prod-dg` 수정
+- `deploy.yml` paths에 `.github/workflows/**` 추가 (workflow 변경 시 CI/CD 트리거)
+- `flyway-core` 의존성 누락 추가 (`flyway-mysql`만으로는 Flyway 미실행)
+- DB 완전 초기화 후 `V1__init.sql` 없어서 `missing table [campaign]` 오류 → V1 마이그레이션 추가
+- Spring Boot 4에서 `spring.batch.jdbc.initialize-schema` 제거됨 → `V4__batch_schema.sql` Flyway로 추가
+- `iam.tf` S3 버킷 권한 `batch-kafka-deploy-` 로 수정 + terraform apply
+
+##### 🔲 남은 작업
+- [ ] CI/CD 배포 성공 확인 → 앱 기동 확인 (`/actuator/health`)
 - [ ] k6 ALB 엔드포인트로 부하 테스트
 - [ ] Grafana `terraform-mcp-public-ip:3000` 대시보드 확인
 - [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
