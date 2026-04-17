@@ -45,26 +45,26 @@ jobs:
       # 2. Docker 이미지 빌드
       - name: Build Docker image
         run: |
-          docker build -t campaign-core:${{ github.sha }} .
+          docker build -t batch-kafka-system:${{ github.sha }} .
 
       # 3. ECR 태그
       - name: Tag Docker image
         run: |
-          docker tag campaign-core:${{ github.sha }} \
-            631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/campaign-core:${{ github.sha }}
+          docker tag batch-kafka-system:${{ github.sha }} \
+            631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system:${{ github.sha }}
 
       # 4. ECR Push
       - name: Push Docker image to ECR
         run: |
           docker push \
-            631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/campaign-core:${{ github.sha }}
+            631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system:${{ github.sha }}
 
       # 5. SSM에 최신 이미지 태그 저장
       - name: Update SSM ECR_IMAGE parameter
         run: |
           aws ssm put-parameter \
             --name "/batch-kafka/prod/ECR_IMAGE" \
-            --value "631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/campaign-core:${{ github.sha }}" \
+            --value "631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system:${{ github.sha }}" \
             --type String \
             --overwrite
 
