@@ -55,7 +55,7 @@ dependencies {
 	// @RequestBody 유효성 검증 (@Valid, @NotNull 등)
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 
-	// TODO: 현재 설계 문서(DESIGN_GUIDE_V2.md)에 템플릿 엔진 사용 계획 없음
+	// TODO: 현재 설계 문서(DESIGN_GUIDE_V2.md)에 템플릿 엔진 사용 계획 x
 	// REST API + 폴링 구조로 서버사이드 렌더링 불필요해 보이나,
 	// 관리자 페이지 또는 이벤트 결과 페이지 계획이 있다면 유지 필요 — 확인 요청
 	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'
