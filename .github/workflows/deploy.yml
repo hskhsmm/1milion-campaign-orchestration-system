@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'app/campaign-core/**'
+      - '.github/workflows/**'
 
 # 배포 중 새 push 발생 시 기존 배포 취소하고 새 배포 실행
 concurrency:
@@ -79,7 +80,7 @@ jobs:
       - name: Upload to S3
         run: |
           aws s3 cp deploy.zip \
-            s3://campaign-deploy-631124976154/deploy-${{ github.sha }}.zip
+            s3://batch-kafka-deploy-631124976154/deploy-${{ github.sha }}.zip
 
       # 8. CodeDeploy 트리거
       - name: Trigger CodeDeploy
@@ -88,4 +89,4 @@ jobs:
             --application-name campaign-core-app \
             --deployment-group-name campaign-prod-dg \
             --deployment-config-name CodeDeployDefault.AllAtOnce \
-            --s3-location bucket=campaign-deploy-631124976154,key=deploy-${{ github.sha }}.zip,bundleType=zip
+            --s3-location bucket=batch-kafka-deploy-631124976154,key=deploy-${{ github.sha }}.zip,bundleType=zip
