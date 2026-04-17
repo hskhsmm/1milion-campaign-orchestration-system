@@ -13,13 +13,14 @@ resource "aws_elasticache_subnet_group" "main" {
   tags = {}
 }
 
-# ElastiCache Redis 클러스터
-resource "aws_elasticache_cluster" "redis" {
-  cluster_id           = "batch-kafka-redis"
+# ElastiCache Valkey 단일 노드 (클러스터링은 #5에서 num_cache_clusters 증설 예정)
+resource "aws_elasticache_replication_group" "redis" {
+  replication_group_id = "batch-kafka-redis"
+  description          = "Valkey single node"
   engine               = "valkey"
   engine_version       = "7.2"
   node_type            = "cache.t3.micro"
-  num_cache_nodes      = 1
+  num_cache_clusters   = 1
   parameter_group_name = "default.valkey7"
   port                 = 6379
 
