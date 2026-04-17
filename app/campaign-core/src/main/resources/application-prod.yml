@@ -30,7 +30,7 @@ spring:
 
   jpa:
     hibernate:
-      ddl-auto: none  # 프로덕션에서는 validate 또는 none 권장
+      ddl-auto: validate  # 프로덕션에서는 validate 또는 none 권장
     show-sql: false       # 프로덕션에서는 로깅 최소화
     properties:
       hibernate:
