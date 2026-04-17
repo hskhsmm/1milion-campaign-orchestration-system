@@ -41,6 +41,11 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
         default_batch_fetch_size: 100  # N+1 문제 방지: IN 절로 한 번에 조회
 
+  task:
+    scheduling:
+      pool:
+        size: 2  # ParticipationBridge(100ms) + QueueMetricsScheduler(10s) 동시 실행 보장
+
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
@@ -60,3 +65,6 @@ kafka:
     max-poll-records: 500       # 한 번에 500개씩 처리
     max-poll-interval-ms: 600000  # 10분
     session-timeout-ms: 45000    # 45초
+
+slack:
+  webhook-url: ""               # 로컬 테스트용 (비워두면 알림 스킵)

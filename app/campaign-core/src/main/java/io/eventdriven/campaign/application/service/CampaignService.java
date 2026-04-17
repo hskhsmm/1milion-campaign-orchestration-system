@@ -5,6 +5,7 @@ import io.eventdriven.campaign.api.dto.response.CampaignResponse;
 import io.eventdriven.campaign.domain.entity.Campaign;
 import io.eventdriven.campaign.domain.repository.CampaignRepository;
 import lombok.RequiredArgsConstructor;
+import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
@@ -18,6 +19,7 @@ public class CampaignService {
 
     private final CampaignRepository campaignRepository;
     private final RedisStockService redisStockService;
+    private final RedisTemplate<String, String> redisTemplate;
 
     @Transactional
     public CampaignResponse createCampaign(CampaignCreateRequest request) {
@@ -26,6 +28,10 @@ public class CampaignService {
 
         // Redis에 재고 초기화
         redisStockService.initializeStock(savedCampaign.getId(), request.getTotalStock());
+        redisTemplate.opsForSet().add("active:campaigns", savedCampaign.getId().toString());
+
+
+
 
         return new CampaignResponse(savedCampaign);
     }

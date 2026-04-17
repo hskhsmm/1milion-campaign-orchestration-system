@@ -44,6 +44,19 @@ public class ParticipationHistory extends BaseTimeEntity {
     @Column(name = "processing_sequence")
     private Long processingSequence;
 
+    // 선착순 번호 (Redis DECR 반환값 기반, v2)
+    @Column(name = "sequence")
+    private Long sequence;
+
+    // PENDING 선점용 생성자 (v2 — A파트에서 사용)
+    // sequence 파라미터 추가
+    public ParticipationHistory(Campaign campaign, Long userId, Long sequence) {
+        this.campaign = campaign;
+        this.userId = userId;
+        this.sequence = sequence;
+        this.status = ParticipationStatus.PENDING;
+    }
+
     // 기존 생성자 (하위 호환성)
     public ParticipationHistory(Campaign campaign, Long userId, ParticipationStatus status) {
         this.campaign = campaign;

@@ -398,12 +398,12 @@ stock:campaign:{campaignId}
 예) stock:campaign:13 = "100"
 
 # Redis Queue (List, 스파이크 방지 내부 버퍼)
-queue:campaign:{campaignId}:participation
-예) LPUSH queue:campaign:13:participation {campaignId:userId:historyId}
+queue:campaign:{campaignId}
+예) LPUSH queue:campaign:13 {campaignId:userId:historyId}
 
 # Rate Limiter (String, TTL)
-ratelimit:user:{userId}:campaign:{campaignId}
-예) ratelimit:user:1:campaign:13 = "1"  TTL: 10초
+ratelimit:campaign:{campaignId}:user:{userId}
+예) ratelimit:campaign:13:user:1 = "1"  TTL: 10초
 
 # 폴링 결과 캐시 (String, TTL)
 participation:result:{userId}:{campaignId}

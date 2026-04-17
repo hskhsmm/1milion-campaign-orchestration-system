@@ -68,7 +68,7 @@ jobs:
       - name: Update SSM ECR_IMAGE parameter
         run: |
           aws ssm put-parameter \
-            --name "/campaign/prod/ECR_IMAGE" \
+            --name "/batch-kafka/prod/ECR_IMAGE" \
             --value "631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/campaign-core:${{ github.sha }}" \
             --type String \
             --overwrite
