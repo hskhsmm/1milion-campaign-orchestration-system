@@ -44,7 +44,7 @@ spring:
       port: ${SPRING_DATA_REDIS_PORT:6379}
 
   kafka:
-    bootstrap-servers: ${KAFKA_BROKER_1:localhost}:9092,${KAFKA_BROKER_2:localhost}:9092,${KAFKA_BROKER_3:localhost}:9092
+    bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     listener:
       auto-startup: true        #  Consumer 기동
     admin:
