@@ -235,19 +235,48 @@ Kafka Consumer (10 파티션)
   - JVM Metaspace OOM (좀비 현상) → MaxMetaspaceSize 256m으로 해결
 
 #### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔄 진행 중 (2026-04-18)
+
+##### ✅ 완료
 - [x] `ec2.tf` — terraform-mcp-sg에 9090(Prometheus)/3000(Grafana) ingress 추가
-- [x] `security_groups.tf` — app-sg에 9121(redis-exporter) from terraform-mcp-sg ingress 추가
+- [x] `security_groups.tf` — app-sg에 8080/9121(redis-exporter) from terraform-mcp-sg ingress 추가
 - [x] `security_groups.tf` — kafka-sg에 9092 from terraform-mcp-sg ingress 추가
-- [x] `elasticache.tf` — Redis 클러스터 주석 해제 (terraform apply 대기 중)
-- [ ] EC2 3대 (batch-kafka-app, kafka-1, terraform-mcp) + RDS start (콘솔)
-- [ ] terraform apply (ElastiCache 생성 + SG 반영)
+- [x] `elasticache.tf` — Valkey 단일 노드 (`aws_elasticache_replication_group`) 생성 완료
+  - engine: valkey 7.2, cache.t3.micro, replication_group_id: batch-kafka-redis
+  - 엔드포인트: `batch-kafka-redis.3uttxb.ng.0001.apn2.cache.amazonaws.com`
+  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` 등록 완료
+- [x] `iam.tf` — GitHub Actions SSM 경로 `/campaign/prod` → `/batch-kafka/prod` 통일 + PutParameter 권한 추가
+- [x] `beforeInstall.sh` — SSM 경로 `/batch-kafka/prod/*` 통일
+- [x] `deploy.yml` — ECR_IMAGE SSM 경로 `/batch-kafka/prod/ECR_IMAGE` 통일
+- [x] `docker-compose.prod.yml` — t3.small 기준 JVM 메모리 수정 (mem_limit 1500m, Xmx1g)
+- [x] `application-prod.yml` — Kafka bootstrap-servers 환경변수명 SSM 키와 통일
+- [x] EC2 3대 + RDS start 완료
+- [x] terraform apply 완료 (ElastiCache Valkey, SG, IAM 반영)
+- [x] terraform-mcp SSM 접속 → Docker 설치 완료
+- [x] terraform-mcp — Prometheus + Grafana + kafka-exporter 컨테이너 실행 완료
+  - prometheus.yml: spring-boot(172.31.100.157:8080), kafka-exporter(localhost:9308), redis-exporter(172.31.100.157:9121)
+  - grafana datasource: prometheus uid 고정 (http://172.31.15.217:9090)
+- [x] `ec2.tf` — batch-kafka-app, kafka-1 `associate_public_ip_address = true` 수정 + `private_ip` 고정
+  - batch-kafka-app: `172.31.100.157`, kafka-1: `172.31.5.164`
+  - 재생성 후에도 private IP 고정 → prometheus.yml 수정 불필요
+- [x] terraform apply 완료 — batch-kafka-app, kafka-1 재생성 (퍼블릭 IP 할당)
+- [x] kafka-1 SSM 접속 → Docker 설치 + Kafka 브로커 시작 + 토픽 2개 생성
+- [x] batch-kafka-app SSM 접속 → Docker + CodeDeploy 에이전트 설치
+- [x] `docker-compose.prod.yml` — redis-exporter 추가 (CI/CD 시 자동 실행, 포트 9121)
+- [x] terraform-mcp — kafka-exporter 정상 연결 확인 (Up 상태)
+
+##### 🔲 남은 작업 (CI/CD 테스트만 하면 #25 완성)
 - [ ] feature/monitoring → main PR 머지 → CI/CD 자동 배포
-- [ ] kafka-1 SSM 접속 → 토픽 수동 생성 (campaign-participation, campaign-participation-dlq)
-- [ ] terraform-mcp EC2에 Prometheus + Grafana + kafka-exporter 배포 (SSM으로 설치 스크립트 실행)
-- [ ] batch-kafka-app EC2에 redis-exporter 배포 (SSM)
-- [ ] k6 ALB 엔드포인트로 부하 테스트 → Grafana 대시보드 확인
+- [ ] CodeDeploy 배포 성공 확인 → 앱 기동 확인
+- [ ] k6 ALB 엔드포인트로 부하 테스트
+- [ ] Grafana `terraform-mcp-public-ip:3000` 대시보드 확인
 - [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
-- 비용 절약: EC2/RDS는 콘솔 stop, ElastiCache는 `terraform destroy -target` 으로 개별 제거
+
+##### 📌 인프라 메모
+- ElastiCache는 Valkey 사용 (Redis보다 약 20% 저렴, 클러스터링 전환 시도 유지)
+- 퍼블릭 IP는 EC2 running 시 무료 (EIP 아님), stop 시 자동 반납
+- 프라이빗 IP는 재시작해도 고정 → prometheus.yml 수정 불필요
+- instance ID로 SSM 접속하므로 퍼블릭 IP 변경 무관
+- 비용 절약: EC2/RDS 콘솔 stop, ElastiCache는 `terraform destroy -target=aws_elasticache_replication_group.redis`
 
 
 ### Phase 1: Terraform (infra/ 전체 작성)
@@ -270,7 +299,7 @@ Kafka Consumer (10 파티션)
 **핵심 결정 사항:**
 - Route Table Association: 암시적 메인 라우팅 테이블 연결 유지 (명시적 association 코드 없음)
 - RDS 비밀번호: SSM `/batch-kafka/prod/SPRING_DATASOURCE_PASSWORD` 에서 가져옴 + `lifecycle { ignore_changes = [password] }`
-- kafka-1 EC2: `associate_public_ip_address = false` (public 서브넷이지만 IGW로 외부 통신, 퍼블릭 IP 불필요)
+- kafka-1 EC2: `associate_public_ip_address = true` + `private_ip = "172.31.5.164"` 고정 (SSM 접속 위해 퍼블릭 IP 필요)
 - security_groups description: 실제 AWS 값 그대로 사용 (forces replacement 방지)
 - ALB Listener: `default_action` `ignore_changes` 추가 (stickiness 속성 Terraform provider 충돌 방지)
 - RDS engine_version: AWS 자동 업그레이드로 8.0.43 → 8.0.44 반영

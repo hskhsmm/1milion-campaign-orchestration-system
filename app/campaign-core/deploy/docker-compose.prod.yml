@@ -16,3 +16,12 @@ services:
     env_file:
       - /opt/campaign-core/.env.prod
     restart: unless-stopped
+
+  redis-exporter:
+    image: oliver006/redis_exporter
+    container_name: redis-exporter
+    ports:
+      - "9121:9121"
+    environment:
+      REDIS_ADDR: redis://batch-kafka-redis.3uttxb.ng.0001.apn2.cache.amazonaws.com:6379
+    restart: unless-stopped
