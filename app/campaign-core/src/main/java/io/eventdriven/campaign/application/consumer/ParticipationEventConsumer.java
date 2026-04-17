@@ -5,6 +5,8 @@ import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.domain.entity.ParticipationHistory;
 import io.eventdriven.campaign.domain.entity.ParticipationStatus;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
+import io.micrometer.core.instrument.MeterRegistry;
+import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
@@ -23,6 +25,7 @@ import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
 /**
@@ -46,6 +49,7 @@ public class ParticipationEventConsumer {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final RedisTemplate<String, String> redisTemplate;
     private final SlackNotificationService slackNotificationService;
+    private final MeterRegistry meterRegistry; // Timer는 record() 호출 시 즉석 생성 → 필드 Timer 불필요
 
     private static final String DLQ_TOPIC = "campaign-participation-topic.dlq";
     private static final String RESULT_CACHE_PREFIX = "participation:result:";
@@ -109,8 +113,23 @@ public class ParticipationEventConsumer {
                     .map(ParticipationEvent::getHistoryId)
                     .collect(Collectors.toList());
             try {
+                // PENDING → SUCCESS 지연시간 측정
+                // 기준: PENDING INSERT 시점(createdAt) ~ bulkUpdateSuccess 완료 시점
+                // 배치 내 가장 오래된 createdAt을 기준으로 측정 (배치 전체 지연의 최대값)
+                LocalDateTime batchStartTime = validEvents.stream()
+                        .map(e -> historyMap.get(e.getHistoryId()).getCreatedAt())
+                        .min(LocalDateTime::compareTo)
+                        .orElse(LocalDateTime.now());
+
                 int updated = participationHistoryRepository.bulkUpdateSuccess(validHistoryIds);
-                log.info("SUCCESS 업데이트 완료. {}건", updated);
+
+                long latencyMs = Duration.between(batchStartTime, LocalDateTime.now()).toMillis();
+                Timer.builder("consumer.pending_to_success.latency")
+                        .description("PENDING INSERT ~ SUCCESS UPDATE 지연시간")
+                        .register(meterRegistry)
+                        .record(latencyMs, TimeUnit.MILLISECONDS);
+
+                log.info("SUCCESS 업데이트 완료. {}건, 지연시간={}ms", updated, latencyMs);
                 writeResultCache(validEvents);
             } catch (Exception e) {
                 log.error("배치 UPDATE 실패. 개별 처리로 전환. {}건", validEvents.size(), e);

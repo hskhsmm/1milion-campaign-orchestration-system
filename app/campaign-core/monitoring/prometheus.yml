@@ -1,0 +1,26 @@
+global:
+  scrape_interval: 15s      # 15초마다 메트릭 수집
+  evaluation_interval: 15s  # 15초마다 룰 평가
+
+scrape_configs:
+  # Spring Boot 앱 — /actuator/prometheus
+  - job_name: 'spring-boot'
+    metrics_path: '/actuator/prometheus'
+    static_configs:
+      - targets: ['app:8080']
+        labels:
+          app: 'campaign-core'
+
+  # Kafka 브로커 메트릭 (kafka-exporter)
+  - job_name: 'kafka'
+    static_configs:
+      - targets: ['kafka-exporter:9308']
+        labels:
+          app: 'kafka'
+
+  # Redis 메트릭 (redis-exporter)
+  - job_name: 'redis'
+    static_configs:
+      - targets: ['redis-exporter:9121']
+        labels:
+          app: 'redis'

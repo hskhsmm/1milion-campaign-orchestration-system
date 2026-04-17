@@ -186,13 +186,73 @@ Kafka Consumer (10 파티션)
 - [ ] ItemProcessor: Redis Queue 재발행 가능 여부 판단
 - [ ] ItemWriter: 재발행 성공 → 유지, 실패 → FAIL UPDATE
 
-### 모니터링 (A/B 코드 완성 후)
-- [ ] Prometheus + Grafana 구성
-- [ ] 메트릭 포인트 확정 (Bridge 드레인 속도, PENDING→SUCCESS 지연시간, Queue 적재량)
+### 모니터링 — #22~#25 (진행 중)
+
+> 진행 순서: 로컬 인프라 구성 → 커스텀 메트릭 코드 → Grafana 대시보드 + k6 검증 → AWS 반영
+> 작업 브랜치: `feature/monitoring`
+
+#### #22 로컬 모니터링 인프라 ✅ 완료 (2026-04-15, leepg)
+- [x] `docker-compose.yml` — kafka-exporter(:9308), redis-exporter(:9121), Prometheus(:9090), Grafana(:3000) 추가
+  - kafka-exporter: 내부 리스너 `kafka:29092` 사용 (컨테이너 내부 통신이므로 외부 9092 아님)
+  - 포트는 `.env` 변수로 분리, 모든 모니터링 서비스 `campaign-net` 네트워크 포함
+- [x] `monitoring/prometheus.yml` — spring-boot(app:8080), kafka-exporter(9308), redis-exporter(9121) 3개 타겟
+- [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — 기동 시 자동 프로비저닝, `editable: false`
+- [x] `.env` — KAFKA_EXPORTER_PORT, REDIS_EXPORTER_PORT, PROMETHEUS_PORT, GRAFANA_PORT, GRAFANA_USER, GRAFANA_PASSWORD 추가
+- 로컬 검증 완료: `localhost:9090/targets` 3개 모두 UP
+
+#### #23 커스텀 비즈니스 메트릭 ✅ 완료 (2026-04-15, leepg)
+- [x] `ParticipationBridge.java` — `bridge.drain.duration` (Timer, drainQueues() 전체 소요시간), `bridge.messages.published` (Counter, campaignId 태그)
+  - Timer는 Spring Bean 아니므로 생성자 수동 작성 (`MeterRegistry` 주입 후 Timer 초기화)
+- [x] `ParticipationEventConsumer.java` — `consumer.pending_to_success.latency` (Timer, 배치 내 가장 오래된 createdAt 기준)
+- [x] `QueueMetricsScheduler.java` 신규 — `redis.queue.size` (Gauge, campaignId 태그, 10초 주기)
+  - `ConcurrentHashMap<Long, Long>` + `computeIfAbsent`로 신규 캠페인 최초 발견 시에만 Gauge 등록, 이후 Map 값만 갱신
+- 로컬 검증 완료: `/actuator/prometheus` 커스텀 메트릭 4종 수집 확인
+  - `bridge_drain_duration_seconds` — count=5062, sum=18.77s
+  - `bridge_messages_published_total{campaignId="1"}` — 1.0
+  - `consumer_pending_to_success_latency_seconds` — count=1, sum=2.683s
+  - `redis_queue_size{campaignId="1"}` — 0.0 (큐 소진 정상)
+
+#### 📌 #22/#23 코드리뷰에서 발견된 알려진 이슈 → 모두 수정 완료 (2026-04-17)
+- **[완료]** `spring.task.scheduling.pool.size: 2` — `application-local.yml` 추가
+- **[완료]** `.env` `KAFKA_BOOTSTRAP_SERVERS=kafka:29092` — 이미 올바른 값으로 존재 확인
+- **[잔존]** `consumer.pending_to_success.latency` Timer 배치 대표값 1회 기록 → 추후 개선 권장
+
+#### #24 Grafana 대시보드 구성 + k6 부하 검증 ✅ 완료 (2026-04-17, hskhsmm)
+- [x] 알려진 이슈 수정: 스케줄러 스레드 풀 설정 (`application-local.yml`)
+- [x] `monitoring/grafana/dashboards/campaign.json` — 10개 패널 구성
+- [x] `monitoring/grafana/provisioning/dashboards/dashboard.yml` — 자동 프로비저닝 설정
+- [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — `uid: prometheus` 고정 (dashboard.json UID 매칭)
+- [x] `docker-compose.yml` — JVM `MaxMetaspaceSize` 128m → 256m 상향 (OOM 방지)
+- [x] `stress-test/k6-load-test.js` — `__ITER` → `exec.scenario.iterationInTest` 교체 (VU 간 userId 중복 방지)
+- [x] k6 로컬 검증 완료 (VU=10, 300 요청, 100% 202 성공)
+- [x] Grafana 실시간 수집 확인
+  - API TPS, p95/p99 응답시간(85~130ms), 에러율 0 ✅
+  - Bridge 드레인 속도, 사이클 소요시간(2~10ms) ✅
+  - `redis_queue_size` 0 수렴 ✅ ← 핵심 완료 기준
+- 트러블슈팅 기록:
+  - Grafana datasource UID 불일치 → provisioning yml에 `uid: prometheus` 고정으로 해결
+  - k6 `__ITER` per-VU 문제 → 전역 iterationInTest 사용으로 해결
+  - JVM Metaspace OOM (좀비 현상) → MaxMetaspaceSize 256m으로 해결
+
+#### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔄 진행 중 (2026-04-18)
+- [x] `ec2.tf` — terraform-mcp-sg에 9090(Prometheus)/3000(Grafana) ingress 추가
+- [x] `security_groups.tf` — app-sg에 9121(redis-exporter) from terraform-mcp-sg ingress 추가
+- [x] `security_groups.tf` — kafka-sg에 9092 from terraform-mcp-sg ingress 추가
+- [x] `elasticache.tf` — Redis 클러스터 주석 해제 (terraform apply 대기 중)
+- [ ] EC2 3대 (batch-kafka-app, kafka-1, terraform-mcp) + RDS start (콘솔)
+- [ ] terraform apply (ElastiCache 생성 + SG 반영)
+- [ ] feature/monitoring → main PR 머지 → CI/CD 자동 배포
+- [ ] kafka-1 SSM 접속 → 토픽 수동 생성 (campaign-participation, campaign-participation-dlq)
+- [ ] terraform-mcp EC2에 Prometheus + Grafana + kafka-exporter 배포 (SSM으로 설치 스크립트 실행)
+- [ ] batch-kafka-app EC2에 redis-exporter 배포 (SSM)
+- [ ] k6 ALB 엔드포인트로 부하 테스트 → Grafana 대시보드 확인
+- [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
+- 비용 절약: EC2/RDS는 콘솔 stop, ElastiCache는 `terraform destroy -target` 으로 개별 제거
+
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 
-#### ✅ 완료된 작업 (2026-03-31 기준, terraform plan → No changes 확인)
+#### ✅ 완료된 작업 (2026-04-13 기준, terraform apply 완료)
 
 | 파일 | 리소스 수 | 내용 |
 |------|-----------|------|
@@ -200,11 +260,12 @@ Kafka Consumer (10 파티션)
 | `variables.tf` | - | region, account_id, vpc_id, subnet_id, github_repo |
 | `vpc.tf` | 8개 | VPC(172.31.0.0/16), IGW, Route Table, 퍼블릭 서브넷 4개(2a~2d), private_app_2a |
 | `security_groups.tf` | 5개 | alb-public(80/443), app-sg(8080), rds-mysql(3306), Kafka-SG(9092/9094), elasticache-redis(6379) |
-| `ec2.tf` | 11개 | IAM Role×2, Instance Profile×2, Policy×1, Policy Attachment×6, EC2×3 (batch-kafka-app, kafka-1, terraform-mcp) |
+| `ec2.tf` | 11개 | IAM Role×2, Instance Profile×2, Policy×3, Policy Attachment×6, EC2×3 (batch-kafka-app, kafka-1, terraform-mcp) |
 | `rds.tf` | 1개 | batch-kafka-db (MySQL 8.0.44, db.t3.micro, SSM Parameter Store 비밀번호 연동) |
 | `dynamodb.tf` | 1개 | terraform-lock (PAY_PER_REQUEST, Terraform state lock용) |
 | `alb.tf` | 3개 | alb-batch-kafka-api, tg-api-8080, HTTP 리스너 — import 완료 |
-| `elasticache.tf` | 2개 | batch-kafka 서브넷 그룹 import 완료, Redis 7.1 클러스터 코드 작성 (apply 대기) |
+| `elasticache.tf` | 1개 | batch-kafka 서브넷 그룹 import 완료, Redis 클러스터 주석처리 (모니터링 후 활성화 예정) |
+| `iam.tf` | 2개 | GitHubActions S3/SSM 최소권한 커스텀 정책 추가 |
 
 **핵심 결정 사항:**
 - Route Table Association: 암시적 메인 라우팅 테이블 연결 유지 (명시적 association 코드 없음)
@@ -213,12 +274,15 @@ Kafka Consumer (10 파티션)
 - security_groups description: 실제 AWS 값 그대로 사용 (forces replacement 방지)
 - ALB Listener: `default_action` `ignore_changes` 추가 (stickiness 속성 Terraform provider 충돌 방지)
 - RDS engine_version: AWS 자동 업그레이드로 8.0.43 → 8.0.44 반영
+- GitHub Actions IAM: S3FullAccess → `campaign-deploy` 버킷 전용, SSMFullAccess → `/campaign/prod/*` 읽기 전용
+- terraform-mcp EC2: public_2a 서브넷, 퍼블릭 IP 활성화 (MCP 서버 Phase 3 대비), 현재 중지 상태
 
 #### 🔲 남은 작업
-- [ ] IAM 과잉권한 수정 (S3FullAccess, SSMFullAccess → 최소권한으로 교체) — `iam.tf`
-- [ ] terraform-mcp EC2 서브넷 검토 (현재 private_app_2a, public 서브넷 권장)
 - [ ] Kafka 3-broker EC2 추가 (v2 목표) — `ec2.tf`
-- [ ] ElastiCache Redis 클러스터 apply (현재 비용 절감으로 삭제 상태)
+- [ ] ElastiCache Redis 클러스터 apply (모니터링 구성 후) — `elasticache.tf`
+
+#### 📌 배포 전 AWS 작업 완료
+- [x] SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록 완료
 
 ### Phase 3: MCP 서버 (mcp-server/)
 - [ ] Python/FastAPI MCP 서버

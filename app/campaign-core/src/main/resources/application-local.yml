@@ -41,6 +41,11 @@ spring:
         dialect: org.hibernate.dialect.MySQLDialect
         default_batch_fetch_size: 100  # N+1 문제 방지: IN 절로 한 번에 조회
 
+  task:
+    scheduling:
+      pool:
+        size: 2  # ParticipationBridge(100ms) + QueueMetricsScheduler(10s) 동시 실행 보장
+
   kafka:
     bootstrap-servers: localhost:9092
     consumer:

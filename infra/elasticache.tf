@@ -13,7 +13,7 @@ resource "aws_elasticache_subnet_group" "main" {
   tags = {}
 }
 
-# ElastiCache Redis 클러스터 (신규 생성)
+# ElastiCache Redis 클러스터
 resource "aws_elasticache_cluster" "redis" {
   cluster_id           = "batch-kafka-redis"
   engine               = "redis"
