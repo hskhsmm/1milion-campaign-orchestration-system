@@ -273,8 +273,12 @@ Kafka Consumer (10 파티션)
 - DB 완전 초기화 후 `V1__init.sql` 없어서 `missing table [campaign]` 오류 → V1 마이그레이션 추가
 - Spring Boot 4에서 `spring.batch.jdbc.initialize-schema` 제거됨 → `V4__batch_schema.sql` Flyway로 추가
 - `iam.tf` S3 버킷 권한 `batch-kafka-deploy-` 로 수정 + terraform apply
+- `baseline-version: 1` → `0` 수정 (V1 베이스라인으로 인식해서 V1__init.sql 건너뛰던 문제)
+- `applicationStart.sh` — `docker-compose down` 먼저 실행 (포트 8080 충돌 방지)
+- Flyway 로그 미출력 문제 계속 조사 중 (flyway-core 추가했으나 실행 안 됨)
 
 ##### 🔲 남은 작업
+- [ ] Flyway 정상 실행 확인 (docker logs에 Flyway 로그 출력 여부)
 - [ ] CI/CD 배포 성공 확인 → 앱 기동 확인 (`/actuator/health`)
 - [ ] k6 ALB 엔드포인트로 부하 테스트
 - [ ] Grafana `terraform-mcp-public-ip:3000` 대시보드 확인
