@@ -42,6 +42,14 @@ resource "aws_security_group" "app" {
   }
 
   ingress {
+    from_port       = 8080
+    to_port         = 8080
+    protocol        = "tcp"
+    security_groups = [aws_security_group.terraform_mcp.id]
+    description     = "Prometheus scrape spring-boot metrics"
+  }
+
+  ingress {
     from_port       = 9121
     to_port         = 9121
     protocol        = "tcp"
