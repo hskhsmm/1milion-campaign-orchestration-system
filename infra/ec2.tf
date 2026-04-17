@@ -153,7 +153,8 @@ resource "aws_instance" "batch_kafka_app" {
   subnet_id                   = aws_subnet.private_app_2a.id
   vpc_security_group_ids      = [aws_security_group.app.id]
   iam_instance_profile        = aws_iam_instance_profile.batch_kafka_app.name
-  associate_public_ip_address = false
+  associate_public_ip_address = true
+  private_ip                  = "172.31.100.157"
 
   root_block_device {
     volume_type = "gp3"
@@ -176,7 +177,8 @@ resource "aws_instance" "kafka_1" {
   subnet_id                   = aws_subnet.public_2a.id
   vpc_security_group_ids      = [aws_security_group.kafka.id]
   iam_instance_profile        = aws_iam_instance_profile.batch_kafka_app.name
-  associate_public_ip_address = false
+  associate_public_ip_address = true
+  private_ip                  = "172.31.5.164"
 
   root_block_device {
     volume_type = "gp3"
