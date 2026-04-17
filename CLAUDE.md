@@ -234,14 +234,20 @@ Kafka Consumer (10 파티션)
   - k6 `__ITER` per-VU 문제 → 전역 iterationInTest 사용으로 해결
   - JVM Metaspace OOM (좀비 현상) → MaxMetaspaceSize 256m으로 해결
 
-#### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔲 진행 예정 (내일)
-- [ ] `security_groups.tf` — terraform-mcp-sg에 9090(Prometheus)/3000(Grafana) ingress 추가
-- [ ] `security_groups.tf` — app-sg에 8080/9121(redis-exporter) from terraform-mcp-sg ingress 추가
-- [ ] `security_groups.tf` — kafka-sg에 9092 from terraform-mcp-sg ingress 추가
+#### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔄 진행 중 (2026-04-18)
+- [x] `ec2.tf` — terraform-mcp-sg에 9090(Prometheus)/3000(Grafana) ingress 추가
+- [x] `security_groups.tf` — app-sg에 9121(redis-exporter) from terraform-mcp-sg ingress 추가
+- [x] `security_groups.tf` — kafka-sg에 9092 from terraform-mcp-sg ingress 추가
+- [x] `elasticache.tf` — Redis 클러스터 주석 해제 (terraform apply 대기 중)
+- [ ] EC2 3대 (batch-kafka-app, kafka-1, terraform-mcp) + RDS start (콘솔)
+- [ ] terraform apply (ElastiCache 생성 + SG 반영)
+- [ ] feature/monitoring → main PR 머지 → CI/CD 자동 배포
+- [ ] kafka-1 SSM 접속 → 토픽 수동 생성 (campaign-participation, campaign-participation-dlq)
 - [ ] terraform-mcp EC2에 Prometheus + Grafana + kafka-exporter 배포 (SSM으로 설치 스크립트 실행)
 - [ ] batch-kafka-app EC2에 redis-exporter 배포 (SSM)
+- [ ] k6 ALB 엔드포인트로 부하 테스트 → Grafana 대시보드 확인
 - [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
-- 선행 조건: EC2 인스턴스(terraform-mcp, batch-kafka-app) 시작 필요 (비용 고려)
+- 비용 절약: EC2/RDS는 콘솔 stop, ElastiCache는 `terraform destroy -target` 으로 개별 제거
 
 
 ### Phase 1: Terraform (infra/ 전체 작성)

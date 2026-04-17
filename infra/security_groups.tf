@@ -41,6 +41,14 @@ resource "aws_security_group" "app" {
     security_groups = [aws_security_group.alb_public.id]
   }
 
+  ingress {
+    from_port       = 9121
+    to_port         = 9121
+    protocol        = "tcp"
+    security_groups = [aws_security_group.terraform_mcp.id]
+    description     = "redis-exporter scrape from terraform-mcp"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
@@ -85,6 +93,14 @@ resource "aws_security_group" "kafka" {
     to_port         = 9092
     protocol        = "tcp"
     security_groups = [aws_security_group.app.id]
+  }
+
+  ingress {
+    from_port       = 9092
+    to_port         = 9092
+    protocol        = "tcp"
+    security_groups = [aws_security_group.terraform_mcp.id]
+    description     = "kafka-exporter scrape from terraform-mcp"
   }
 
   ingress {
