@@ -86,7 +86,7 @@ jobs:
       - name: Trigger CodeDeploy
         run: |
           aws deploy create-deployment \
-            --application-name campaign-core-app \
-            --deployment-group-name campaign-prod-dg \
+            --application-name batch-kafka-app \
+            --deployment-group-name batch-kafka-prod-dg \
             --deployment-config-name CodeDeployDefault.AllAtOnce \
             --s3-location bucket=batch-kafka-deploy-631124976154,key=deploy-${{ github.sha }}.zip,bundleType=zip
