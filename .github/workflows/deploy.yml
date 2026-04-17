@@ -6,11 +6,6 @@ on:
       - main
     paths:
       - 'app/campaign-core/**'
-    paths-ignore:
-      - '**.md'
-      - 'docs/**'
-      - '.gitignore'
-      - 'LICENSE'
 
 # 배포 중 새 push 발생 시 기존 배포 취소하고 새 배포 실행
 concurrency:
