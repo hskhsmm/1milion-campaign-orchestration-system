@@ -16,7 +16,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   # 스토리지
   allocated_storage     = 20
   max_allocated_storage = 1000
-  storage_type          = "gp2"
+  storage_type          = "gp3"
   storage_encrypted     = true
   kms_key_id            = "arn:aws:kms:ap-northeast-2:631124976154:key/8ad3a522-6d4f-4891-8c39-9f9d33cb9e38"
 
