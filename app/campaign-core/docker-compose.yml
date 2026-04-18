@@ -167,7 +167,7 @@ services:
       - redis-exporter
 
   grafana:
-    image: grafana/grafana:latest
+    image: grafana/grafana:10.4.0
     container_name: grafana
     ports:
       - "${GRAFANA_PORT:-3000}:3000"
