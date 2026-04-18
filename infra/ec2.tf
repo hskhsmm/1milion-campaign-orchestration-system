@@ -165,6 +165,10 @@ resource "aws_instance" "batch_kafka_app" {
   tags = {
     Name = "batch-kafka-app"
   }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
+  }
 }
 
 # ──────────────────────────────────────────
@@ -188,6 +192,10 @@ resource "aws_instance" "kafka_1" {
 
   tags = {
     Name = "kafka-1"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
   }
 }
 
@@ -218,5 +226,9 @@ resource "aws_instance" "terraform_mcp" {
   tags = {
     Name    = "terraform-mcp"
     Purpose = "MCP-Server"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
   }
 }
