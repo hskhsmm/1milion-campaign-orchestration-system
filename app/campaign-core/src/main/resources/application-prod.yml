@@ -52,8 +52,9 @@ spring:
 
   flyway:
     enabled: true
+    locations: classpath:db/migration
     baseline-on-migrate: true    # flyway_schema_history 없을 때 자동 baseline 생성
-    baseline-version: 0          # V0 베이스라인 → V1부터 전체 실행
+
 
   batch:
     job:
