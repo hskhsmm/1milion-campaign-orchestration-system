@@ -256,6 +256,7 @@ Kafka Consumer (10 파티션)
   - prometheus.yml: spring-boot(172.31.100.157:8080), kafka-exporter(localhost:9308), redis-exporter(172.31.100.157:9121)
   - grafana datasource: prometheus uid 고정 (http://172.31.15.217:9090)
 - [x] `ec2.tf` — batch-kafka-app, kafka-1 `associate_public_ip_address = true` 수정 + `private_ip` 고정
+- [x] `ec2.tf` — EC2 3대 `lifecycle.ignore_changes = [associate_public_ip_address]` 추가 (stopped 상태 시 terraform plan drift 방지)
   - batch-kafka-app: `172.31.100.157`, kafka-1: `172.31.5.164`
   - 재생성 후에도 private IP 고정 → prometheus.yml 수정 불필요
 - [x] terraform apply 완료 — batch-kafka-app, kafka-1 재생성 (퍼블릭 IP 할당)
@@ -376,12 +377,12 @@ hikaricp_connections_pending 감소
 
 | 항목 | 효과 | 비고 |
 |------|------|------|
-| EBS gp2 → **gp3** 변경 | IOPS 3,000 안정 보장 (버스트 없이) | 콘솔에서 바로, 코드 변경 없음 |
+| ~~EBS gp2 → **gp3** 변경~~ ✅ 완료 | IOPS 3,000 안정 보장 (버스트 없이) | 콘솔 + rds.tf 반영 완료 |
 | RDS Proxy 추가 | 앱 2대 이상 시 커넥션 멀티플렉싱 | 앱 스케일아웃 시 필수 |
 | RDS → **Aurora** 전환 | write TPS 최대 5배, 분산 스토리지 I/O | 코드 변경 없음, 엔드포인트만 교체 |
 
-> 현재 db.t3.micro EBS gp2 → 버스트 IOPS 소진이 진짜 병목
-> 코드 개선(커넥션 절약) + gp3/Aurora(INSERT 속도) 둘 다 해야 실질 개선
+> ~~현재 db.t3.micro EBS gp2~~ → gp3 전환 완료 (IOPS 3,000 안정 보장)
+> 코드 개선(커넥션 절약) + Aurora(INSERT 속도) 추가 개선 가능
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 
