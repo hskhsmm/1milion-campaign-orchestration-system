@@ -76,6 +76,11 @@ public class RedisStockService {
         redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
     }
 
+    // Redis 재시작 후 재고 복구 시 active:campaigns SADD
+    public void activateCampaign(Long campaignId) {
+        redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+    }
+
     /**
      * SISMEMBER + DECR + SREM(remaining==0) + GET total 원자 실행 (Lua)
      * returns long[]{remaining, total}
