@@ -5,6 +5,8 @@ import org.springframework.context.annotation.Configuration;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
+import java.util.List;
+
 
 /**
  * Redis 설정
@@ -27,6 +29,15 @@ public class RedisConfig {
         DefaultRedisScript<Long> script = new DefaultRedisScript<>();
         script.setLocation(new ClassPathResource("scripts/check-and-decr.lua"));
         script.setResultType(Long.class);
+        return script;
+    }
+
+    @SuppressWarnings("rawtypes")
+    @Bean
+    public DefaultRedisScript<List> checkDecrTotalScript() {
+        DefaultRedisScript<List> script = new DefaultRedisScript<>();
+        script.setLocation(new ClassPathResource("scripts/check-decr-total.lua"));
+        script.setResultType(List.class);
         return script;
     }
 
