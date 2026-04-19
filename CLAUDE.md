@@ -297,6 +297,33 @@ Kafka Consumer (10 파티션)
 - 비용 절약: EC2/RDS 콘솔 stop, ElastiCache는 `terraform destroy -target=aws_elasticache_replication_group.redis`
 
 
+### 로컬 통합 테스트 결과 (2026-04-19, A+B파트 머지 후)
+
+#### 검증 항목 및 결과
+| 항목 | 결과 |
+|------|------|
+| SUCCESS 100건 (totalStock=100, 200건 요청) | ✅ |
+| sequence 중복 | 0건 ✅ |
+| RateLimit 429 (동일 userId 10초 내 재요청) | ✅ |
+| 재고 소진 400 | ✅ |
+| result 캐시 키 (`participation:result:{userId}:{campaignId}`) | ✅ (setter 버그 수정으로 정상화) |
+
+#### 수정된 버그
+- `ParticipationEvent.java` — `campaignId`, `userId` setter 누락 → Jackson 역직렬화 시 null, writeResultCache 키가 `participation:result:null:null`로 고정되는 버그
+
+#### Known Issue — 재고 소진 시 큐 잔류 (설계 허용 범위)
+- 흐름: `remaining == 0` → Lua `SREM active:campaigns` 즉시 실행 → 큐에 잔류 메시지 Bridge 드레인 불가
+- 안전망: Spring Batch `pendingRecoveryJob`이 5분 초과 PENDING 재처리 → 결국 SUCCESS
+- 해결 시점: 1순위 코드 개선 "캠페인 자동 종료 + SISMEMBER" 항목에서 처리 예정
+
+#### HikariCP prod 설정 수정 (2026-04-19)
+- 원인: `SPRING_PROFILES_ACTIVE: prod`만 활성화 → `maximum-pool-size` 미설정 → HikariCP 기본값 **10** 적용
+- 결과: AWS 1차 테스트 avg 3.94s / max 18.4s의 주요 원인 중 하나
+- 수정: `application-prod.yml`에 `maximum-pool-size: 20`, `minimum-idle: 10` 추가
+- p2/p3 프로필은 기존 설정(25/30) 유지 (파티션 증가 시 덮어씌움)
+
+---
+
 ### 1차 부하 테스트 결과 (2026-04-18, AWS 환경)
 
 #### 테스트 환경
@@ -348,9 +375,9 @@ Kafka Consumer (10 파티션)
 | Phase | 핵심 변경 | 상태 |
 |-------|-----------|------|
 | 0 | 기준선 (TPS 246/s, p95 6.34s) | ✅ 완료 |
-| 1 | 코드 개선 (A파트: Lua 통합/findById 제거, B파트: 동적 batchSize) | 🔄 진행 중 |
+| 1 | 코드 개선 (A파트: Lua 통합/findById 제거, B파트: 동적 batchSize) + HikariCP prod 기본값 수정 | 🔄 진행 중 (코드 완료, AWS 재테스트 대기) |
 | 2 | gp3 Soak 테스트 (30분, 50,000 요청) | 대기 |
-| 3 | EC2 2대 + HikariCP 튜닝 | 대기 |
+| 3 | HikariCP 튜닝 (파티션 증가 시 pool-size 조정) | 대기 |
 | 4 | Kafka 3브로커 + 10파티션 | 대기 |
 | 5 | Redis Cluster + AOF + Intent Key | 대기 |
 | 6 | Spring Batch 안전망 | 대기 |
