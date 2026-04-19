@@ -62,6 +62,9 @@ public interface ParticipationHistoryRepository extends JpaRepository<Participat
      */
     Optional<ParticipationHistory> findByCampaignIdAndUserId(Long campaignId, Long userId);
 
+    // 5분 초과 PENDING 재처리 배치용
+    List<ParticipationHistory> findByStatusAndCreatedAtBefore(ParticipationStatus status, LocalDateTime cutoff);
+
     /**
      * 캠페인별 참여 이력 조회 (Kafka 메시지 생성 시간 순서대로, 순서 분석용)
      * kafka_timestamp 순서로 정렬하여 실제 메시지 생성 순서를 확인
