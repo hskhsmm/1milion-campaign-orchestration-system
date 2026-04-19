@@ -23,7 +23,8 @@ management:
 spring:
   datasource:
     hikari:
-      # maximum-pool-size, minimum-idle은 파티션별 프로필(p2, p3 등)에서 설정
+      maximum-pool-size: 20     # 파티션 1개 기준 (p2/p3 프로필에서 덮어씌움)
+      minimum-idle: 10
       connection-timeout: 20000 # 커넥션 획득 타임아웃 20초
       idle-timeout: 300000      # 유휴 커넥션 유지 시간 5분
       max-lifetime: 1800000     # 커넥션 최대 수명 30분
