@@ -28,8 +28,9 @@ if [[ -z "${ECR_IMAGE:-}" ]]; then
   exit 1
 fi
 
-echo "[applicationStart] Force removing existing container if exists"
-docker rm -f campaign-core-app || true
+echo "[applicationStart] Stopping existing containers"
+docker-compose -f "${COMPOSE_FILE}" down --remove-orphans 2>/dev/null || true
+docker rm -f campaign-core-app redis-exporter 2>/dev/null || true
 
 echo "[applicationStart] Starting containers"
 docker-compose -f "${COMPOSE_FILE}" --env-file "${ENV_FILE}" up -d --remove-orphans

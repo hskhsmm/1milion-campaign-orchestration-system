@@ -256,6 +256,7 @@ Kafka Consumer (10 파티션)
   - prometheus.yml: spring-boot(172.31.100.157:8080), kafka-exporter(localhost:9308), redis-exporter(172.31.100.157:9121)
   - grafana datasource: prometheus uid 고정 (http://172.31.15.217:9090)
 - [x] `ec2.tf` — batch-kafka-app, kafka-1 `associate_public_ip_address = true` 수정 + `private_ip` 고정
+- [x] `ec2.tf` — EC2 3대 `lifecycle.ignore_changes = [associate_public_ip_address]` 추가 (stopped 상태 시 terraform plan drift 방지)
   - batch-kafka-app: `172.31.100.157`, kafka-1: `172.31.5.164`
   - 재생성 후에도 private IP 고정 → prometheus.yml 수정 불필요
 - [x] terraform apply 완료 — batch-kafka-app, kafka-1 재생성 (퍼블릭 IP 할당)
@@ -264,12 +265,27 @@ Kafka Consumer (10 파티션)
 - [x] `docker-compose.prod.yml` — redis-exporter 추가 (CI/CD 시 자동 실행, 포트 9121)
 - [x] terraform-mcp — kafka-exporter 정상 연결 확인 (Up 상태)
 
-##### 🔲 남은 작업 (CI/CD 테스트만 하면 #25 완성)
-- [ ] feature/monitoring → main PR 머지 → CI/CD 자동 배포
-- [ ] CodeDeploy 배포 성공 확인 → 앱 기동 확인
-- [ ] k6 ALB 엔드포인트로 부하 테스트
-- [ ] Grafana `terraform-mcp-public-ip:3000` 대시보드 확인
-- [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
+##### CI/CD 트러블슈팅 기록 (2026-04-18)
+- ECR 레포명 `campaign-core` → `batch-kafka-system` 수정
+- S3 버킷명 `campaign-deploy-` → `batch-kafka-deploy-` 수정
+- CodeDeploy 앱명 `campaign-core-app` → `batch-kafka-app`, 배포그룹 `campaign-prod-dg` → `batch-kafka-prod-dg` 수정
+- `deploy.yml` paths에 `.github/workflows/**` 추가 (workflow 변경 시 CI/CD 트리거)
+- `flyway-core` 의존성 누락 추가 (`flyway-mysql`만으로는 Flyway 미실행)
+- DB 완전 초기화 후 `V1__init.sql` 없어서 `missing table [campaign]` 오류 → V1 마이그레이션 추가
+- Spring Boot 4에서 `spring.batch.jdbc.initialize-schema` 제거됨 → `V4__batch_schema.sql` Flyway로 추가
+- `iam.tf` S3 버킷 권한 `batch-kafka-deploy-` 로 수정 + terraform apply
+- `baseline-version: 1` → `0` 수정 (V1 베이스라인으로 인식해서 V1__init.sql 건너뛰던 문제)
+- `applicationStart.sh` — `docker-compose down` 먼저 실행 (포트 8080 충돌 방지)
+- Flyway 로그 미출력 문제 → DB `show tables` 직접 확인으로 정상 실행 확인 (13개 테이블 생성 완료)
+
+##### ✅ 완료 (2026-04-18)
+- [x] Flyway 정상 실행 확인 — DB에 campaign, participation_history, BATCH_* 등 13개 테이블 생성 확인
+- [x] CI/CD 배포 성공 → `/actuator/health` UP 확인
+- [x] Prometheus targets 3개 UP — kafka-exporter 컨테이너 IP(172.17.0.3) 이슈 해결
+  - prometheus.yml `localhost:9308` → `172.17.0.3:9308` 수정 (`/home/ec2-user/prometheus.yml` 마운트)
+  - terraform-mcp 재시작 시 자동 반영 (`--restart unless-stopped` + 볼륨 마운트)
+- [x] Grafana 대시보드 import 완료 (`campaign.json` 수동 import)
+- [x] k6 ALB 부하 테스트 완료 → 1차 성능 측정 결과 확보
 
 ##### 📌 인프라 메모
 - ElastiCache는 Valkey 사용 (Redis보다 약 20% 저렴, 클러스터링 전환 시도 유지)
@@ -278,6 +294,95 @@ Kafka Consumer (10 파티션)
 - instance ID로 SSM 접속하므로 퍼블릭 IP 변경 무관
 - 비용 절약: EC2/RDS 콘솔 stop, ElastiCache는 `terraform destroy -target=aws_elasticache_replication_group.redis`
 
+
+### 1차 부하 테스트 결과 (2026-04-18, AWS 환경)
+
+#### 테스트 환경
+- 앱: batch-kafka-app t3.small 단일 인스턴스
+- DB: batch-kafka-db db.t3.micro (MySQL 8.0.44)
+- Redis: ElastiCache Valkey 단일 노드
+- Kafka: kafka-1 단일 브로커, 파티션 1개
+- ALB: alb-batch-kafka-api
+
+#### k6 설정
+- TOTAL_REQUESTS: 15,000 (재고 10,000 초과 시나리오)
+- MAX_VUS: 1,000
+- DURATION: 60s
+
+#### 결과
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **246/s** |
+| avg latency | 3.94s |
+| p95 | 6.34s |
+| max | 18.4s |
+| 성공 (202) | **9,990건** |
+| 재고 초과 차단 (400) | 5,010건 |
+| 재고 초과 발급 | **0건** ← 정합성 완벽 |
+
+#### Grafana 확인 결과
+- Bridge 드레인 속도: 피크 180 req/s, API TPS와 동일하게 움직임 → 정상
+- Bridge 드레인 사이클: 피크 450ms → 감당 가능
+- Redis Queue 피크: 15개 수준 → 거의 즉시 소비
+
+#### 병목 분석
+- **병목 위치**: API → DB PENDING INSERT (1,000 VU 동시 INSERT → UNIQUE 인덱스 B-tree 락 경합)
+- Bridge/Queue/Consumer는 병목 아님
+- Virtual Thread(Spring Boot 4) 덕분에 스레드 풀 고갈 없이 대기 처리 → max 18.4s에도 시스템 유지
+- HikariCP 기본 타임아웃 30s 이내 처리되어 타임아웃 에러 없음
+
+#### 성능 개선 방향 (설계 철학: 공정성·정합성 우선)
+- PENDING INSERT는 API 경로 유지 (장애 복구 기준점 — 빼면 Spring Batch 복구 불가)
+- DB 스케일: RDS Proxy + Aurora 전환 (MySQL 대비 write TPS 최대 5배, 코드 변경 없음)
+- Consumer 병렬화: Kafka 10파티션 + Consumer 10개 → SUCCESS UPDATE 선형 확장
+- Redis: ElastiCache Cluster 3샤드 → TPS 향상 아님, 가용성(SPOF 제거) 목적
+
+### 성능 개선 계획 (1차 테스트 기반)
+
+> 상세 설계: `DESIGN_IMPROVEMENTS.md` 참고
+> 설계 철학: 공정성·정합성 우선, 처리량은 안정적이면 충분
+
+#### 1순위 — 코드 개선 (인프라 무관, 즉시 적용 가능)
+
+| 항목 | 내용 | 효과 |
+|------|------|------|
+| 캠페인 자동 종료 + SISMEMBER | Lua로 SISMEMBER + DECR 원자화, remaining==0 시 DB CLOSED + active:campaigns 제거 | 재고 소진 후 Redis 낭비 제거, Bridge 빈 큐 순회 제거 |
+| totalStock Redis 캐싱 | 캠페인 생성 시 `total:campaign:{id}` 저장, Lua 1번으로 SISMEMBER + DECR + GET 통합 | `findById()` DB 조회 완전 제거 → 커넥션 풀 INSERT 전용 확보 |
+
+**기대 효과:**
+```
+DB 커넥션 사용: 25,000번 → 10,000번 (60% 감소)
+avg latency: 3.94s → 2~3s
+hikaricp_connections_pending 감소
+```
+
+**검증 순서:** 단위 테스트 → 통합 테스트 → k6 before/after 비교 → hikaricp 지표 확인
+
+#### 2순위 — 인프라 + 코드 세트
+
+| 항목 | 내용 | 선행 조건 |
+|------|------|-----------|
+| Redis Cluster + AOF | ElastiCache Cluster 3샤드, AOF 활성화 | elasticache.tf 수정 |
+| Intent Key (의도 기록) | DECR + intent key Lua 원자화, 앱 크래시 시 double DECR 방지 | Redis Cluster + AOF 필수 |
+
+#### 3순위 — Spring Batch 안전망
+
+| 항목 | 내용 |
+|------|------|
+| 재고 복구 스케줄러 | Redis 키 없을 때 `total - SUCCESS - PENDING` 공식으로 자동 복구 |
+| 5분 초과 PENDING 재처리 | ItemReader(PENDING 조회) → ItemProcessor(Queue 재발행) → ItemWriter(FAIL UPDATE) |
+
+#### 인프라 개선 (DB 병목 근본 해결)
+
+| 항목 | 효과 | 비고 |
+|------|------|------|
+| ~~EBS gp2 → **gp3** 변경~~ ✅ 완료 | IOPS 3,000 안정 보장 (버스트 없이) | 콘솔 + rds.tf 반영 완료 |
+| RDS Proxy 추가 | 앱 2대 이상 시 커넥션 멀티플렉싱 | 앱 스케일아웃 시 필수 |
+| RDS → **Aurora** 전환 | write TPS 최대 5배, 분산 스토리지 I/O | 코드 변경 없음, 엔드포인트만 교체 |
+
+> ~~현재 db.t3.micro EBS gp2~~ → gp3 전환 완료 (IOPS 3,000 안정 보장)
+> 코드 개선(커넥션 절약) + Aurora(INSERT 속도) 추가 개선 가능
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 

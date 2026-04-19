@@ -1,6 +1,6 @@
 plugins {
 	id 'java'
-	id 'org.springframework.boot' version '4.0.4'
+	id 'org.springframework.boot' version '4.0.4' // v2
 	id 'io.spring.dependency-management' version '1.1.7'
 }
 
@@ -36,7 +36,8 @@ dependencies {
 	// Bridge → Kafka 배치 발행, Consumer PENDING 확정 처리
 	implementation 'org.springframework.kafka:spring-kafka'
 
-	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션
+	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션 작업
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	implementation 'org.flywaydb:flyway-mysql'
 
 	// PendingRetryScheduler(@Scheduled), RedisSyncScheduler(@Scheduled) — @EnableScheduling 활성화
@@ -55,7 +56,7 @@ dependencies {
 	// @RequestBody 유효성 검증 (@Valid, @NotNull 등)
 	implementation 'org.springframework.boot:spring-boot-starter-validation'
 
-	// TODO: 현재 설계 문서(DESIGN_GUIDE_V2.md)에 템플릿 엔진 사용 계획 없음
+	// TODO: 현재 설계 문서(DESIGN_GUIDE_V2.md)에 템플릿 엔진 사용 계획 x
 	// REST API + 폴링 구조로 서버사이드 렌더링 불필요해 보이나,
 	// 관리자 페이지 또는 이벤트 결과 페이지 계획이 있다면 유지 필요 — 확인 요청
 	implementation 'org.springframework.boot:spring-boot-starter-thymeleaf'

@@ -56,8 +56,8 @@ resource "aws_iam_policy" "github_actions_s3_minimal" {
           "s3:ListBucket"
         ]
         Resource = [
-          "arn:aws:s3:::campaign-deploy-${var.account_id}",
-          "arn:aws:s3:::campaign-deploy-${var.account_id}/*"
+          "arn:aws:s3:::batch-kafka-deploy-${var.account_id}",
+          "arn:aws:s3:::batch-kafka-deploy-${var.account_id}/*"
         ]
       }
     ]
