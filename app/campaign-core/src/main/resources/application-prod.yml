@@ -2,7 +2,7 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, prometheus        # Prometheus scrape 엔드포인트 노출
+        include: health, prometheus, metrics   # Prometheus scrape + metrics 디버깅용
   endpoint:
     health:
       show-details: when-authorized        # 인증된 요청만 상세 노출
@@ -56,6 +56,11 @@ spring:
     locations: classpath:db/migration
     baseline-on-migrate: true    # flyway_schema_history 없을 때 자동 baseline 생성
     baseline-version: 0
+
+  task:
+    scheduling:
+      pool:
+        size: 2
 
   batch:
     job:

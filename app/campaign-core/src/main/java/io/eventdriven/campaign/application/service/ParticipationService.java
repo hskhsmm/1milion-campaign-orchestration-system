@@ -59,10 +59,19 @@ public class ParticipationService {
         long sequence = total - remaining;
         // JPA 프록시 — INSERT 시 FK(campaign_id)만 필요, DB 조회 없음
         Campaign campaign = campaignRepository.getReferenceById(campaignId);
+
+        long t0 = System.currentTimeMillis();
         Long historyId = insertPendingWithRetry(campaign, userId, sequence, campaignId);
+        long dbInsertMs = System.currentTimeMillis() - t0;
 
         String message = buildMessage(campaignId, userId, historyId);
+        long t1 = System.currentTimeMillis();
         boolean pushed = redisQueueService.push(campaignId, message);
+        long redisPushMs = System.currentTimeMillis() - t1;
+
+        log.info("[TIMING] campaignId={} userId={} DB_INSERT={}ms REDIS_PUSH={}ms TOTAL={}ms",
+                campaignId, userId, dbInsertMs, redisPushMs, dbInsertMs + redisPushMs);
+
         if (!pushed) {
             log.warn("Redis Queue 적재 실패 (Spring Batch 안전망). campaignId={}, userId={}, historyId={}",
                     campaignId, userId, historyId);
