@@ -3,23 +3,26 @@ package io.eventdriven.campaign.application.service;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
+import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
+import java.util.List;
 
-/**
- * Redis 기반 재고 관리 서비스
- *
- * DB 병목 해결을 위해 재고 차감을 Redis 인메모리에서 처리
- * - Lua 스크립트의 원자성으로 동시성 문제 해결
- * - 인메모리 연산으로 디스크 I/O 제거
- */
+@SuppressWarnings("rawtypes")
+
 @Slf4j
 @Service
 @RequiredArgsConstructor
 public class RedisStockService {
 
     private final RedisTemplate<String, String> redisTemplate;
+    private final DefaultRedisScript<Long> checkAndDecrScript;
+    private final DefaultRedisScript<List> checkDecrTotalScript;
+
     private static final String STOCK_KEY_PREFIX = "stock:campaign:";
+    private static final String TOTAL_KEY_PREFIX = "total:campaign:";
+    private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
+    public static final Long INACTIVE_CAMPAIGN = -999L;
 
 
     /**
@@ -49,18 +52,60 @@ public class RedisStockService {
 
 
 
-    public Long decreaseStock(Long campaignId) {
-        String key = getStockKey(campaignId); // 특정 캠페인의 키
-        // 캠페인의 키를 통해서 재고 감소 실행.
-
-        // 음수 포함하여 리턴(컷오프 동작 활용)
-        return redisTemplate. opsForValue().decrement(key);
+    /**
+     * SISMEMBER + DECR 원자 실행 (Lua)
+     * - 비활성 캠페인: INACTIVE_CAMPAIGN(-999) 반환, DECR 없음
+     * - 활성 캠페인: DECR 후 remaining 반환 (음수 포함)
+     */
+    public Long checkAndDecr(Long campaignId) {
+        return redisTemplate.execute(
+            checkAndDecrScript,
+            List.of(ACTIVE_CAMPAIGNS_KEY, getStockKey(campaignId)),
+            campaignId.toString()
+        );
     }
 
-    // INCR 보상용 메서드 추가
+    // INCR 보상용 — DuplicateKey + 다른 sequence 케이스에만 사용
     public void incrementStock(Long campaignId) {
         String key = getStockKey(campaignId);
         redisTemplate.opsForValue().increment(key);
+    }
+
+    // 캠페인 자동 종료 시 active:campaigns SREM
+    public void deactivateCampaign(Long campaignId) {
+        redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+    }
+
+    // Redis 재시작 후 재고 복구 시 active:campaigns SADD
+    public void activateCampaign(Long campaignId) {
+        redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+    }
+
+    /**
+     * SISMEMBER + DECR + SREM(remaining==0) + GET total 원자 실행 (Lua)
+     * returns long[]{remaining, total}
+     * remaining == INACTIVE_CAMPAIGN(-999): 비활성 캠페인
+     */
+    @SuppressWarnings("unchecked")
+    public long[] checkDecrTotal(Long campaignId) {
+        List<Long> result = (List<Long>) redisTemplate.execute(
+            checkDecrTotalScript,
+            List.of(ACTIVE_CAMPAIGNS_KEY, getStockKey(campaignId), getTotalKey(campaignId)),
+            campaignId.toString()
+        );
+        if (result == null || result.size() < 2) {
+            throw new IllegalStateException("checkDecrTotal 스크립트 오류. campaignId=" + campaignId);
+        }
+        return new long[]{result.get(0), result.get(1)};
+    }
+
+    // 캠페인 생성 시 totalStock Redis 저장 (sequence 계산 목적, DB findById 대체)
+    public void initializeTotal(Long campaignId, Long totalStock) {
+        redisTemplate.opsForValue().set(getTotalKey(campaignId), String.valueOf(totalStock));
+    }
+
+    private String getTotalKey(Long campaignId) {
+        return TOTAL_KEY_PREFIX + campaignId;
     }
 
 

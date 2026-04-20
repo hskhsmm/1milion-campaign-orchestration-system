@@ -6,7 +6,6 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.beans.factory.annotation.Value;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
@@ -53,9 +52,6 @@ public class ParticipationBridge {
     // Timer는 Bean이 아닌 직접 생성 객체, 생성자에서 MeterRegistry를 받아 초기화
     private final Timer drainTimer;
 
-    @Value("${bridge.batch-size:500}")
-    private int batchSize;
-
     public ParticipationBridge(RedisTemplate<String, String> redisTemplate,
                                KafkaTemplate<String, String> kafkaTemplate,
                                SlackNotificationService slackNotificationService,
@@ -93,18 +89,30 @@ public class ParticipationBridge {
 
     /**
      * 단일 캠페인 큐 드레인
-     * batchSize만큼 RPOP → Kafka 발행. 큐가 비면 즉시 종료.
+     * 큐 크기에 따라 동적으로 batchSize 결정 후 RPOP → Kafka 발행. 큐가 비면 즉시 종료.
      */
     private void drainCampaignQueue(Long campaignId) {
         String queueKey = QUEUE_KEY_PREFIX + campaignId;
+        Long queueSize = redisTemplate.opsForList().size(queueKey);
+        int dynamicBatchSize = resolveBatchSize(queueSize);
 
-        for (int i = 0; i < batchSize; i++) {
+        for (int i = 0; i < dynamicBatchSize; i++) {
             String message = redisTemplate.opsForList().rightPop(queueKey);
             if (message == null) {
                 break; // 큐 소진 → 다음 캠페인으로
             }
             publishWithRetry(campaignId, message);
         }
+    }
+
+    /**
+     * 큐 크기 기반 동적 batchSize 결정
+     * 큐 적체량에 비례해 드레인 속도 자동 조절
+     */
+    private int resolveBatchSize(Long queueSize) {
+        if (queueSize == null || queueSize < 10_000) return 500;
+        if (queueSize < 100_000) return 1_000;
+        return 2_000;
     }
 
     /**
