@@ -33,6 +33,7 @@ public class BatchScheduler {
 
     private final Job aggregateParticipationJob;
     private final Job batchMetadataCleanupJob;
+    private final Job pendingRecoveryJob;
 
     /**
      * 매일 새벽 2시에 전일 데이터 집계
@@ -68,6 +69,25 @@ public class BatchScheduler {
         } catch (Exception e) {
             log.error(" 일일 집계 배치 실행 중 예상치 못한 오류 발생", e);
             // TODO: 알림 전송 (Slack, Email 등)
+        }
+    }
+
+    // 5분 초과 PENDING 재처리 — Bridge 장애, LPUSH 실패 등으로 방치된 레코드 복구
+    @Scheduled(cron = "0 */5 * * * *")
+    public void schedulePendingRecovery() {
+        try {
+            JobParameters params = new JobParametersBuilder()
+                    .addLong("ts", System.currentTimeMillis())
+                    .toJobParameters();
+
+            asyncJobLauncher.run(pendingRecoveryJob, params);
+
+        } catch (JobInstanceAlreadyCompleteException e) {
+            log.debug("PENDING 재처리 이미 완료.");
+        } catch (JobExecutionAlreadyRunningException e) {
+            log.warn("PENDING 재처리 배치가 이미 실행 중입니다.");
+        } catch (Exception e) {
+            log.error("PENDING 재처리 배치 실행 오류", e);
         }
     }
 

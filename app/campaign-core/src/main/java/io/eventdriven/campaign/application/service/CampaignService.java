@@ -28,6 +28,7 @@ public class CampaignService {
 
         // Redis에 재고 초기화
         redisStockService.initializeStock(savedCampaign.getId(), request.getTotalStock());
+        redisStockService.initializeTotal(savedCampaign.getId(), request.getTotalStock());
         redisTemplate.opsForSet().add("active:campaigns", savedCampaign.getId().toString());
 
 

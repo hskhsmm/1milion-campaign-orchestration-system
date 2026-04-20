@@ -36,8 +36,16 @@ public class ParticipationEvent {
         return campaignId;
     }
 
+    public void setCampaignId(Long campaignId) {
+        this.campaignId = campaignId;
+    }
+
     public Long getUserId() {
         return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 
     public Long getKafkaOffset() {

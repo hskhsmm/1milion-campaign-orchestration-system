@@ -36,10 +36,15 @@ export const options = {
       maxDuration: `${DURATION * 2}s`, // 최대 허용 시간 (duration의 2배 여유)
     },
   },
+  thresholds: {
+    http_req_failed: ['rate<0.01'],           // 에러율 1% 미만
+    http_req_duration: ['p(95)<1000'],        // p95 1초 미만
+    participation_success: ['count>9900'],    // 성공 건수 기준
+  },
 };
 
-const BASE_URL = 'http://localhost:8080';
-const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1; // 환경변수로 캠페인 ID 전달 가능
+const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
+const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1;
 
 export default function () {
   // 전역 iteration 인덱스로 userId 결정 (VU 간 중복 없이 유니크)

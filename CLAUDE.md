@@ -154,11 +154,13 @@ Kafka Consumer (10 파티션)
 - [x] `ParticipationStatus.java` — PENDING 추가
 - [x] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
 - [x] `ParticipationEvent.java` — historyId 필드 추가
+  - **버그 수정 (2026-04-19)**: `campaignId`, `userId` setter 추가 — Jackson 역직렬화 시 null 되어 `writeResultCache` 캐시 키 `participation:result:null:null` 오동작 수정
 - [x] `ParticipationHistoryRepository.java` — bulkUpdateSuccess(AND status=PENDING 멱등성), findByCampaignIdAndUserId 추가
 - [x] `ParticipationEventConsumer.java` — v2 전면 재작성 + Redis 결과 캐시 + Slack 연동 + fallbackIndividual
 - [x] `SlackNotificationService.java` — 신규 생성
 - [x] `ParticipationBridge.java` — 신규 작성
-  - @Scheduled(fixedDelay=100ms), active:campaigns 순회, RPOP, batchSize=500 (yml 오버라이드 가능)
+  - @Scheduled(fixedDelay=100ms), active:campaigns 순회, RPOP
+  - **큐 크기 기반 동적 batchSize (2026-04-19)**: < 10,000 → 500 / < 100,000 → 1,000 / >= 100,000 → 2,000
   - MAX_RETRY 3회 + exponential backoff (200ms→400ms), DLQ+Slack
   - 파티션 키: String.valueOf(campaignId), LPUSH 재적재 금지
 - [x] `PollingController.java` — 신규 작성
@@ -295,6 +297,33 @@ Kafka Consumer (10 파티션)
 - 비용 절약: EC2/RDS 콘솔 stop, ElastiCache는 `terraform destroy -target=aws_elasticache_replication_group.redis`
 
 
+### 로컬 통합 테스트 결과 (2026-04-19, A+B파트 머지 후)
+
+#### 검증 항목 및 결과
+| 항목 | 결과 |
+|------|------|
+| SUCCESS 100건 (totalStock=100, 200건 요청) | ✅ |
+| sequence 중복 | 0건 ✅ |
+| RateLimit 429 (동일 userId 10초 내 재요청) | ✅ |
+| 재고 소진 400 | ✅ |
+| result 캐시 키 (`participation:result:{userId}:{campaignId}`) | ✅ (setter 버그 수정으로 정상화) |
+
+#### 수정된 버그
+- `ParticipationEvent.java` — `campaignId`, `userId` setter 누락 → Jackson 역직렬화 시 null, writeResultCache 키가 `participation:result:null:null`로 고정되는 버그
+
+#### Known Issue — 재고 소진 시 큐 잔류 (설계 허용 범위)
+- 흐름: `remaining == 0` → Lua `SREM active:campaigns` 즉시 실행 → 큐에 잔류 메시지 Bridge 드레인 불가
+- 안전망: Spring Batch `pendingRecoveryJob`이 5분 초과 PENDING 재처리 → 결국 SUCCESS
+- 해결 시점: 1순위 코드 개선 "캠페인 자동 종료 + SISMEMBER" 항목에서 처리 예정
+
+#### HikariCP prod 설정 수정 (2026-04-19)
+- 원인: `SPRING_PROFILES_ACTIVE: prod`만 활성화 → `maximum-pool-size` 미설정 → HikariCP 기본값 **10** 적용
+- 결과: AWS 1차 테스트 avg 3.94s / max 18.4s의 주요 원인 중 하나
+- 수정: `application-prod.yml`에 `maximum-pool-size: 20`, `minimum-idle: 10` 추가
+- p2/p3 프로필은 기존 설정(25/30) 유지 (파티션 증가 시 덮어씌움)
+
+---
+
 ### 1차 부하 테스트 결과 (2026-04-18, AWS 환경)
 
 #### 테스트 환경
@@ -337,6 +366,37 @@ Kafka Consumer (10 파티션)
 - DB 스케일: RDS Proxy + Aurora 전환 (MySQL 대비 write TPS 최대 5배, 코드 변경 없음)
 - Consumer 병렬화: Kafka 10파티션 + Consumer 10개 → SUCCESS UPDATE 선형 확장
 - Redis: ElastiCache Cluster 3샤드 → TPS 향상 아님, 가용성(SPOF 제거) 목적
+
+### 테스트 로드맵 (2026-04-19 기준)
+
+> 상세 설계: `TEST_ROADMAP.md` (루트) 참고
+> 목표: 단일 ElastiCache + 단일 브로커 한계 측정 → 클러스터링/3-broker 전환 시점 판단
+
+| Phase | 핵심 변경 | 상태 |
+|-------|-----------|------|
+| 0 | 기준선 (TPS 246/s, p95 6.34s) | ✅ 완료 |
+| 1 | 코드 개선 (A파트: Lua 통합/findById 제거, B파트: 동적 batchSize) + HikariCP prod 기본값 수정 | 🔄 진행 중 (코드 완료, AWS 재테스트 대기) |
+| 2 | gp3 Soak 테스트 (30분, 50,000 요청) | 대기 |
+| 3 | HikariCP 튜닝 (파티션 증가 시 pool-size 조정) | 대기 |
+| 4 | Kafka 3브로커 + 10파티션 | 대기 |
+| 5 | Redis Cluster + AOF + Intent Key | 대기 |
+| 6 | Spring Batch 안전망 | 대기 |
+| 7 | Aurora *(비용 판단)* | 선택 |
+| 8 | 백만 Spike 최종 검증 | 대기 |
+
+#### k6 테스트 인프라 (2026-04-19 업데이트)
+- `stress-test/k6-load-test.js` — BASE_URL env var 처리, thresholds 추가
+- `stress-test/run-test.sh` — 환경별(local/prod) 실행 스크립트 신규 추가
+  - `./run-test.sh local` / `./run-test.sh prod`
+  - 파라미터 오버라이드: `CAMPAIGN_ID=2 TOTAL_REQUESTS=30000 ./run-test.sh prod`
+
+#### 파티션별 yml (단일 브로커 한계 테스트용)
+- `application-p2.yml`, `application-p3.yml`, `application-p5.yml`, `application-p10.yml`
+- Consumer concurrency는 KafkaConfig가 Kafka 토픽 파티션 수 자동 감지 (yml 변경 불필요)
+- yml은 HikariCP + Kafka Producer 튜닝용 (v1 기준으로 작성됨 → v2 테스트 후 조정 필요)
+- 파티션 변경 방법: `kafka-topics.sh --alter --partitions N` → 앱 재시작
+
+---
 
 ### 성능 개선 계획 (1차 테스트 기반)
 

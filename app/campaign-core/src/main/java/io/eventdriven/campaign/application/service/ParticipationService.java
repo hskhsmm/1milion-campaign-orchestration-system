@@ -1,11 +1,11 @@
 package io.eventdriven.campaign.application.service;
 
-import io.eventdriven.campaign.api.exception.business.CampaignNotFoundException;
 import io.eventdriven.campaign.api.exception.business.DuplicateParticipationException;
 import io.eventdriven.campaign.api.exception.business.RateLimitExceededException;
 import io.eventdriven.campaign.api.exception.business.StockExhaustedException;
 import io.eventdriven.campaign.api.exception.infrastructure.ParticipationServiceUnavailableException;
 import io.eventdriven.campaign.domain.entity.Campaign;
+import io.eventdriven.campaign.domain.entity.CampaignStatus;
 import io.eventdriven.campaign.domain.entity.ParticipationHistory;
 import io.eventdriven.campaign.domain.repository.CampaignRepository;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
@@ -33,34 +33,37 @@ public class ParticipationService {
     private static final int MAX_RETRY = 3;
 
 
-    public void participate(Long campaignId, Long userId){
-        //  RateLimit: SET NX EX 10 — 10초 내 동일 요청 차단
-        if(!rateLimitService.isAllowed(campaignId, userId)) {
+    public void participate(Long campaignId, Long userId) {
+        if (!rateLimitService.isAllowed(campaignId, userId)) {
             throw new RateLimitExceededException(campaignId, userId);
         }
-        // 캠페인 조회 — sequence 계산에 totalStock 필요
-        Campaign campaign = campaignRepository.findById(campaignId)
-                .orElseThrow(() -> new CampaignNotFoundException(campaignId));
 
+        // SISMEMBER + DECR + GET total 원자 실행 — 비활성/소진 요청은 DB 미접촉
+        long[] stockResult = redisStockService.checkDecrTotal(campaignId);
+        long remaining = stockResult[0];
+        long total     = stockResult[1];
 
-        // Redis DECR — 원자적 재고 차감
-        Long remaining = redisStockService.decreaseStock(campaignId);
-        if (remaining < 0) {
-            redisStockService.incrementStock(campaignId); // 보상 INCR
+        if (remaining == RedisStockService.INACTIVE_CAMPAIGN) {
             throw new StockExhaustedException(campaignId);
         }
+        if (remaining < 0) {
+            throw new StockExhaustedException(campaignId); // INCR 없음
+        }
 
-        // sequence = totalStock - remaining (선착순 번호, DECR 시점에 원자적 확정)
-        long sequence = campaign.getTotalStock() - remaining;
+        if (remaining == 0) {
+            // 마지막 재고 → DB 종료 처리 (SREM은 Lua에서 이미 원자적으로 완료)
+            campaignRepository.closeAndResetStock(campaignId, CampaignStatus.CLOSED);
+            log.info("캠페인 자동 종료. campaignId={}", campaignId);
+        }
 
-        //  PENDING INSERT  (지수 백오프 재시도)
+        long sequence = total - remaining;
+        // JPA 프록시 — INSERT 시 FK(campaign_id)만 필요, DB 조회 없음
+        Campaign campaign = campaignRepository.getReferenceById(campaignId);
         Long historyId = insertPendingWithRetry(campaign, userId, sequence, campaignId);
 
-        //  Redis Queue LPUSH: Bridge가 RPOP 후 Kafka 발행
         String message = buildMessage(campaignId, userId, historyId);
         boolean pushed = redisQueueService.push(campaignId, message);
         if (!pushed) {
-            // Queue 100,000 초과: PENDING은 DB에 있으므로 Spring Batch 안전망이 처리
             log.warn("Redis Queue 적재 실패 (Spring Batch 안전망). campaignId={}, userId={}, historyId={}",
                     campaignId, userId, historyId);
         }
