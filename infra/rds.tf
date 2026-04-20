@@ -28,6 +28,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   multi_az               = false
 
   # 백업 및 유지보수
+  apply_immediately       = true
   backup_retention_period = 1
   copy_tags_to_snapshot   = true
   skip_final_snapshot     = true
