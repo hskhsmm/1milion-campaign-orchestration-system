@@ -147,8 +147,8 @@ Kafka Consumer (10 파티션)
 ### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당) ✅ 코드 완료
 
 > 설계 문서: `A파트_장애시나리오_설계_v4.pdf` (루트)
-> 브랜치: `feature/phase2-part-a` (A파트 브랜치에 B파트 merge 완료)
-> 현재 상태: A/B 전체 코드 완료 (2026-04-13), PR 올리기 전
+> PR #34 (feat/test-infra-setup), PR #35 (refactor/phase-part-A) → main 머지 완료 (2026-04-20)
+> 현재 브랜치: refactor/phase-part-A
 
 #### ✅ 완료
 - [x] `ParticipationStatus.java` — PENDING 추가
@@ -221,7 +221,12 @@ Kafka Consumer (10 파티션)
 
 #### #24 Grafana 대시보드 구성 + k6 부하 검증 ✅ 완료 (2026-04-17, hskhsmm)
 - [x] 알려진 이슈 수정: 스케줄러 스레드 풀 설정 (`application-local.yml`)
-- [x] `monitoring/grafana/dashboards/campaign.json` — 10개 패널 구성
+- [x] `monitoring/grafana/dashboards/campaign.json` — 13개 패널 구성
+  - 패널 1~10: API TPS/p95/p99/에러율, Bridge, Redis Queue, Consumer 지연, Kafka Lag, Redis 메모리 (기존)
+  - 패널 11: HikariCP 커넥션 풀 4종 (pending/active/idle/max), pending 라인 빨간색 강조
+  - 패널 12: HikariCP 활성율 (active/max), thresholds 0.7=yellow/0.95=red (color.mode: thresholds)
+  - 패널 13: CPU 사용률, thresholds 0.7=yellow/0.85=red (color.mode: thresholds)
+  - **수정**: 패널 9 Consumer Group명 `campaign-group` → `campaign-participation-group` (KafkaConfig.java 실제 값)
 - [x] `monitoring/grafana/provisioning/dashboards/dashboard.yml` — 자동 프로비저닝 설정
 - [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — `uid: prometheus` 고정 (dashboard.json UID 매칭)
 - [x] `docker-compose.yml` — JVM `MaxMetaspaceSize` 128m → 256m 상향 (OOM 방지)
@@ -235,6 +240,21 @@ Kafka Consumer (10 파티션)
   - Grafana datasource UID 불일치 → provisioning yml에 `uid: prometheus` 고정으로 해결
   - k6 `__ITER` per-VU 문제 → 전역 iterationInTest 사용으로 해결
   - JVM Metaspace OOM (좀비 현상) → MaxMetaspaceSize 256m으로 해결
+
+#### #24-추가 모니터링 코드 보완 ✅ 완료 (2026-04-20, leepg)
+- [x] `ParticipationService.java` — `[TIMING]` 로그 추가 (`DB_INSERT`, `REDIS_PUSH`, `TOTAL` ms 단위)
+  - DB_INSERT = HikariCP 대기 + SQL 실행 시간 합산 → 병목 진단 핵심 지표
+- [x] `build.gradle` — `micrometer-registry-cloudwatch2` 의존성 추가
+  - `application-prod.yml` cloudwatch.enabled: true인데 의존성 없으면 Spring Boot가 조용히 무시함
+  - EC2 IAM `CloudWatchAgentServerPolicy`로 IAM 권한은 기존에 충족
+- [x] `application-prod.yml` — `metrics` 액추에이터 엔드포인트 노출 추가 (CLI 디버깅용)
+- [x] `application-prod.yml` — `spring.task.scheduling.pool.size: 2` 추가
+  - 기본값 1 → Bridge(100ms)가 QueueMetricsScheduler(10s)를 기아시켜 `redis_queue_size` 지표 누락 방지
+- [x] `application-local.yml` — 죽은 설정 `spring.kafka.consumer.group-id: campaign-group` 제거
+  - KafkaConfig.java가 `campaign-participation-group` 하드코딩으로 덮어씌우므로 무의미
+- [x] RDS slow query 파라미터 그룹 설정 (AWS 콘솔)
+  - `mysql8.0` family 신규 파라미터 그룹 생성, `slow_query_log=1`, `long_query_time=0.5`, `log_output=TABLE`
+  - RDS 인스턴스 파라미터 그룹 교체 + 재부팅 후 적용 확인
 
 #### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔄 진행 중 (2026-04-18)
 
@@ -356,10 +376,11 @@ Kafka Consumer (10 파티션)
 - Redis Queue 피크: 15개 수준 → 거의 즉시 소비
 
 #### 병목 분석
-- **병목 위치**: API → DB PENDING INSERT (1,000 VU 동시 INSERT → UNIQUE 인덱스 B-tree 락 경합)
+- **병목 위치**: HikariCP 커넥션 풀 고갈 (pool-size=10, 기본값) — INSERT SQL 자체는 빠름
 - Bridge/Queue/Consumer는 병목 아님
 - Virtual Thread(Spring Boot 4) 덕분에 스레드 풀 고갈 없이 대기 처리 → max 18.4s에도 시스템 유지
 - HikariCP 기본 타임아웃 30s 이내 처리되어 타임아웃 에러 없음
+- 이후 `application-prod.yml`에 `maximum-pool-size: 20` 추가 (2026-04-19)
 
 #### 성능 개선 방향 (설계 철학: 공정성·정합성 우선)
 - PENDING INSERT는 API 경로 유지 (장애 복구 기준점 — 빼면 Spring Batch 복구 불가)
@@ -367,15 +388,62 @@ Kafka Consumer (10 파티션)
 - Consumer 병렬화: Kafka 10파티션 + Consumer 10개 → SUCCESS UPDATE 선형 확장
 - Redis: ElastiCache Cluster 3샤드 → TPS 향상 아님, 가용성(SPOF 제거) 목적
 
-### 테스트 로드맵 (2026-04-19 기준)
+### 2차 부하 테스트 결과 (2026-04-20, AWS 파티션 1 — HikariCP 20 적용)
+
+#### 테스트 환경 (1차와 동일)
+- 앱: batch-kafka-app t3.small 단일 인스턴스
+- DB: batch-kafka-db db.t3.micro (MySQL 8.0.44, gp3 IOPS 3,000)
+- Redis: ElastiCache Valkey 단일 노드
+- Kafka: kafka-1 단일 브로커, 파티션 1개
+- ALB: alb-batch-kafka-api
+
+#### k6 설정
+- TOTAL_REQUESTS: 15,000 (재고 15,000 = 전량 202 시나리오)
+- MAX_VUS: 1,000
+- DURATION: 60s
+
+#### 결과
+
+| 지표 | 1차 (pool=10) | 2차 (pool=20) | 변화 |
+|------|---------------|---------------|------|
+| TPS | 246/s | **275/s** | +12% |
+| avg latency | 3.94s | **3.54s** | -10% |
+| p95 | 6.34s | **5.71s** | -10% |
+| max | 18.4s | **15.4s** | -16% |
+| 성공 (202) | 9,990건 | **15,000건** | 100% |
+| 재고 초과 발급 | 0건 | **0건** | 정합성 유지 |
+
+#### Grafana 확인 결과
+- HikariCP pending 피크: **950** (pool=20임에도 여전히 포화)
+- HikariCP active/max: **100%** 지속 → 풀이 여전히 부족
+- RDS CPU: **7.27%** (DB 서버 측 여유 충분)
+- WriteIOPS: **189/s** (gp3 3,000 IOPS 대비 6% 수준)
+- DiskQueueDepth: **0.46** (임계치 아님)
+- Slow query log: **비어있음** (0.5s 기준, SQL 자체는 빠름)
+
+#### 확정 병목 분석 — HikariCP 커넥션 대기 (5가지 근거)
+
+| 근거 | 데이터 | 결론 |
+|------|--------|------|
+| TIMING 로그 (tail, 테스트 말미 저VU) | DB_INSERT 12~23ms | SQL 자체는 빠름 |
+| TIMING 로그 (head, 피크 고VU) | DB_INSERT 52~522ms | HikariCP 대기 포함 |
+| Grafana HikariCP pending | 950 지속 | 커넥션 부족 확실 |
+| CloudWatch RDS CPU | 7.27% | DB 서버 여유 충분 |
+| Slow query log | 비어있음 | SQL 느린 것 아님 |
+
+**결론**: 병목은 DB 서버나 SQL이 아니라 순수하게 HikariCP 커넥션 대기.
+pool=20에도 1,000 VU 동시 요청 → INSERT 완료까지 점유 → 대부분 대기.
+해결 방향: pool-size 증가 or DB 커넥션 사용 횟수 자체 감소 (totalStock Redis 캐싱으로 `findById` 제거).
+
+### 테스트 로드맵 (2026-04-20 기준)
 
 > 상세 설계: `TEST_ROADMAP.md` (루트) 참고
 > 목표: 단일 ElastiCache + 단일 브로커 한계 측정 → 클러스터링/3-broker 전환 시점 판단
 
 | Phase | 핵심 변경 | 상태 |
 |-------|-----------|------|
-| 0 | 기준선 (TPS 246/s, p95 6.34s) | ✅ 완료 |
-| 1 | 코드 개선 (A파트: Lua 통합/findById 제거, B파트: 동적 batchSize) + HikariCP prod 기본값 수정 | 🔄 진행 중 (코드 완료, AWS 재테스트 대기) |
+| 0 | 기준선 (TPS 246/s, p95 6.34s, pool=10) | ✅ 완료 |
+| 1 | HikariCP prod 기본값 수정 (pool=20) + Grafana 패널 보강 + [TIMING] 로그 | ✅ 완료 (TPS 275/s, p95 5.71s) |
 | 2 | gp3 Soak 테스트 (30분, 50,000 요청) | 대기 |
 | 3 | HikariCP 튜닝 (파티션 증가 시 pool-size 조정) | 대기 |
 | 4 | Kafka 3브로커 + 10파티션 | 대기 |
