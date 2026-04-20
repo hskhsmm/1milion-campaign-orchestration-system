@@ -1,6 +1,6 @@
 package io.eventdriven.campaign.batch;
 
-import io.eventdriven.campaign.application.service.RedisQueueService;
+import io.eventdriven.campaign.config.KafkaConfig;
 import io.eventdriven.campaign.domain.entity.ParticipationHistory;
 import io.eventdriven.campaign.domain.entity.ParticipationStatus;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
@@ -15,6 +15,7 @@ import org.springframework.batch.core.step.tasklet.Tasklet;
 import org.springframework.batch.infrastructure.repeat.RepeatStatus;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
+import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -32,7 +33,7 @@ public class PendingRecoveryJobConfig {
     private final JobRepository jobRepository;
     private final PlatformTransactionManager transactionManager;
     private final ParticipationHistoryRepository participationHistoryRepository;
-    private final RedisQueueService redisQueueService;
+    private final KafkaTemplate<String, String> kafkaTemplate;
     private final JsonMapper jsonMapper;
 
     @Bean
@@ -64,13 +65,22 @@ public class PendingRecoveryJobConfig {
             List<Long> failIds = new ArrayList<>();
             for (ParticipationHistory history : pendingList) {
                 String message = buildMessage(history);
-                boolean pushed = redisQueueService.push(history.getCampaign().getId(), message);
-                if (!pushed) {
+                try {
+                    // Redis Queue 대신 Kafka 직접 발행
+                    // 이유: 재고 소진 시 active:campaigns에서 SREM → Bridge가 큐를 드레인하지 않음
+                    //       Batch 복구 대상은 소량이므로 Bridge 우회해도 부하 없음
+                    kafkaTemplate.send(KafkaConfig.TOPIC_NAME, String.valueOf(history.getCampaign().getId()), message)
+                            .whenComplete((result, ex) -> {
+                                if (ex != null) {
+                                    log.error("PENDING 재발행 실패 → FAIL 처리 예정. historyId={}", history.getId(), ex);
+                                } else {
+                                    log.info("PENDING 재발행 성공. historyId={}", history.getId());
+                                }
+                            });
+                } catch (Exception e) {
                     failIds.add(history.getId());
                     log.warn("PENDING 재발행 실패 → FAIL 처리. historyId={}, campaignId={}",
-                            history.getId(), history.getCampaign().getId());
-                } else {
-                    log.info("PENDING 재발행 성공. historyId={}", history.getId());
+                            history.getId(), history.getCampaign().getId(), e);
                 }
             }
 
