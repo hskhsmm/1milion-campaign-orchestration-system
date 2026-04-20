@@ -37,7 +37,7 @@ export const options = {
   },
 };
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
 const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1; // 환경변수로 캠페인 ID 전달 가능
 
 export default function () {

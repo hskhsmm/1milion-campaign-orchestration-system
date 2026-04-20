@@ -12,7 +12,7 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
  * 4. DB 확인 → 정확히 50개 성공했는지 검증
  */
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
 
 export const options = {
   stages: [
@@ -106,9 +106,9 @@ export function teardown(data) {
   console.log('다음 단계:');
   console.log('  1. Kafka Consumer 처리 대기 (5~10초)');
   console.log('  2. 배치 집계 실행:');
-  console.log('     POST http://localhost:8080/api/admin/batch/aggregate?date=2025-12-28');
+  console.log(`     POST ${BASE_URL}/api/admin/batch/aggregate?date=2025-12-28`);
   console.log('  3. 통계 확인:');
-  console.log('     GET http://localhost:8080/api/admin/stats/daily?date=2025-12-28');
+  console.log(`     GET ${BASE_URL}/api/admin/stats/daily?date=2025-12-28`);
   console.log('  4. DB 직접 확인:');
   console.log('     SELECT status, COUNT(*) FROM participation_history GROUP BY status;');
   console.log('========================================');
