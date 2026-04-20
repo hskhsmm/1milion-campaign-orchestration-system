@@ -57,4 +57,4 @@ batch:
   aggregation:
     max-past-years: 1  # 집계 가능한 최대 과거 기간 (년)
   metadata:
-    retention-days: 90  # 배치 메타데이터 보관 기간 (일)
+    retention-days: 90  # 배치 메타데이터 보관 기간 (일)..
