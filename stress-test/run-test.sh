@@ -15,7 +15,7 @@ ENV=${1:-"local"}
 
 # 환경별 BASE_URL
 if [ "$ENV" = "prod" ]; then
-  BASE_URL="http://alb-batch-kafka-api-xxx.ap-northeast-2.elb.amazonaws.com"
+  BASE_URL="http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com"
 else
   BASE_URL="http://localhost:8080"
 fi
