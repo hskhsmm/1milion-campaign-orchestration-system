@@ -58,7 +58,7 @@ spring:
 
   batch:
     job:
-      enabled: false             #  Batch 자동 실행 차단
+      enabled: false             #  Batch 자동 실행 차단.
 
 # Kafka 설정 (프로덕션 - 파티션 1개 기준 안정적 설정)
 # ⚠️ 프로덕션에서는 실험용 프로필(p2, p3, p5, p10)을 절대 사용하지 마세요!
