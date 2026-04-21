@@ -532,14 +532,15 @@ Consumer (10파티션) → DB INSERT SUCCESS 직접
 | 중복 방지 | DuplicateKeyException + sequence 비교 | UNIQUE INSERT |
 | Redis 장애 유실 | Spring Batch 복구 | Bridge 100ms 이내 미처리분 (수십 건) |
 
-### 수정 파일
+### 수정 파일 (✅ 완료 — 2026-04-22, feature/redis-first-api, develop PR 예정)
 
 | 파일 | 변경 내용 |
 |------|-----------|
-| `ParticipationService.java` | `insertPendingWithRetry` 제거, 메시지에 sequence 포함 |
-| `ParticipationEvent.java` | `historyId` → `sequence` |
-| `ParticipationEventConsumer.java` | UPDATE → INSERT SUCCESS 직접 |
-| `check-decr-total.lua` | LPUSH 통합 검토 |
+| `ParticipationEvent.java` | `historyId` → `sequence` (Redis DECR 시점 선착순 번호) |
+| `ParticipationHistoryRepository.java` | `bulkUpdateSuccess`, `bulkUpdateFail` 제거 → `insertSuccess` (INSERT IGNORE) 추가 |
+| `ParticipationService.java` | `insertPendingWithRetry` 제거, DECR → sequence 확정 → LPUSH → 202 반환 |
+| `ParticipationEventConsumer.java` | `bulkUpdateSuccess` → `insertSuccess` 직접 호출, fallbackIndividual 제거 |
+| `PendingRecoveryJobConfig.java` | `bulkUpdateFail` 제거, `historyId` → `sequence` (v3에서 PENDING 없음 → 배치 no-op) |
 
 ### 100만 트래픽 로드맵
 
@@ -555,7 +556,7 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 
 ### 이슈 및 브랜치
 - 이슈 초안: `issue_draft.md` (루트)
-- 브랜치: `feature/redis-first-api`
+- 브랜치: `feature/redis-first-api` → develop PR 진행 중 (2026-04-22)
 
 ### 테스트 로드맵 (2026-04-21 기준)
 
@@ -566,7 +567,7 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 0 | 기준선 (TPS 246/s, p95 6.34s, pool=10) | ✅ 완료 |
 | 1 | HikariCP prod 기본값 수정 (pool=20) + [TIMING] 로그 | ✅ 완료 (TPS 275/s, p95 5.71s) |
 | 1-b | pool=40 테스트 | ✅ 완료 (TPS 323/s, pending ~900 — pool 효과 없음 확인) |
-| 2 | **API DB 제거 (Redis-first 전환)** | 🔄 진행 예정 (브랜치: feature/redis-first-api) |
+| 2 | **API DB 제거 (Redis-first 전환)** | ✅ 코드 완료 — develop PR 후 AWS 배포 + 4차 테스트 예정 |
 | 3 | Kafka 10파티션 + 3브로커 | 대기 (코드 변경 없음) |
 | 4 | Redis Cluster 3샤드 | 대기 (elasticache.tf 수정) |
 | 5 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
