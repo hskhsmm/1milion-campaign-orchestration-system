@@ -75,6 +75,8 @@ kafka:
     linger-ms: 20               # 20ms
     compression-type: none
     max-block-ms: 60000         # 60초
+    acks: all                   # 3브로커 구성 시 메시지 유실 방지 (단일 브로커에서도 무해)
+    enable-idempotence: true    # 프로듀서 중복 전송 방지
 
   consumer:
     max-poll-records: 500       # 한 번에 500개씩 처리
