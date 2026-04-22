@@ -15,7 +15,7 @@ const MAX_VUS = parseInt(__ENV.MAX_VUS) || 5000;     // 최대 가상 사용자 
 const TOTAL_REQUESTS = parseInt(__ENV.TOTAL_REQUESTS) || 30000; // 총 요청 수
 const PARTITIONS = parseInt(__ENV.PARTITIONS) || 3;  // Kafka 파티션 수
 
-console.log(`🚀 Kafka 부하 테스트 설정: 정확히 ${TOTAL_REQUESTS}개 요청, 목표 ${RATE}/s, ${DURATION}s, ${PARTITIONS} 파티션`);
+console.log(`[k6] total=${TOTAL_REQUESTS}, rate=${RATE}/s, duration=${DURATION}s, partitions=${PARTITIONS}`);
 
 // 사전 생성된 userId 배열 (정확히 TOTAL_REQUESTS개)
 const userIds = new SharedArray('userIds', function () {
