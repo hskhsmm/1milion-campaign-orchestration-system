@@ -27,7 +27,7 @@ MAX_VUS=${MAX_VUS:-1000}
 DURATION=${DURATION:-60}
 
 echo "=============================="
-echo " k6 부하 테스트 시작"
+echo " k6 load test start"
 echo " ENV           : $ENV"
 echo " BASE_URL      : $BASE_URL"
 echo " CAMPAIGN_ID   : $CAMPAIGN_ID"

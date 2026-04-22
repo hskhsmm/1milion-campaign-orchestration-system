@@ -616,6 +616,16 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
   - terraform-mcp에서: `CAMPAIGN_ID=<id> TOTAL_REQUESTS=15000 MAX_VUS=1000 DURATION=60 bash stress-test/run-test.sh prod`
   - 파라미터 오버라이드: `CAMPAIGN_ID=2 TOTAL_REQUESTS=30000 ./run-test.sh prod`
 
+#### 테스트 전 캠페인 생성 (매번 필요)
+- 캠페인 생성 엔드포인트: **`POST /api/admin/campaigns`** (`/api/campaigns` 아님)
+- terraform-mcp에서 실행:
+  ```bash
+  curl -X POST $BASE_URL/api/admin/campaigns \
+    -H "Content-Type: application/json" \
+    -d '{"name":"load-test","totalStock":10000,"startDate":"2026-04-22","endDate":"2026-04-30"}'
+  ```
+- BASE_URL은 `~/.bashrc`에 영구 저장됨 (`http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com`)
+
 #### 파티션별 yml (단일 브로커 한계 테스트용)
 - `application-p2.yml`, `application-p3.yml`, `application-p5.yml`, `application-p10.yml`
 - Consumer concurrency는 KafkaConfig가 Kafka 토픽 파티션 수 자동 감지 (yml 변경 불필요)
