@@ -20,7 +20,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
-import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -62,7 +61,7 @@ public class PendingRecoveryJobConfig {
                 return RepeatStatus.FINISHED;
             }
 
-            List<Long> failIds = new ArrayList<>();
+            int successCount = 0;
             for (ParticipationHistory history : pendingList) {
                 String message = buildMessage(history);
                 try {
@@ -72,24 +71,19 @@ public class PendingRecoveryJobConfig {
                     kafkaTemplate.send(KafkaConfig.TOPIC_NAME, String.valueOf(history.getCampaign().getId()), message)
                             .whenComplete((result, ex) -> {
                                 if (ex != null) {
-                                    log.error("PENDING 재발행 실패 → FAIL 처리 예정. historyId={}", history.getId(), ex);
+                                    log.error("PENDING 재발행 실패. historyId={}", history.getId(), ex);
                                 } else {
                                     log.info("PENDING 재발행 성공. historyId={}", history.getId());
                                 }
                             });
+                    successCount++;
                 } catch (Exception e) {
-                    failIds.add(history.getId());
-                    log.warn("PENDING 재발행 실패 → FAIL 처리. historyId={}, campaignId={}",
+                    log.warn("PENDING 재발행 실패. historyId={}, campaignId={}",
                             history.getId(), history.getCampaign().getId(), e);
                 }
             }
 
-            if (!failIds.isEmpty()) {
-                participationHistoryRepository.bulkUpdateFail(failIds);
-            }
-
-            log.info("PENDING 재처리 완료. 전체={}, 재발행={}, FAIL={}",
-                    pendingList.size(), pendingList.size() - failIds.size(), failIds.size());
+            log.info("PENDING 재처리 완료. 전체={}, 재발행={}", pendingList.size(), successCount);
 
             return RepeatStatus.FINISHED;
         };
@@ -100,7 +94,7 @@ public class PendingRecoveryJobConfig {
             Map<String, Object> msg = new HashMap<>();
             msg.put("campaignId", history.getCampaign().getId());
             msg.put("userId", history.getUserId());
-            msg.put("historyId", history.getId());
+            msg.put("sequence", history.getSequence());
             return jsonMapper.writeValueAsString(msg);
         } catch (Exception e) {
             throw new RuntimeException("메시지 직렬화 실패. historyId=" + history.getId(), e);

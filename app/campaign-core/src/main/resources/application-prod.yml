@@ -23,8 +23,8 @@ management:
 spring:
   datasource:
     hikari:
-      maximum-pool-size: 40     # pool=20 → 40 (HikariCP pending 950 개선 테스트)
-      minimum-idle: 20
+      maximum-pool-size: 20     # v3 Redis-first: API DB 제거 → Consumer INSERT 전용, 20으로 충분
+      minimum-idle: 10
       connection-timeout: 20000 # 커넥션 획득 타임아웃 20초
       idle-timeout: 300000      # 유휴 커넥션 유지 시간 5분
       max-lifetime: 1800000     # 커넥션 최대 수명 30분
@@ -75,6 +75,8 @@ kafka:
     linger-ms: 20               # 20ms
     compression-type: none
     max-block-ms: 60000         # 60초
+    acks: all                   # 3브로커 구성 시 메시지 유실 방지 (단일 브로커에서도 무해)
+    enable-idempotence: true    # 프로듀서 중복 전송 방지
 
   consumer:
     max-poll-records: 500       # 한 번에 500개씩 처리

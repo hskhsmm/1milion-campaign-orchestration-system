@@ -1,10 +1,10 @@
 {
   "uid": "campaign-v2-monitoring",
   "title": "Campaign Orchestration System",
-  "description": "v2 파이프라인 모니터링 — API / Bridge / Queue / Consumer / Kafka / Redis",
+  "description": "v3 파이프라인 모니터링 — API / Bridge / Queue / Consumer / Kafka / Redis",
   "tags": [
     "campaign",
-    "v2"
+    "v3"
   ],
   "timezone": "Asia/Seoul",
   "refresh": "5s",
@@ -330,7 +330,7 @@
     },
     {
       "id": 8,
-      "title": "Consumer PENDING→SUCCESS 평균 지연",
+      "title": "Consumer INSERT 평균 지연 (API → DB)",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -345,7 +345,7 @@
             "uid": "prometheus"
           },
           "expr": "rate(consumer_pending_to_success_latency_seconds_sum[1m]) / rate(consumer_pending_to_success_latency_seconds_count[1m])",
-          "legendFormat": "PENDING→SUCCESS 지연"
+          "legendFormat": "INSERT 지연"
         }
       ],
       "fieldConfig": {
