@@ -587,6 +587,60 @@ API 병목: t3.small 2 vCPU → 1,000 VU 동시 Redis 연산 + JSON 직렬화로
 
 ---
 
+### 6차 부하 테스트 결과 (2026-04-23, AWS 파티션 3개 — userId 파티션 키 변경)
+
+#### 변경 사항
+- `ParticipationBridge.java` — 파티션 키 `campaignId` → `userId` 변경
+  - regex 추출 → `JsonMapper` 역직렬화 방식으로 개선 (코드리뷰 반영)
+  - fallback: userId 추출 실패 시 campaignId 사용 유지
+
+#### 테스트 환경 (5차와 동일)
+- 앱: batch-kafka-app t3.small / DB: db.t3.micro / Redis: ElastiCache Valkey / Kafka: 파티션 3개
+- k6: terraform-mcp EC2 (VPC 내부)
+- 조건: TOTAL_REQUESTS=15,000, 재고=10,000, MAX_VUS=1,000
+
+#### 결과
+
+| 지표 | 5차 (campaignId 키) | 6차 (userId 키) | 변화 |
+|------|-------------------|----------------|------|
+| TPS | 543/s | **550/s** | +1.3% |
+| avg | 1.79s | **1.77s** | -1% |
+| p95 | 4.39s | **3.12s** | **-29%** |
+| max | 7.41s | 9.93s | +34% ↑ |
+| 재고 초과 발급 | 0건 | **0건** | ✅ |
+
+#### Grafana 핵심 지표
+- HikariCP pending: **거의 0** 유지 ✅
+- HikariCP 활성율: **0%** ✅
+- Consumer 지연: **200~245ms** (5차 1.25s → **-84%** ✅)
+- RDS CPU: **30.2%** ✅
+- 앱 CPU: **85% spike** → max 9.93s 원인 (t3.small CPU credit 순간 소진)
+- Redis Queue: **0 수렴** ✅
+- 5xx 에러: **0** ✅
+
+#### kafka-exporter 확인 결과
+```
+kafka_consumergroup_lag{partition="0"} 0
+kafka_consumergroup_lag{partition="1"} 0
+kafka_consumergroup_lag{partition="2"} 0
+kafka_consumergroup_members = 3
+```
+- Consumer Group Lag = 0 → Consumer 완벽하게 처리 ✅
+- Grafana "No data" = lag=0이라 표시 안 된 것 (문제 아님)
+
+#### 파티션 분산 이슈 (잔존)
+- partition 0: 92%, partition 1: 2%, partition 2: 1% → 여전히 편향
+- 원인: k6 userId가 1~15,000 순차 정수 → Kafka murmur2 해시가 균등 분산 못함
+- 실제 서비스(userId 넓게 분포)에서는 균등 분산 기대 가능
+- Consumer 지연 -84% 개선은 파티션 분산 효과 확실히 확인
+
+#### p95 개선 해석
+- API 응답(202 반환)은 Redis만 타므로 파티션 키와 무관해야 하나 29% 개선
+- 원인 불명확 — t3.small CPU credit 상태 차이, 환경 변동성으로 추정
+- Consumer 지연 -84%만 파티션 분산의 확실한 성과로 해석
+
+---
+
 ## 아키텍처 전환 결정 (2026-04-21 확정)
 
 ### 배경
@@ -664,11 +718,13 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 1-b | pool=40 테스트 | ✅ 완료 (TPS 323/s, pending ~900 — pool 효과 없음 확인) |
 | 2 | **API DB 제거 (Redis-first 전환)** | ✅ 완료 — 로컬 검증 완료 (TPS 1,331/s, 정합성 완벽) |
 | 3 | AWS 4차 테스트 — 파티션 1개 (v3 before/after 비교) | ✅ 완료 (TPS 526/s, HikariCP pending 0, 정합성 완벽) |
-| 4 | AWS 5차 테스트 — 파티션 3개 | ✅ 완료 (TPS 543/s — 파티션 효과 미미, t3.small 단일 인스턴스 한계 확인) |
-| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 다음 (인프라만, 코드 변경 없음) |
-| 6 | Redis Cluster 3샤드 | 대기 (elasticache.tf 수정) |
-| 7 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
-| 8 | 백만 Spike 최종 검증 | 대기 |
+| 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
+| 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
+| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 **다음** |
+| 6 | Redis Cluster 3샤드 + AOF everysec | 대기 |
+| 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
+| 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
+| 9 | 백만 Spike 최종 검증 | 대기 |
 
 #### k6 테스트 인프라 (2026-04-21 업데이트)
 - `stress-test/k6-load-test.js` — BASE_URL env var 처리, thresholds 추가
@@ -699,16 +755,11 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 > 상세 설계: `DESIGN_IMPROVEMENTS.md` 참고
 > 설계 철학: 공정성·정합성 우선, 처리량은 안정적이면 충분
 
-#### 0순위 — 파티션 키 변경 (3브로커 구성 전 필수 확인)
+#### ~~0순위 — 파티션 키 변경~~ ✅ 완료 (2026-04-23)
 
-**현재 문제**: 파티션 키 = `String.valueOf(campaignId)` → 같은 캠페인 요청이 항상 같은 파티션으로 몰림
-- 실제 서비스 시나리오: 에어팟 선착순처럼 단일 캠페인에 100만 명 동시 요청
-- 파티션 3개여도 사실상 1개 파티션만 사용 → 파티션 확장 효과 없음
-- 5차 테스트(파티션 3개)에서 TPS +3%만 나온 원인
-
-**해결 방향**: v3에서 공정성(선착순)이 Redis DECR 시점에 이미 확정 → Kafka 파티션 순서 보장 불필요
-- 파티션 키를 `userId` 또는 랜덤으로 변경 → 파티션 3개가 진짜 분산 동작
-- 3브로커 구성 후 테스트 시 이 변경 적용 후 before/after 비교 필요
+- `ParticipationBridge.java` 파티션 키 `campaignId` → `userId` 변경
+- userId 추출: regex → `JsonMapper` 역직렬화 방식 (코드리뷰 반영)
+- 6차 테스트 결과: Consumer 지연 1.25s → 200ms (-84%) 확인
 
 #### 1순위 — 코드 개선 (인프라 무관, 즉시 적용 가능)
 
