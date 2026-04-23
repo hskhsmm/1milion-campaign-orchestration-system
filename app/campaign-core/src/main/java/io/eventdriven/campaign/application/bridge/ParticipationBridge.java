@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.application.bridge;
 
+import io.eventdriven.campaign.application.event.ParticipationEvent;
 import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.config.KafkaConfig;
 import io.micrometer.core.instrument.Counter;
@@ -10,12 +11,11 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
+import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 
 /**
  * Redis Queue → Kafka 유량 조절 브릿지 (v2)
@@ -24,7 +24,7 @@ import java.util.regex.Pattern;
  * - active:campaigns Set 순회 → 캠페인별 큐 드레인
  * - MAX_RETRY 3회 + exponential backoff 후 실패 시 DLQ + Slack 알림
  * - RPOP 실패 시 LPUSH 재적재 금지 (Queue 순서 뒤섞임 방지)
- * - 파티션 키: campaignId (동일 캠페인 메시지는 같은 파티션으로 라우팅)
+ * - 파티션 키: userId (파티션 균등 분산, v3에서 선착순은 Redis DECR 시점에 이미 확정)
  *
  * 주의: @EnableScheduling이 CampaignCoreApplication에 있어야 동작.
  */
@@ -41,12 +41,12 @@ public class ParticipationBridge {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final SlackNotificationService slackNotificationService;
     private final MeterRegistry meterRegistry;  // Spring Bean → 생성자 주입
+    private final JsonMapper jsonMapper;
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
     private static final String DLQ_TOPIC = "campaign-participation-topic.dlq";
     private static final int MAX_RETRY = 3;
-    private static final Pattern USER_ID_PATTERN = Pattern.compile("\"userId\"\\s*:\\s*(\\d+)");
 
     // campaignId별 Counter 캐시
     // campaignId는 런타임에 결정되므로 생성자에서 미리 만들 수 없음 , 첫 발행 시 lazily 생성 후 재사용
@@ -58,11 +58,13 @@ public class ParticipationBridge {
     public ParticipationBridge(RedisTemplate<String, String> redisTemplate,
                                KafkaTemplate<String, String> kafkaTemplate,
                                SlackNotificationService slackNotificationService,
-                               MeterRegistry meterRegistry) {
+                               MeterRegistry meterRegistry,
+                               JsonMapper jsonMapper) {
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.slackNotificationService = slackNotificationService;
         this.meterRegistry = meterRegistry;  // 1. Bean 주입 완료
+        this.jsonMapper = jsonMapper;
         this.drainTimer = Timer.builder("bridge.drain.duration")
                 .description("drainQueues() 실행 소요시간")
                 .register(meterRegistry);    // 2. 주입된 MeterRegistry로 Timer 등록
@@ -159,13 +161,13 @@ public class ParticipationBridge {
     }
 
     private String extractUserIdKey(String message, Long campaignId) {
-        Matcher matcher = USER_ID_PATTERN.matcher(message);
-        if (matcher.find()) {
-            return matcher.group(1);
+        try {
+            ParticipationEvent event = jsonMapper.readValue(message, ParticipationEvent.class);
+            return String.valueOf(event.getUserId());
+        } catch (Exception e) {
+            log.warn("Kafka key userId 추출 실패. campaignId={} fallback 적용", campaignId);
+            return String.valueOf(campaignId);
         }
-
-        log.warn("Kafka key userId 추출 실패. campaignId={} fallback 적용", campaignId);
-        return String.valueOf(campaignId);
     }
 
     /**
