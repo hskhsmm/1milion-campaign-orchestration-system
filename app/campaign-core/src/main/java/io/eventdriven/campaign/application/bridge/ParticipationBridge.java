@@ -14,6 +14,8 @@ import org.springframework.stereotype.Component;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 
 /**
  * Redis Queue → Kafka 유량 조절 브릿지 (v2)
@@ -44,6 +46,7 @@ public class ParticipationBridge {
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
     private static final String DLQ_TOPIC = "campaign-participation-topic.dlq";
     private static final int MAX_RETRY = 3;
+    private static final Pattern USER_ID_PATTERN = Pattern.compile("\"userId\"\\s*:\\s*(\\d+)");
 
     // campaignId별 Counter 캐시
     // campaignId는 런타임에 결정되므로 생성자에서 미리 만들 수 없음 , 첫 발행 시 lazily 생성 후 재사용
@@ -121,9 +124,10 @@ public class ParticipationBridge {
      * 실패 메시지를 Redis Queue에 재적재하지 않음 (순서 보장 우선).
      */
     private void publishWithRetry(Long campaignId, String message) {
+        String partitionKey = extractUserIdKey(message, campaignId);
         for (int attempt = 1; attempt <= MAX_RETRY; attempt++) {
             try {
-                kafkaTemplate.send(KafkaConfig.TOPIC_NAME, String.valueOf(campaignId), message);
+                kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message);
                 // Kafka 발행 성공 카운터 — campaignId 태그로 캠페인별 구분
                 publishedCounters.computeIfAbsent(campaignId, id ->
                         Counter.builder("bridge.messages.published")
@@ -152,6 +156,16 @@ public class ParticipationBridge {
         // MAX_RETRY 모두 소진
         log.error("Bridge MAX_RETRY({}) 초과. DLQ 전송. campaignId={}", MAX_RETRY, campaignId);
         sendToDlqWithSlack(campaignId, message, "MAX_RETRY_EXCEEDED");
+    }
+
+    private String extractUserIdKey(String message, Long campaignId) {
+        Matcher matcher = USER_ID_PATTERN.matcher(message);
+        if (matcher.find()) {
+            return matcher.group(1);
+        }
+
+        log.warn("Kafka key userId 추출 실패. campaignId={} fallback 적용", campaignId);
+        return String.valueOf(campaignId);
     }
 
     /**
