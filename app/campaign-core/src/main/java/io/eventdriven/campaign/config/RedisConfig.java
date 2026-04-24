@@ -24,14 +24,6 @@ public class RedisConfig {
         return script;
     }
 
-    @Bean
-    public DefaultRedisScript<Long> checkAndDecrScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setLocation(new ClassPathResource("scripts/check-and-decr.lua"));
-        script.setResultType(Long.class);
-        return script;
-    }
-
     @SuppressWarnings("rawtypes")
     @Bean
     public DefaultRedisScript<List> checkDecrTotalScript() {
