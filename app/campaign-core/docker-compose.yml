@@ -62,21 +62,80 @@ services:
       timeout: 5s
       retries: 5
 
-  redis:
-    image: redis:7-alpine
-    container_name: redis
+  redis-1:
+    image: redis:7.2-alpine
+    container_name: redis-1
+    command: >
+      redis-server --port 7001 --cluster-enabled yes
+      --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000
+      --cluster-announce-hostname redis-1 --cluster-announce-port 7001
+      --appendonly yes
     ports:
-      - "${REDIS_PORT:-6379}:6379"
-    command: redis-server --appendonly yes
+      - "7001:7001"
     volumes:
-      - redis_data:/data
+      - redis_1_data:/data
     networks:
       - campaign-net
     healthcheck:
-      test: ["CMD", "redis-cli", "ping"]
+      test: ["CMD", "redis-cli", "-p", "7001", "ping"]
       interval: 10s
       timeout: 5s
       retries: 5
+
+  redis-2:
+    image: redis:7.2-alpine
+    container_name: redis-2
+    command: >
+      redis-server --port 7002 --cluster-enabled yes
+      --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000
+      --cluster-announce-hostname redis-2 --cluster-announce-port 7002
+      --appendonly yes
+    ports:
+      - "7002:7002"
+    volumes:
+      - redis_2_data:/data
+    networks:
+      - campaign-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7002", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-3:
+    image: redis:7.2-alpine
+    container_name: redis-3
+    command: >
+      redis-server --port 7003 --cluster-enabled yes
+      --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000
+      --cluster-announce-hostname redis-3 --cluster-announce-port 7003
+      --appendonly yes
+    ports:
+      - "7003:7003"
+    volumes:
+      - redis_3_data:/data
+    networks:
+      - campaign-net
+    healthcheck:
+      test: ["CMD", "redis-cli", "-p", "7003", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  redis-cluster-init:
+    image: redis:7.2-alpine
+    container_name: redis-cluster-init
+    command: >
+      sh -c "redis-cli --cluster create
+      redis-1:7001 redis-2:7002 redis-3:7003
+      --cluster-replicas 0 --cluster-yes"
+    networks:
+      - campaign-net
+    depends_on:
+      redis-1: {condition: service_healthy}
+      redis-2: {condition: service_healthy}
+      redis-3: {condition: service_healthy}
+    restart: on-failure
 
   kafka-ui:
     image: provectuslabs/kafka-ui:latest
@@ -102,8 +161,7 @@ services:
       SPRING_DATASOURCE_USERNAME: ${MYSQL_USER}
       SPRING_DATASOURCE_PASSWORD: ${MYSQL_PASSWORD}
       SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
-      SPRING_DATA_REDIS_HOST: redis
-      SPRING_DATA_REDIS_PORT: 6379
+      SPRING_DATA_REDIS_CLUSTER_NODES: redis-1:7001,redis-2:7002,redis-3:7003
       TZ: Asia/Seoul
       JAVA_TOOL_OPTIONS: -Xms256m -Xmx512m -XX:MaxMetaspaceSize=256m -XX:MaxDirectMemorySize=128m -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8
     ports:
@@ -115,8 +173,8 @@ services:
         condition: service_healthy
       kafka:
         condition: service_healthy
-      redis:
-        condition: service_healthy
+      redis-cluster-init:
+        condition: service_completed_successfully
 
   # ===== 모니터링 스택 =====
 
@@ -139,12 +197,13 @@ services:
     ports:
       - "${REDIS_EXPORTER_PORT:-9121}:9121"
     environment:
-      REDIS_ADDR: redis:6379
+      REDIS_ADDR: redis-1:7001
+      REDIS_EXPORTER_IS_CLUSTER: "true"
     networks:
       - campaign-net
     depends_on:
-      redis:
-        condition: service_healthy
+      redis-cluster-init:
+        condition: service_completed_successfully
 
   prometheus:
     image: prom/prometheus:latest
@@ -191,6 +250,8 @@ networks:
 volumes:
   mysql_data:
   kafka_data:
-  redis_data:
+  redis_1_data:
+  redis_2_data:
+  redis_3_data:
   prometheus_data:
   grafana_data:

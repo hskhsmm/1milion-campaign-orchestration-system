@@ -50,6 +50,12 @@ spring:
       pool:
         size: 2
 
+  data:
+    redis:
+      cluster:
+        nodes: localhost:7001,localhost:7002,localhost:7003
+        max-redirects: 3
+
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
