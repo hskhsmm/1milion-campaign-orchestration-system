@@ -38,11 +38,12 @@ spring:
         format_sql: false
         default_batch_fetch_size: 100  # N+1 문제 방지
 
-  # Redis 설정 (프로덕션 - AWS ElastiCache)
+  # Redis 설정 (프로덕션 - AWS ElastiCache CME 3샤드)
   data:
     redis:
-      host: ${SPRING_DATA_REDIS_HOST}
-      port: ${SPRING_DATA_REDIS_PORT:6379}
+      cluster:
+        nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES}
+        max-redirects: 3
 
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
