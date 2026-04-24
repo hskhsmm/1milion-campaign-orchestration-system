@@ -118,6 +118,22 @@ resource "aws_security_group" "kafka" {
     security_groups = [aws_security_group.app.id]
   }
 
+  ingress {
+    from_port       = 9092
+    to_port         = 9092
+    protocol        = "tcp"
+    security_groups = [aws_security_group.kafka.id]
+    description     = "Broker internal communication"
+  }
+
+  ingress {
+    from_port       = 9094
+    to_port         = 9094
+    protocol        = "tcp"
+    security_groups = [aws_security_group.kafka.id]
+    description     = "Controller quorum communication"
+  }
+
   egress {
     from_port   = 0
     to_port     = 0
