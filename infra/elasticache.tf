@@ -13,16 +13,30 @@ resource "aws_elasticache_subnet_group" "main" {
   tags = {}
 }
 
-# ElastiCache Valkey 단일 노드 (클러스터링은 #5에서 num_cache_clusters 증설 예정)
+# AOF 활성화 커스텀 파라미터 그룹
+# default.valkey7.cluster.on은 AWS 기본 그룹이라 수정 불가 → 커스텀으로 생성
+resource "aws_elasticache_parameter_group" "valkey_cluster_aof" {
+  family = "valkey7"
+  name   = "valkey7-cluster-aof"
+
+  parameter {
+    name  = "appendonly"
+    value = "yes"
+  }
+}
+
+# ElastiCache Valkey CME 3샤드 (Cluster Mode Enabled)
+# CMD(단일 노드) → CME 전환은 in-place 불가 → terraform destroy 후 apply 필요
 resource "aws_elasticache_replication_group" "redis" {
-  replication_group_id = "batch-kafka-redis"
-  description          = "Valkey single node"
-  engine               = "valkey"
-  engine_version       = "7.2"
-  node_type            = "cache.t3.micro"
-  num_cache_clusters   = 1
-  parameter_group_name = "default.valkey7"
-  port                 = 6379
+  replication_group_id       = "batch-kafka-redis"
+  description                = "Valkey cluster 3 shards 1 replica"
+  engine                     = "valkey"
+  engine_version             = "7.2"
+  node_type                  = "cache.t3.micro"
+  num_node_groups            = 3    # 샤드 수
+  replicas_per_node_group    = 1    # 샤드당 replica 1개 → primary 장애 시 auto-failover
+  parameter_group_name       = aws_elasticache_parameter_group.valkey_cluster_aof.name
+  automatic_failover_enabled = true
 
   subnet_group_name  = aws_elasticache_subnet_group.main.name
   security_group_ids = [aws_security_group.elasticache_redis.id]
