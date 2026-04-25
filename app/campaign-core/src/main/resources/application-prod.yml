@@ -2,43 +2,42 @@ management:
   endpoints:
     web:
       exposure:
-        include: health, prometheus, metrics   # Prometheus scrape + metrics 디버깅용
+        include: health, prometheus, metrics
   endpoint:
     health:
-      show-details: when-authorized        # 인증된 요청만 상세 노출
+      show-details: when-authorized
     prometheus:
       enabled: true
   health:
     kafka:
-      enabled: false                       # Actuator Kafka Health 완전 제거
+      enabled: false
   metrics:
     export:
       cloudwatch:
         enabled: true
-        namespace: CampaignSystem/V2       # CloudWatch 콘솔 네임스페이스
-        step: 1m                           # 이벤트 중 실시간 감지 (PDF 목적 1번)
+        namespace: CampaignSystem/V2
+        step: 1m
       prometheus:
         enabled: true
 
 spring:
   datasource:
     hikari:
-      maximum-pool-size: 20     # v3 Redis-first: API DB 제거 → Consumer INSERT 전용, 20으로 충분
+      maximum-pool-size: 20
       minimum-idle: 10
-      connection-timeout: 20000 # 커넥션 획득 타임아웃 20초
-      idle-timeout: 300000      # 유휴 커넥션 유지 시간 5분
-      max-lifetime: 1800000     # 커넥션 최대 수명 30분
+      connection-timeout: 20000
+      idle-timeout: 300000
+      max-lifetime: 1800000
 
   jpa:
     hibernate:
-      ddl-auto: validate  # 프로덕션에서는 validate 또는 none 권장
-    show-sql: false       # 프로덕션에서는 로깅 최소화
+      ddl-auto: validate
+    show-sql: false
     properties:
       hibernate:
         format_sql: false
-        default_batch_fetch_size: 100  # N+1 문제 방지
+        default_batch_fetch_size: 100
 
-  # Redis 설정 (프로덕션 - AWS ElastiCache)
   data:
     redis:
       host: ${SPRING_DATA_REDIS_HOST}
@@ -47,14 +46,14 @@ spring:
   kafka:
     bootstrap-servers: ${SPRING_KAFKA_BOOTSTRAP_SERVERS:localhost:9092}
     listener:
-      auto-startup: true        #  Consumer 기동
+      auto-startup: true
     admin:
-      auto-create: true         # (있어도 되고 없어도 됨)
+      auto-create: true
 
   flyway:
     enabled: true
     locations: classpath:db/migration
-    baseline-on-migrate: true    # flyway_schema_history 없을 때 자동 baseline 생성
+    baseline-on-migrate: true
     baseline-version: 0
 
   task:
@@ -64,26 +63,24 @@ spring:
 
   batch:
     job:
-      enabled: false             #  Batch 자동 실행 차단.
+      enabled: false
 
-# Kafka 설정 (프로덕션 - 파티션 1개 기준 안정적 설정)
-# ⚠️ 프로덕션에서는 실험용 프로필(p2, p3, p5, p10)을 절대 사용하지 마세요!
 kafka:
   producer:
-    buffer-memory: 134217728    # 128MB
-    batch-size: 65536           # 64KB
-    linger-ms: 20               # 20ms
+    buffer-memory: 536870912
+    batch-size: 131072
+    linger-ms: 5
     compression-type: none
-    max-block-ms: 60000         # 60초
-    acks: all                   # 3브로커 구성 시 메시지 유실 방지 (단일 브로커에서도 무해)
-    enable-idempotence: true    # 프로듀서 중복 전송 방지
+    max-block-ms: 60000
+    acks: all
+    enable-idempotence: true
 
   consumer:
-    max-poll-records: 500       # 한 번에 500개씩 처리
-    max-poll-interval-ms: 600000  # 10분
-    session-timeout-ms: 45000    # 45초
-    replication-factor: 3       # 3-broker 클러스터 운영 시 적용
-    partitions: 10              # v2 목표 파티션 수
+    max-poll-records: 100
+    max-poll-interval-ms: 600000
+    session-timeout-ms: 45000
+    replication-factor: 3
+    partitions: 10
 
 slack:
   webhook-url: ${SLACK_WEBHOOK_URL:}
