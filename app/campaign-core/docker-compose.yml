@@ -125,10 +125,18 @@ services:
   redis-cluster-init:
     image: redis:7.2-alpine
     container_name: redis-cluster-init
+    # 클러스터가 이미 존재하면 create 생략 (idempotent)
+    # 볼륨이 남아있는 상태에서 재기동 시 "already initialized" 출력 후 정상 종료
     command: >
-      sh -c "redis-cli --cluster create
-      redis-1:7001 redis-2:7002 redis-3:7003
-      --cluster-replicas 0 --cluster-yes"
+      sh -c "
+      if redis-cli -h redis-1 -p 7001 cluster info | grep -q 'cluster_state:ok'; then
+        echo 'cluster already initialized, skipping'
+      else
+        redis-cli --cluster create
+        redis-1:7001 redis-2:7002 redis-3:7003
+        --cluster-replicas 0 --cluster-yes
+      fi
+      "
     networks:
       - campaign-net
     depends_on:
