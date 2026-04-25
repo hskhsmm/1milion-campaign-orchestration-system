@@ -191,7 +191,6 @@ Kafka Consumer (10 파티션)
 - [x] `infra/elasticache.tf` — CME 3샤드 1레플리카 + AOF 커스텀 파라미터 그룹 (`valkey7-cluster-aof`)
 
 #### ✅ 코드리뷰 반영 완료 (2026-04-25)
-- [x] `infra/elasticache.tf` — 파라미터 그룹 family `valkey7` → `valkey7.cluster.on` (CME 호환 수정)
 - [x] `infra/elasticache.tf` — `aws_ssm_parameter` 2개 추가: terraform apply 시 SSM 자동 등록
   - `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` — configuration endpoint 기반 자동 생성
   - `/batch-kafka/prod/REDIS_EXPORTER_ADDR` — 동일
@@ -200,18 +199,30 @@ Kafka Consumer (10 파티션)
 - [x] `docker-compose.yml` — `redis-cluster-init` idempotent 처리: 클러스터 존재 시 create 생략
 - [x] `application-local.yml` — IDE 직접 실행 불가 이유 주석 추가 (cluster redirect 문제)
 
-#### 📌 terraform apply 절차 (SSM 수동 등록 불필요 — 자동화됨)
-- `terraform destroy -target=aws_elasticache_replication_group.redis` (기존 단일 노드 삭제)
-- `terraform apply` (CME 3샤드 생성 + SSM 자동 등록, ~10분)
-  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 자동 생성
-  - SSM `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 자동 생성
-  - `terraform output redis_configuration_endpoint` 으로 엔드포인트 확인 가능
-- `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 수동 삭제 (기존 키 정리)
-- 앱 재배포 (GitHub Actions push → CodeDeploy)
+#### ✅ terraform apply 완료 (2026-04-26)
+- CMD → CME 전환은 in-place 불가 → `terraform destroy -target=...redis` 후 신규 생성
+- AOF 커스텀 파라미터 그룹 제거: ElastiCache CME에서 appendonly 파라미터 수정 불가 (AWS 자체 관리)
+  - 로컬 docker-compose.yml은 `--appendonly yes` 유지
+  - `default.valkey7.cluster.on` 기본 그룹 사용 (Valkey는 standalone/CME 모두 family `valkey7` 하나)
+  - `valkey7.cluster.on` family는 존재하지 않음 — AWS CLI describe-cache-parameter-groups로 확인
+- SSM null 조건 처리 추가: plan 시 configuration_endpoint_address null 에러 방지
+- ElastiCache CME 3샤드 1레플리카 생성 완료
+  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 자동 등록 ✅
+  - SSM `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 자동 등록 ✅
+- 비용: cache.t3.micro × 6개 (3샤드 × primary+replica) — 단일 노드 대비 약 6배
+  - 작업 후 비용 절감 시: `terraform destroy -target=aws_elasticache_replication_group.redis`
 
-### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
-- [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
-- [ ] `application-prod.yml` broker 설정 반영
+#### 📌 남은 작업
+- `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 삭제 (구 단일 노드 키, 앱에서 미사용)
+- feature/redis-cluster → develop → main 머지 → CI/CD 재배포
+
+### #6 Kafka 3-broker (hskhsmm 담당) 🔄 진행 중 (2026-04-26)
+- [x] EC2 kafka-2 (172.31.16.164, public_2b), kafka-3 (172.31.32.164, public_2c) 추가 — `ec2.tf`
+- [x] Kafka SG self-ingress 추가 (9092 브로커 내부, 9094 controller quorum) — `security_groups.tf`
+- [x] RDS slow query 파라미터 그룹 (`aws_db_parameter_group.slow`) — `rds.tf`
+- [x] `application-prod.yml` — 10파티션 3브로커 기준 설정 반영 (max-poll-records: 100, buffer-memory: 512MB 등)
+- [ ] kafka-2, kafka-3 브로커 직접 설치 및 KRaft 3브로커 클러스터 구성
+- [ ] SSM `SPRING_KAFKA_BOOTSTRAP_SERVERS` 3브로커 값으로 업데이트
 
 ### Spring Batch v2 PENDING 재처리 (A/B 머지 + 인프라 구성 후)
 - [ ] ItemReader: 5분 초과 PENDING 조회
@@ -750,8 +761,8 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 3 | AWS 4차 테스트 — 파티션 1개 (v3 before/after 비교) | ✅ 완료 (TPS 526/s, HikariCP pending 0, 정합성 완벽) |
 | 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
 | 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
-| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 **다음** |
-| 6 | Redis Cluster 3샤드 + AOF | ✅ 코드리뷰 반영 완료 (2026-04-25) — terraform apply 대기 |
+| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 진행 중 (kafka-2/3 EC2 생성 완료, 브로커 설치 대기) |
+| 6 | Redis Cluster 3샤드 | ✅ terraform apply 완료 (2026-04-26) |
 | 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
 | 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
 | 9 | 백만 Spike 최종 검증 | 대기 |
