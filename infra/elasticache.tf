@@ -14,10 +14,10 @@ resource "aws_elasticache_subnet_group" "main" {
 }
 
 # AOF 활성화 커스텀 파라미터 그룹
-# default.valkey7.cluster.on은 AWS 기본 그룹이라 수정 불가 → 커스텀으로 생성
-# family는 반드시 "valkey7.cluster.on" — CME에는 standalone family("valkey7") 사용 불가
+# default.valkey7은 AWS 기본 그룹이라 수정 불가 → 커스텀으로 생성
+# Valkey는 Redis와 달리 CME 전용 family 없음 — standalone/CME 모두 "valkey7" 사용
 resource "aws_elasticache_parameter_group" "valkey_cluster_aof" {
-  family = "valkey7.cluster.on"
+  family = "valkey7"
   name   = "valkey7-cluster-aof"
 
   parameter {
