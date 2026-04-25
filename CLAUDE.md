@@ -174,10 +174,40 @@ Kafka Consumer (10 파티션)
 - Slack Incoming Webhook URL 발급 → SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록
 - SSM에 `KAFKA_BROKER_1`, `KAFKA_BROKER_2`, `KAFKA_BROKER_3` 등록 (3-broker 구성 후)
 
-### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
-- [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
-- [ ] `RedisConfig.java` 수정 (RedisClusterConfiguration 적용)
-- [ ] `application-prod.yml` Redis Cluster 엔드포인트 반영
+### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당) ✅ 코드 완료 (2026-04-25)
+
+#### ✅ 완료
+- [x] `scripts/check-and-decr.lua` 삭제 — v3에서 미사용 dead code
+- [x] `scripts/check-decr-total.lua` — CROSSSLOT 해결: `active:campaigns`(전역 Set) → `active:campaign:{id}`(해시태그 플래그)로 교체, `SISMEMBER`→`EXISTS`, `SREM`→`DEL`
+- [x] `RedisConfig.java` — `checkAndDecrScript` Bean 제거
+- [x] `RedisStockService.java` — 키 해시태그 추가 (`stock:campaign:{id}`, `total:campaign:{id}`), `getActiveFlagKey()` 신규, `activateCampaign()`/`deactivateCampaign()` 전역 Set + 플래그 둘 다 처리, `isActive()` 신규
+- [x] `CampaignService.java` — `redisTemplate` 직접 의존 제거, `activateCampaign()` 위임
+- [x] `ParticipationBridge.java` — RPOP null 시 `isActive()` 확인 → `deactivateCampaign()` cleanup (Known Issue 해결)
+- [x] `docker-compose.yml` — 단일 redis → redis-1/2/3 + redis-cluster-init (3노드 로컬 클러스터)
+- [x] `application-local.yml` — `cluster.nodes: localhost:7001,7002,7003` 추가 (로컬 표준은 compose 실행)
+- [x] `application-prod.yml` — `host/port` → `cluster.nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES}`
+- [x] `deploy/scripts/beforeInstall.sh` — `SPRING_DATA_REDIS_HOST` → `SPRING_DATA_REDIS_CLUSTER_NODES`, `REDIS_EXPORTER_ADDR`, `SLACK_WEBHOOK_URL` 추가
+- [x] `deploy/docker-compose.prod.yml` — redis-exporter `REDIS_ADDR` SSM 주입, `REDIS_EXPORTER_IS_CLUSTER: "true"` 추가
+- [x] `infra/elasticache.tf` — CME 3샤드 1레플리카 + AOF 커스텀 파라미터 그룹 (`valkey7-cluster-aof`)
+
+#### ✅ 코드리뷰 반영 완료 (2026-04-25)
+- [x] `infra/elasticache.tf` — 파라미터 그룹 family `valkey7` → `valkey7.cluster.on` (CME 호환 수정)
+- [x] `infra/elasticache.tf` — `aws_ssm_parameter` 2개 추가: terraform apply 시 SSM 자동 등록
+  - `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` — configuration endpoint 기반 자동 생성
+  - `/batch-kafka/prod/REDIS_EXPORTER_ADDR` — 동일
+  - `lifecycle { ignore_changes = [value] }` — 수동 업데이트 보호
+- [x] `infra/elasticache.tf` — `output "redis_configuration_endpoint"` 추가
+- [x] `docker-compose.yml` — `redis-cluster-init` idempotent 처리: 클러스터 존재 시 create 생략
+- [x] `application-local.yml` — IDE 직접 실행 불가 이유 주석 추가 (cluster redirect 문제)
+
+#### 📌 terraform apply 절차 (SSM 수동 등록 불필요 — 자동화됨)
+- `terraform destroy -target=aws_elasticache_replication_group.redis` (기존 단일 노드 삭제)
+- `terraform apply` (CME 3샤드 생성 + SSM 자동 등록, ~10분)
+  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 자동 생성
+  - SSM `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 자동 생성
+  - `terraform output redis_configuration_endpoint` 으로 엔드포인트 확인 가능
+- `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 수동 삭제 (기존 키 정리)
+- 앱 재배포 (GitHub Actions push → CodeDeploy)
 
 ### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
 - [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
@@ -721,7 +751,7 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
 | 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
 | 5 | Kafka 3브로커 + 파티션 10개 | 🔄 **다음** |
-| 6 | Redis Cluster 3샤드 + AOF everysec | 대기 |
+| 6 | Redis Cluster 3샤드 + AOF | ✅ 코드리뷰 반영 완료 (2026-04-25) — terraform apply 대기 |
 | 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
 | 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
 | 9 | 백만 Spike 최종 검증 | 대기 |

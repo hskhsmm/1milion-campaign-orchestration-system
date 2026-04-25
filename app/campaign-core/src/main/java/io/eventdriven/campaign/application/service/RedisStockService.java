@@ -16,12 +16,12 @@ import java.util.List;
 public class RedisStockService {
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DefaultRedisScript<Long> checkAndDecrScript;
     private final DefaultRedisScript<List> checkDecrTotalScript;
 
-    private static final String STOCK_KEY_PREFIX = "stock:campaign:";
-    private static final String TOTAL_KEY_PREFIX = "total:campaign:";
-    private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
+    private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";          // Bridge SMEMBERS 순회용 전역 Set (Lua 밖에서만 사용)
+    private static final String ACTIVE_FLAG_KEY_PREFIX = "active:campaign:{";        // Lua용 캠페인별 플래그 (해시태그로 stock/total과 동일 슬롯)
+    private static final String STOCK_KEY_PREFIX = "stock:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
+    private static final String TOTAL_KEY_PREFIX = "total:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     public static final Long INACTIVE_CAMPAIGN = -999L;
 
 
@@ -40,30 +40,7 @@ public class RedisStockService {
         log.info("Redis 재고 초기화 - Campaign: {}, Stock: {}", campaignId, stock);
     }
 
-    /**
-     * 재고 차감 (원자적 연산)
-     * decr 연산 수행
-     *
-     * @param campaignId 캠페인 ID
-     * @return 차감 후 남은 재고 (0 이상: 성공, -1: 실패)
-     */
 
-
-
-
-
-    /**
-     * SISMEMBER + DECR 원자 실행 (Lua)
-     * - 비활성 캠페인: INACTIVE_CAMPAIGN(-999) 반환, DECR 없음
-     * - 활성 캠페인: DECR 후 remaining 반환 (음수 포함)
-     */
-    public Long checkAndDecr(Long campaignId) {
-        return redisTemplate.execute(
-            checkAndDecrScript,
-            List.of(ACTIVE_CAMPAIGNS_KEY, getStockKey(campaignId)),
-            campaignId.toString()
-        );
-    }
 
     // INCR 보상용 — DuplicateKey + 다른 sequence 케이스에만 사용
     public void incrementStock(Long campaignId) {
@@ -71,18 +48,25 @@ public class RedisStockService {
         redisTemplate.opsForValue().increment(key);
     }
 
-    // 캠페인 자동 종료 시 active:campaigns SREM
-    public void deactivateCampaign(Long campaignId) {
-        redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
-    }
-
-    // Redis 재시작 후 재고 복구 시 active:campaigns SADD
+    // 캠페인 활성화 — Bridge 순회용 전역 Set + Lua용 캠페인별 플래그 둘 다 등록
     public void activateCampaign(Long campaignId) {
         redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+        redisTemplate.opsForValue().set(getActiveFlagKey(campaignId), "1");
+    }
+
+    // 캠페인 비활성화 — Bridge 순회용 전역 Set + Lua용 캠페인별 플래그 둘 다 정리
+    public void deactivateCampaign(Long campaignId) {
+        redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+        redisTemplate.delete(getActiveFlagKey(campaignId));
+    }
+
+    // Bridge cleanup 판단용 — active flag 존재 여부 확인
+    public boolean isActive(Long campaignId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(getActiveFlagKey(campaignId)));
     }
 
     /**
-     * SISMEMBER + DECR + SREM(remaining==0) + GET total 원자 실행 (Lua)
+     * EXISTS + DECR + DEL(remaining==0) + GET total 원자 실행 (Lua)
      * returns long[]{remaining, total}
      * remaining == INACTIVE_CAMPAIGN(-999): 비활성 캠페인
      */
@@ -90,8 +74,7 @@ public class RedisStockService {
     public long[] checkDecrTotal(Long campaignId) {
         List<Long> result = (List<Long>) redisTemplate.execute(
             checkDecrTotalScript,
-            List.of(ACTIVE_CAMPAIGNS_KEY, getStockKey(campaignId), getTotalKey(campaignId)),
-            campaignId.toString()
+            List.of(getActiveFlagKey(campaignId), getStockKey(campaignId), getTotalKey(campaignId))
         );
         if (result == null || result.size() < 2) {
             throw new IllegalStateException("checkDecrTotal 스크립트 오류. campaignId=" + campaignId);
@@ -105,7 +88,11 @@ public class RedisStockService {
     }
 
     private String getTotalKey(Long campaignId) {
-        return TOTAL_KEY_PREFIX + campaignId;
+        return TOTAL_KEY_PREFIX + campaignId + "}";
+    }
+
+    private String getActiveFlagKey(Long campaignId) {
+        return ACTIVE_FLAG_KEY_PREFIX + campaignId + "}";
     }
 
 
@@ -145,6 +132,6 @@ public class RedisStockService {
     }
 
     private String getStockKey(Long campaignId) {
-        return STOCK_KEY_PREFIX + campaignId;
+        return STOCK_KEY_PREFIX + campaignId + "}";
     }
 }
