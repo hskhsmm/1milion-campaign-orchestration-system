@@ -50,7 +50,7 @@ resource "aws_elasticache_replication_group" "redis" {
 resource "aws_ssm_parameter" "redis_cluster_nodes" {
   name  = "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
   type  = "SecureString"
-  value = "${aws_elasticache_replication_group.redis.configuration_endpoint_address}:6379"
+  value = aws_elasticache_replication_group.redis.configuration_endpoint_address != null ? "${aws_elasticache_replication_group.redis.configuration_endpoint_address}:6379" : "pending"
 
   lifecycle {
     ignore_changes = [value]  # 수동 업데이트 허용 (엔드포인트 변경 시 덮어씌움 방지)
@@ -60,7 +60,7 @@ resource "aws_ssm_parameter" "redis_cluster_nodes" {
 resource "aws_ssm_parameter" "redis_exporter_addr" {
   name  = "/batch-kafka/prod/REDIS_EXPORTER_ADDR"
   type  = "SecureString"
-  value = "redis://${aws_elasticache_replication_group.redis.configuration_endpoint_address}:6379"
+  value = aws_elasticache_replication_group.redis.configuration_endpoint_address != null ? "redis://${aws_elasticache_replication_group.redis.configuration_endpoint_address}:6379" : "redis://pending:6379"
 
   lifecycle {
     ignore_changes = [value]
