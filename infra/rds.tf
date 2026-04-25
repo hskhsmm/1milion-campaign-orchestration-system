@@ -4,6 +4,29 @@ data "aws_ssm_parameter" "db_password" {
   with_decryption = true
 }
 
+resource "aws_db_parameter_group" "slow" {
+  name   = "slow"
+  family = "mysql8.0"
+  description = "slow query active"
+
+  parameter {
+    name  = "slow_query_log"
+    value = "1"
+  }
+
+  parameter {
+    name  = "long_query_time"
+    value = "0.1"
+  }
+
+  parameter {
+    name  = "log_output"
+    value = "TABLE"
+  }
+
+  tags = {}
+}
+
 # RDS MySQL 인스턴스
 resource "aws_db_instance" "batch_kafka_db" {
   identifier        = "batch-kafka-db"
@@ -16,7 +39,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   # 스토리지
   allocated_storage     = 20
   max_allocated_storage = 1000
-  storage_type          = "gp2"
+  storage_type          = "gp3"
   storage_encrypted     = true
   kms_key_id            = "arn:aws:kms:ap-northeast-2:631124976154:key/8ad3a522-6d4f-4891-8c39-9f9d33cb9e38"
 
@@ -28,6 +51,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   multi_az               = false
 
   # 백업 및 유지보수
+  apply_immediately       = true
   backup_retention_period = 1
   copy_tags_to_snapshot   = true
   skip_final_snapshot     = true
@@ -38,7 +62,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   }
 
   # 파라미터/옵션 그룹
-  parameter_group_name = "default.mysql8.0"
+  parameter_group_name = aws_db_parameter_group.slow.name
   option_group_name    = "default:mysql-8-0"
 
   tags = {}

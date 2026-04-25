@@ -23,5 +23,8 @@ services:
     ports:
       - "9121:9121"
     environment:
-      REDIS_ADDR: redis://batch-kafka-redis.3uttxb.ng.0001.apn2.cache.amazonaws.com:6379
+      REDIS_ADDR: ${REDIS_EXPORTER_ADDR}        # SSM /batch-kafka/prod/REDIS_EXPORTER_ADDR 주입
+      REDIS_EXPORTER_IS_CLUSTER: "true"         # 클러스터 전체 샤드 메트릭 수집
+    env_file:
+      - /opt/campaign-core/.env.prod
     restart: unless-stopped

@@ -15,13 +15,12 @@ management:
 
 spring:
   datasource:
-    # Docker Compose로 띄운 MySQL에 접속 (localhost)
     url: jdbc:mysql://localhost:3306/${MYSQL_DATABASE}?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul&defaultAuthenticationPlugin=mysql_native_password
     username: ${MYSQL_USER}
     password: ${MYSQL_PASSWORD}
     driver-class-name: com.mysql.cj.jdbc.Driver
     hikari:
-      maximum-pool-size: 20     # 10만 트래픽 처리 최적화
+      maximum-pool-size: 20
       minimum-idle: 10
       connection-timeout: 20000
       idle-timeout: 300000
@@ -29,42 +28,54 @@ spring:
 
   batch:
     job:
-      enabled: false  # 애플리케이션 시작 시 자동 Job 실행 비활성화
+      enabled: false
 
   jpa:
     hibernate:
-      ddl-auto: update
+      ddl-auto: validate
     show-sql: true
     properties:
       hibernate:
         format_sql: true
         dialect: org.hibernate.dialect.MySQLDialect
-        default_batch_fetch_size: 100  # N+1 문제 방지: IN 절로 한 번에 조회
+        default_batch_fetch_size: 100
+
+  flyway:
+    enabled: true
+    locations: classpath:db/migration
+    baseline-on-migrate: true
 
   task:
     scheduling:
       pool:
-        size: 2  # ParticipationBridge(100ms) + QueueMetricsScheduler(10s) 동시 실행 보장
+        size: 2
+
+  data:
+    redis:
+      cluster:
+        # 로컬 표준: docker compose up (app 서비스 포함) — IDE 직접 실행 시 cluster redirect가
+        # redis-1/2/3 호스트명으로 돌아와 연결 불가. 반드시 compose 안에서 실행할 것.
+        # docker-compose.yml의 SPRING_DATA_REDIS_CLUSTER_NODES 환경변수가 이 값을 오버라이드함.
+        nodes: localhost:7001,localhost:7002,localhost:7003
+        max-redirects: 3
 
   kafka:
     bootstrap-servers: localhost:9092
     consumer:
-      group-id: campaign-group
       auto-offset-reset: earliest
 
-# Kafka 설정 (파티션 1개 - Baseline)
 kafka:
   producer:
-    buffer-memory: 134217728    # 128MB
-    batch-size: 65536           # 64KB
-    linger-ms: 20               # 20ms
+    buffer-memory: 134217728
+    batch-size: 65536
+    linger-ms: 20
     compression-type: none
-    max-block-ms: 60000         # 60초
+    max-block-ms: 60000
 
   consumer:
-    max-poll-records: 500       # 한 번에 500개씩 처리
-    max-poll-interval-ms: 600000  # 10분
-    session-timeout-ms: 45000    # 45초
+    max-poll-records: 500
+    max-poll-interval-ms: 600000
+    session-timeout-ms: 45000
 
 slack:
-  webhook-url: ""               # 로컬 테스트용 (비워두면 알림 스킵)
+  webhook-url: ""

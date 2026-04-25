@@ -11,7 +11,7 @@ import { check, sleep } from 'k6';
  * ./k6.exe run k6-bulk-test.js
  */
 
-const BASE_URL = 'http://localhost:8080';
+const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
 
 export const options = {
   vus: 1,           // 가상 사용자 1명 (API 자체가 대량 메시지 발행하므로)
@@ -78,7 +78,7 @@ export default function () {
     console.log('   2. Kafka UI에서 메시지 확인 (http://localhost:8081)');
     console.log('   3. 5~10초 후 Consumer 처리 완료 대기');
     console.log('   4. 통계 조회:');
-    console.log('      GET http://localhost:8080/api/admin/campaigns');
+    console.log(`      GET ${BASE_URL}/api/admin/campaigns`);
     console.log('========================================');
   } else {
     console.error('\n❌ 검증 실패!');

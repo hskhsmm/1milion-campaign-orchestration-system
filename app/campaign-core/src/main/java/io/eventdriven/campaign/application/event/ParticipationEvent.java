@@ -3,7 +3,7 @@ package io.eventdriven.campaign.application.event;
 public class ParticipationEvent {
     private Long campaignId;
     private Long userId;
-    private Long historyId; // v2 — PENDING 선점 후 획득한 PK
+    private Long sequence; // v3 — Redis DECR 시점 확정된 선착순 번호 (historyId 대체)
 
     // Kafka 메타데이터 (Consumer에서 설정)
     private Long kafkaOffset;
@@ -18,26 +18,34 @@ public class ParticipationEvent {
         this.userId = userId;
     }
 
-    public ParticipationEvent(Long campaignId, Long userId, Long historyId) {
+    public ParticipationEvent(Long campaignId, Long userId, Long sequence) {
         this.campaignId = campaignId;
         this.userId = userId;
-        this.historyId = historyId;
+        this.sequence = sequence;
     }
 
-    public Long getHistoryId() {
-        return historyId;
+    public Long getSequence() {
+        return sequence;
     }
 
-    public void setHistoryId(Long historyId) {
-        this.historyId = historyId;
+    public void setSequence(Long sequence) {
+        this.sequence = sequence;
     }
 
     public Long getCampaignId() {
         return campaignId;
     }
 
+    public void setCampaignId(Long campaignId) {
+        this.campaignId = campaignId;
+    }
+
     public Long getUserId() {
         return userId;
+    }
+
+    public void setUserId(Long userId) {
+        this.userId = userId;
     }
 
     public Long getKafkaOffset() {

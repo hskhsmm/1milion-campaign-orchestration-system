@@ -147,18 +147,20 @@ Kafka Consumer (10 파티션)
 ### #4 B파트 — Queue 소비 ~ DB 최종 기록 (hskhsmm 담당) ✅ 코드 완료
 
 > 설계 문서: `A파트_장애시나리오_설계_v4.pdf` (루트)
-> 브랜치: `feature/phase2-part-a` (A파트 브랜치에 B파트 merge 완료)
-> 현재 상태: A/B 전체 코드 완료 (2026-04-13), PR 올리기 전
+> PR #34 (feat/test-infra-setup), PR #35 (refactor/phase-part-A) → main 머지 완료 (2026-04-20)
+> 현재 브랜치: refactor/phase-part-A
 
 #### ✅ 완료
 - [x] `ParticipationStatus.java` — PENDING 추가
 - [x] `ParticipationHistory.java` — sequence 필드, PENDING 생성자 추가
 - [x] `ParticipationEvent.java` — historyId 필드 추가
+  - **버그 수정 (2026-04-19)**: `campaignId`, `userId` setter 추가 — Jackson 역직렬화 시 null 되어 `writeResultCache` 캐시 키 `participation:result:null:null` 오동작 수정
 - [x] `ParticipationHistoryRepository.java` — bulkUpdateSuccess(AND status=PENDING 멱등성), findByCampaignIdAndUserId 추가
 - [x] `ParticipationEventConsumer.java` — v2 전면 재작성 + Redis 결과 캐시 + Slack 연동 + fallbackIndividual
 - [x] `SlackNotificationService.java` — 신규 생성
 - [x] `ParticipationBridge.java` — 신규 작성
-  - @Scheduled(fixedDelay=100ms), active:campaigns 순회, RPOP, batchSize=500 (yml 오버라이드 가능)
+  - @Scheduled(fixedDelay=100ms), active:campaigns 순회, RPOP
+  - **큐 크기 기반 동적 batchSize (2026-04-19)**: < 10,000 → 500 / < 100,000 → 1,000 / >= 100,000 → 2,000
   - MAX_RETRY 3회 + exponential backoff (200ms→400ms), DLQ+Slack
   - 파티션 키: String.valueOf(campaignId), LPUSH 재적재 금지
 - [x] `PollingController.java` — 신규 작성
@@ -172,10 +174,40 @@ Kafka Consumer (10 파티션)
 - Slack Incoming Webhook URL 발급 → SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록
 - SSM에 `KAFKA_BROKER_1`, `KAFKA_BROKER_2`, `KAFKA_BROKER_3` 등록 (3-broker 구성 후)
 
-### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
-- [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
-- [ ] `RedisConfig.java` 수정 (RedisClusterConfiguration 적용)
-- [ ] `application-prod.yml` Redis Cluster 엔드포인트 반영
+### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당) ✅ 코드 완료 (2026-04-25)
+
+#### ✅ 완료
+- [x] `scripts/check-and-decr.lua` 삭제 — v3에서 미사용 dead code
+- [x] `scripts/check-decr-total.lua` — CROSSSLOT 해결: `active:campaigns`(전역 Set) → `active:campaign:{id}`(해시태그 플래그)로 교체, `SISMEMBER`→`EXISTS`, `SREM`→`DEL`
+- [x] `RedisConfig.java` — `checkAndDecrScript` Bean 제거
+- [x] `RedisStockService.java` — 키 해시태그 추가 (`stock:campaign:{id}`, `total:campaign:{id}`), `getActiveFlagKey()` 신규, `activateCampaign()`/`deactivateCampaign()` 전역 Set + 플래그 둘 다 처리, `isActive()` 신규
+- [x] `CampaignService.java` — `redisTemplate` 직접 의존 제거, `activateCampaign()` 위임
+- [x] `ParticipationBridge.java` — RPOP null 시 `isActive()` 확인 → `deactivateCampaign()` cleanup (Known Issue 해결)
+- [x] `docker-compose.yml` — 단일 redis → redis-1/2/3 + redis-cluster-init (3노드 로컬 클러스터)
+- [x] `application-local.yml` — `cluster.nodes: localhost:7001,7002,7003` 추가 (로컬 표준은 compose 실행)
+- [x] `application-prod.yml` — `host/port` → `cluster.nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES}`
+- [x] `deploy/scripts/beforeInstall.sh` — `SPRING_DATA_REDIS_HOST` → `SPRING_DATA_REDIS_CLUSTER_NODES`, `REDIS_EXPORTER_ADDR`, `SLACK_WEBHOOK_URL` 추가
+- [x] `deploy/docker-compose.prod.yml` — redis-exporter `REDIS_ADDR` SSM 주입, `REDIS_EXPORTER_IS_CLUSTER: "true"` 추가
+- [x] `infra/elasticache.tf` — CME 3샤드 1레플리카 + AOF 커스텀 파라미터 그룹 (`valkey7-cluster-aof`)
+
+#### ✅ 코드리뷰 반영 완료 (2026-04-25)
+- [x] `infra/elasticache.tf` — 파라미터 그룹 family `valkey7` → `valkey7.cluster.on` (CME 호환 수정)
+- [x] `infra/elasticache.tf` — `aws_ssm_parameter` 2개 추가: terraform apply 시 SSM 자동 등록
+  - `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` — configuration endpoint 기반 자동 생성
+  - `/batch-kafka/prod/REDIS_EXPORTER_ADDR` — 동일
+  - `lifecycle { ignore_changes = [value] }` — 수동 업데이트 보호
+- [x] `infra/elasticache.tf` — `output "redis_configuration_endpoint"` 추가
+- [x] `docker-compose.yml` — `redis-cluster-init` idempotent 처리: 클러스터 존재 시 create 생략
+- [x] `application-local.yml` — IDE 직접 실행 불가 이유 주석 추가 (cluster redirect 문제)
+
+#### 📌 terraform apply 절차 (SSM 수동 등록 불필요 — 자동화됨)
+- `terraform destroy -target=aws_elasticache_replication_group.redis` (기존 단일 노드 삭제)
+- `terraform apply` (CME 3샤드 생성 + SSM 자동 등록, ~10분)
+  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 자동 생성
+  - SSM `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 자동 생성
+  - `terraform output redis_configuration_endpoint` 으로 엔드포인트 확인 가능
+- `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 수동 삭제 (기존 키 정리)
+- 앱 재배포 (GitHub Actions push → CodeDeploy)
 
 ### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
 - [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
@@ -219,7 +251,12 @@ Kafka Consumer (10 파티션)
 
 #### #24 Grafana 대시보드 구성 + k6 부하 검증 ✅ 완료 (2026-04-17, hskhsmm)
 - [x] 알려진 이슈 수정: 스케줄러 스레드 풀 설정 (`application-local.yml`)
-- [x] `monitoring/grafana/dashboards/campaign.json` — 10개 패널 구성
+- [x] `monitoring/grafana/dashboards/campaign.json` — 13개 패널 구성
+  - 패널 1~10: API TPS/p95/p99/에러율, Bridge, Redis Queue, Consumer 지연, Kafka Lag, Redis 메모리 (기존)
+  - 패널 11: HikariCP 커넥션 풀 4종 (pending/active/idle/max), pending 라인 빨간색 강조
+  - 패널 12: HikariCP 활성율 (active/max), thresholds 0.7=yellow/0.95=red (color.mode: thresholds)
+  - 패널 13: CPU 사용률, thresholds 0.7=yellow/0.85=red (color.mode: thresholds)
+  - **수정**: 패널 9 Consumer Group명 `campaign-group` → `campaign-participation-group` (KafkaConfig.java 실제 값)
 - [x] `monitoring/grafana/provisioning/dashboards/dashboard.yml` — 자동 프로비저닝 설정
 - [x] `monitoring/grafana/provisioning/datasources/prometheus.yml` — `uid: prometheus` 고정 (dashboard.json UID 매칭)
 - [x] `docker-compose.yml` — JVM `MaxMetaspaceSize` 128m → 256m 상향 (OOM 방지)
@@ -233,6 +270,21 @@ Kafka Consumer (10 파티션)
   - Grafana datasource UID 불일치 → provisioning yml에 `uid: prometheus` 고정으로 해결
   - k6 `__ITER` per-VU 문제 → 전역 iterationInTest 사용으로 해결
   - JVM Metaspace OOM (좀비 현상) → MaxMetaspaceSize 256m으로 해결
+
+#### #24-추가 모니터링 코드 보완 ✅ 완료 (2026-04-20, leepg)
+- [x] `ParticipationService.java` — `[TIMING]` 로그 추가 (`DB_INSERT`, `REDIS_PUSH`, `TOTAL` ms 단위)
+  - DB_INSERT = HikariCP 대기 + SQL 실행 시간 합산 → 병목 진단 핵심 지표
+- [x] `build.gradle` — `micrometer-registry-cloudwatch2` 의존성 추가
+  - `application-prod.yml` cloudwatch.enabled: true인데 의존성 없으면 Spring Boot가 조용히 무시함
+  - EC2 IAM `CloudWatchAgentServerPolicy`로 IAM 권한은 기존에 충족
+- [x] `application-prod.yml` — `metrics` 액추에이터 엔드포인트 노출 추가 (CLI 디버깅용)
+- [x] `application-prod.yml` — `spring.task.scheduling.pool.size: 2` 추가
+  - 기본값 1 → Bridge(100ms)가 QueueMetricsScheduler(10s)를 기아시켜 `redis_queue_size` 지표 누락 방지
+- [x] `application-local.yml` — 죽은 설정 `spring.kafka.consumer.group-id: campaign-group` 제거
+  - KafkaConfig.java가 `campaign-participation-group` 하드코딩으로 덮어씌우므로 무의미
+- [x] RDS slow query 파라미터 그룹 설정 (AWS 콘솔)
+  - `mysql8.0` family 신규 파라미터 그룹 생성, `slow_query_log=1`, `long_query_time=0.5`, `log_output=TABLE`
+  - RDS 인스턴스 파라미터 그룹 교체 + 재부팅 후 적용 확인
 
 #### #25 AWS 모니터링 인프라 반영 — terraform (hskhsmm 담당) 🔄 진행 중 (2026-04-18)
 
@@ -256,6 +308,7 @@ Kafka Consumer (10 파티션)
   - prometheus.yml: spring-boot(172.31.100.157:8080), kafka-exporter(localhost:9308), redis-exporter(172.31.100.157:9121)
   - grafana datasource: prometheus uid 고정 (http://172.31.15.217:9090)
 - [x] `ec2.tf` — batch-kafka-app, kafka-1 `associate_public_ip_address = true` 수정 + `private_ip` 고정
+- [x] `ec2.tf` — EC2 3대 `lifecycle.ignore_changes = [associate_public_ip_address]` 추가 (stopped 상태 시 terraform plan drift 방지)
   - batch-kafka-app: `172.31.100.157`, kafka-1: `172.31.5.164`
   - 재생성 후에도 private IP 고정 → prometheus.yml 수정 불필요
 - [x] terraform apply 완료 — batch-kafka-app, kafka-1 재생성 (퍼블릭 IP 할당)
@@ -275,14 +328,16 @@ Kafka Consumer (10 파티션)
 - `iam.tf` S3 버킷 권한 `batch-kafka-deploy-` 로 수정 + terraform apply
 - `baseline-version: 1` → `0` 수정 (V1 베이스라인으로 인식해서 V1__init.sql 건너뛰던 문제)
 - `applicationStart.sh` — `docker-compose down` 먼저 실행 (포트 8080 충돌 방지)
-- Flyway 로그 미출력 문제 계속 조사 중 (flyway-core 추가했으나 실행 안 됨)
+- Flyway 로그 미출력 문제 → DB `show tables` 직접 확인으로 정상 실행 확인 (13개 테이블 생성 완료)
 
-##### 🔲 남은 작업
-- [ ] Flyway 정상 실행 확인 (docker logs에 Flyway 로그 출력 여부)
-- [ ] CI/CD 배포 성공 확인 → 앱 기동 확인 (`/actuator/health`)
-- [ ] k6 ALB 엔드포인트로 부하 테스트
-- [ ] Grafana `terraform-mcp-public-ip:3000` 대시보드 확인
-- [ ] 완료 기준: `terraform-mcp:9090/targets` 3개 UP, Grafana 대시보드 데이터 표시
+##### ✅ 완료 (2026-04-18)
+- [x] Flyway 정상 실행 확인 — DB에 campaign, participation_history, BATCH_* 등 13개 테이블 생성 확인
+- [x] CI/CD 배포 성공 → `/actuator/health` UP 확인
+- [x] Prometheus targets 3개 UP — kafka-exporter 컨테이너 IP(172.17.0.3) 이슈 해결
+  - prometheus.yml `localhost:9308` → `172.17.0.3:9308` 수정 (`/home/ec2-user/prometheus.yml` 마운트)
+  - terraform-mcp 재시작 시 자동 반영 (`--restart unless-stopped` + 볼륨 마운트)
+- [x] Grafana 대시보드 import 완료 (`campaign.json` 수동 import)
+- [x] k6 ALB 부하 테스트 완료 → 1차 성능 측정 결과 확보
 
 ##### 📌 인프라 메모
 - ElastiCache는 Valkey 사용 (Redis보다 약 20% 저렴, 클러스터링 전환 시도 유지)
@@ -291,6 +346,491 @@ Kafka Consumer (10 파티션)
 - instance ID로 SSM 접속하므로 퍼블릭 IP 변경 무관
 - 비용 절약: EC2/RDS 콘솔 stop, ElastiCache는 `terraform destroy -target=aws_elasticache_replication_group.redis`
 
+
+### 로컬 통합 테스트 결과 (2026-04-19, A+B파트 머지 후)
+
+#### 검증 항목 및 결과
+| 항목 | 결과 |
+|------|------|
+| SUCCESS 100건 (totalStock=100, 200건 요청) | ✅ |
+| sequence 중복 | 0건 ✅ |
+| RateLimit 429 (동일 userId 10초 내 재요청) | ✅ |
+| 재고 소진 400 | ✅ |
+| result 캐시 키 (`participation:result:{userId}:{campaignId}`) | ✅ (setter 버그 수정으로 정상화) |
+
+#### 수정된 버그
+- `ParticipationEvent.java` — `campaignId`, `userId` setter 누락 → Jackson 역직렬화 시 null, writeResultCache 키가 `participation:result:null:null`로 고정되는 버그
+
+#### Known Issue — 재고 소진 시 큐 잔류 (설계 허용 범위)
+- 흐름: `remaining == 0` → Lua `SREM active:campaigns` 즉시 실행 → 큐에 잔류 메시지 Bridge 드레인 불가
+- 안전망: Spring Batch `pendingRecoveryJob`이 5분 초과 PENDING 재처리 → 결국 SUCCESS
+- 해결 시점: 1순위 코드 개선 "캠페인 자동 종료 + SISMEMBER" 항목에서 처리 예정
+
+#### HikariCP prod 설정 수정 (2026-04-19)
+- 원인: `SPRING_PROFILES_ACTIVE: prod`만 활성화 → `maximum-pool-size` 미설정 → HikariCP 기본값 **10** 적용
+- 결과: AWS 1차 테스트 avg 3.94s / max 18.4s의 주요 원인 중 하나
+- 수정: `application-prod.yml`에 `maximum-pool-size: 20`, `minimum-idle: 10` 추가
+- p2/p3 프로필은 기존 설정(25/30) 유지 (파티션 증가 시 덮어씌움)
+
+---
+
+### 1차 부하 테스트 결과 (2026-04-18, AWS 환경)
+
+#### 테스트 환경
+- 앱: batch-kafka-app t3.small 단일 인스턴스
+- DB: batch-kafka-db db.t3.micro (MySQL 8.0.44)
+- Redis: ElastiCache Valkey 단일 노드
+- Kafka: kafka-1 단일 브로커, 파티션 1개
+- ALB: alb-batch-kafka-api
+
+#### k6 설정
+- TOTAL_REQUESTS: 15,000 (재고 10,000 초과 시나리오)
+- MAX_VUS: 1,000
+- DURATION: 60s
+
+#### 결과
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **246/s** |
+| avg latency | 3.94s |
+| p95 | 6.34s |
+| max | 18.4s |
+| 성공 (202) | **9,990건** |
+| 재고 초과 차단 (400) | 5,010건 |
+| 재고 초과 발급 | **0건** ← 정합성 완벽 |
+
+#### Grafana 확인 결과
+- Bridge 드레인 속도: 피크 180 req/s, API TPS와 동일하게 움직임 → 정상
+- Bridge 드레인 사이클: 피크 450ms → 감당 가능
+- Redis Queue 피크: 15개 수준 → 거의 즉시 소비
+
+#### 병목 분석
+- **병목 위치**: HikariCP 커넥션 풀 고갈 (pool-size=10, 기본값) — INSERT SQL 자체는 빠름
+- Bridge/Queue/Consumer는 병목 아님
+- Virtual Thread(Spring Boot 4) 덕분에 스레드 풀 고갈 없이 대기 처리 → max 18.4s에도 시스템 유지
+- HikariCP 기본 타임아웃 30s 이내 처리되어 타임아웃 에러 없음
+- 이후 `application-prod.yml`에 `maximum-pool-size: 20` 추가 (2026-04-19)
+
+#### 성능 개선 방향 (설계 철학: 공정성·정합성 우선)
+- PENDING INSERT는 API 경로 유지 (장애 복구 기준점 — 빼면 Spring Batch 복구 불가)
+- DB 스케일: RDS Proxy + Aurora 전환 (MySQL 대비 write TPS 최대 5배, 코드 변경 없음)
+- Consumer 병렬화: Kafka 10파티션 + Consumer 10개 → SUCCESS UPDATE 선형 확장
+- Redis: ElastiCache Cluster 3샤드 → TPS 향상 아님, 가용성(SPOF 제거) 목적
+
+### 2차 부하 테스트 결과 (2026-04-20, AWS 파티션 1 — HikariCP 20 적용)
+
+#### 테스트 환경 (1차와 동일)
+- 앱: batch-kafka-app t3.small 단일 인스턴스
+- DB: batch-kafka-db db.t3.micro (MySQL 8.0.44, gp3 IOPS 3,000)
+- Redis: ElastiCache Valkey 단일 노드
+- Kafka: kafka-1 단일 브로커, 파티션 1개
+- ALB: alb-batch-kafka-api
+
+#### k6 설정
+- TOTAL_REQUESTS: 15,000 (재고 15,000 = 전량 202 시나리오)
+- MAX_VUS: 1,000
+- DURATION: 60s
+
+#### 결과
+
+| 지표 | 1차 (pool=10) | 2차 (pool=20) | 변화 |
+|------|---------------|---------------|------|
+| TPS | 246/s | **275/s** | +12% |
+| avg latency | 3.94s | **3.54s** | -10% |
+| p95 | 6.34s | **5.71s** | -10% |
+| max | 18.4s | **15.4s** | -16% |
+| 성공 (202) | 9,990건 | **15,000건** | 100% |
+| 재고 초과 발급 | 0건 | **0건** | 정합성 유지 |
+
+#### Grafana 확인 결과
+- HikariCP pending 피크: **950** (pool=20임에도 여전히 포화)
+- HikariCP active/max: **100%** 지속 → 풀이 여전히 부족
+- RDS CPU: **7.27%** (DB 서버 측 여유 충분)
+- WriteIOPS: **189/s** (gp3 3,000 IOPS 대비 6% 수준)
+- DiskQueueDepth: **0.46** (임계치 아님)
+- Slow query log: **비어있음** (0.5s 기준, SQL 자체는 빠름)
+
+#### 확정 병목 분석 — HikariCP 커넥션 대기 (5가지 근거)
+
+| 근거 | 데이터 | 결론 |
+|------|--------|------|
+| TIMING 로그 (tail, 테스트 말미 저VU) | DB_INSERT 12~23ms | SQL 자체는 빠름 |
+| TIMING 로그 (head, 피크 고VU) | DB_INSERT 52~522ms | HikariCP 대기 포함 |
+| Grafana HikariCP pending | 950 지속 | 커넥션 부족 확실 |
+| CloudWatch RDS CPU | 7.27% | DB 서버 여유 충분 |
+| Slow query log | 비어있음 | SQL 느린 것 아님 |
+
+**결론**: 병목은 DB 서버나 SQL이 아니라 순수하게 HikariCP 커넥션 대기.
+pool=20에도 1,000 VU 동시 요청 → INSERT 완료까지 점유 → 대부분 대기.
+해결 방향: pool-size 증가 or DB 커넥션 사용 횟수 자체 감소 (totalStock Redis 캐싱으로 `findById` 제거).
+
+### 3차 부하 테스트 결과 (2026-04-21, AWS 파티션 1 — HikariCP pool=40, terraform-mcp k6)
+
+#### 테스트 환경
+- 앱: batch-kafka-app t3.small 단일 인스턴스
+- DB: batch-kafka-db db.t3.micro (MySQL 8.0.44, gp3 IOPS 3,000)
+- Redis: ElastiCache Valkey 단일 노드
+- Kafka: kafka-1 단일 브로커, 파티션 1개
+- k6 실행 위치: **terraform-mcp EC2** (이전은 로컬 PC → 내부 네트워크로 변경, 측정 정확도 향상)
+
+#### k6 설정
+- TOTAL_REQUESTS: 15,000 (재고 10,000 초과 시나리오)
+- MAX_VUS: 1,000
+- DURATION: 60s (실제 완료: 46.4s)
+
+#### 결과
+
+| 지표 | 2차 (pool=20, 로컬 k6) | 3차 (pool=40, mcp k6) | 변화 |
+|------|----------------------|----------------------|------|
+| TPS | 275/s | **323/s** | +17% |
+| avg latency | 3.54s | **3.01s** | -15% |
+| max | 15.4s | **14.53s** | -6% |
+| 성공 (202) | 15,000건 | **10,000건** | (재고 10K 기준 변경) |
+| 재고 초과 발급 | 0건 | **0건** | 정합성 유지 ✅ |
+
+> ⚠️ 2차는 재고=15,000 (전량 성공 시나리오), 3차는 재고=10,000 (5,000건 차단 시나리오) — 조건이 달라 직접 비교 시 참고
+
+#### Grafana 확인 결과
+- HikariCP pending 피크: **~900** (pool=20 때 950과 거의 동일 → pool 증가 효과 없음)
+- HikariCP 활성율: **100%** 지속 포화
+- 앱 CPU: **90%** (pool=40으로 동시 처리 증가 → 앱 CPU 부하 증가)
+- RDS CPU: **23.9%** (이전 7.27% → 3배 증가, pool 증가로 동시 INSERT 늘어난 효과)
+- DiskQueueDepth: **0.03** (이전 0.46 → 크게 개선, gp3 효과 확인)
+- DatabaseConnections: **20.2** (pool=40이나 실제 동시 활성 커넥션은 20 수준)
+- 5xx 에러율: **0** ✅
+- Bridge 드레인 속도: 피크 45 req/s
+- Consumer PENDING→SUCCESS 지연: 피크 35s
+
+#### 결론 — pool 증가는 근본 해결책이 아님
+
+```
+VU 1000개 동시 요청 기준:
+pool=20 → 20개 처리, ~980개 대기 → pending 950
+pool=40 → 40개 처리, ~960개 대기 → pending 900
+pool=100 → 100개 처리, ~900개 대기 → pending 여전히 높음
+```
+
+pool을 몇 배로 늘려도 VU 1,000개 동시 INSERT 구조가 유지되는 한 pending 근본 해결 불가.
+**근본 해결: API 경로에서 DB INSERT 자체를 제거 → Redis-first 구조로 전환.**
+
+#### k6 실행 위치 변경 (2026-04-21 확정)
+- 이전: 로컬 PC → 인터넷 → AWS ALB (인터넷 레이턴시 포함, 측정 노이즈)
+- 현재: **terraform-mcp EC2 → VPC 내부 → AWS ALB** (네트워크 노이즈 제거, 정확한 앱 성능 측정)
+- terraform-mcp k6 설치: `sudo dnf install -y https://dl.k6.io/rpm/repo.rpm && sudo dnf install -y k6`
+- 레포 clone: `git clone https://github.com/hskhsmm/1milion-campaign-orchestration-system.git`
+
+---
+
+### 로컬 검증 결과 (2026-04-22, v3 Redis-first)
+
+#### 테스트 환경
+- 로컬 Docker (MySQL, Redis, Kafka, 앱 단일 컨테이너)
+- k6.exe 로컬 실행
+
+#### 캠페인 1 (재고 1,000 / 요청 1,500 / VU 100)
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **807/s** |
+| avg latency | **115ms** |
+| p95 | **219ms** |
+| 202 성공 | **1,000건** (재고 정확히 소진) ✅ |
+| 400 초과 차단 | **500건** ✅ |
+| 재고 초과 발급 | **0건** ✅ |
+
+#### 캠페인 2 (재고 5,000 / 요청 7,000 / VU 200)
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **1,331/s** |
+| avg latency | **147ms** |
+| p95 | **234ms** |
+| 202 성공 | **5,000건** (재고 정확히 소진) ✅ |
+| 400 초과 차단 | **2,000건** ✅ |
+| 재고 초과 발급 | **0건** ✅ |
+
+#### Known Issue 재확인 — 재고 소진 시 active:campaigns SREM → 큐 잔류
+- 재고 소진 시 `SREM active:campaigns` 즉시 실행 → Bridge 드레인 중단 → 큐 잔류
+- `SADD active:campaigns {id}` 수동 복구 시 정상 드레인 → DB 최종 기록 완료 확인
+- 해결: 다음 단계 인프라 작업 시 처리 예정
+
+---
+
+### 4차 부하 테스트 결과 (2026-04-22, AWS 파티션 1개 — v3 Redis-first)
+
+#### 테스트 환경
+- 앱: batch-kafka-app t3.small / DB: db.t3.micro / Redis: ElastiCache Valkey / Kafka: 파티션 1개
+- k6: terraform-mcp EC2 (VPC 내부)
+- 조건: TOTAL_REQUESTS=15,000, 재고=10,000, MAX_VUS=1,000
+
+#### 결과
+
+| 지표 | 3차 (v2, pool=40) | 4차 (v3 Redis-first) | 변화 |
+|------|------------------|---------------------|------|
+| TPS | 323/s | **526/s** | +63% |
+| avg | 3.01s | **1.83s** | -39% |
+| p95 | - | **3.33s** | - |
+| max | 14.53s | **6.48s** | -55% |
+| 재고 초과 발급 | 0건 | **0건** | ✅ |
+
+#### Grafana 핵심 지표
+- HikariCP pending: **거의 0** (3차 ~900 → 완전 해소) ✅
+- HikariCP 활성율: **5% 미만** (3차 100% 포화)
+- Consumer 지연: **800ms** (3차 35s → 44배 개선)
+- Redis Queue 잔류: ~330건 (Known Issue — SREM으로 Bridge 드레인 중단)
+- 5xx 에러: **0** ✅
+
+---
+
+### 5차 부하 테스트 결과 (2026-04-23, AWS 파티션 3개)
+
+#### 테스트 환경 (4차와 동일, 파티션만 3개로 변경)
+- kafka-topics.sh --alter --partitions 3, KafkaConfig 자동 감지 → concurrency=3
+- application-p3.yml 적용 (HikariCP pool=15)
+
+#### 결과
+
+| 지표 | 4차 (파티션 1) | 5차 (파티션 3) | 변화 |
+|------|--------------|--------------|------|
+| TPS | 526/s | **543/s** | +3% |
+| avg | 1.83s | **1.79s** | -2% |
+| p95 | 3.33s | **4.39s** | +32% ↑ |
+| max | 6.48s | **7.41s** | +14% ↑ |
+| 재고 초과 발급 | 0건 | **0건** | ✅ |
+
+#### Grafana 핵심 지표
+- HikariCP pending: **거의 0** 유지 ✅
+- RDS CPU: **4.7%** (4차 26.5% → 대폭 감소 — Consumer 3개 분산 효과)
+- DatabaseConnections: **11.3** (4차 20.2 → 감소)
+- Consumer 지연: **1.25s** (4차 800ms → 소폭 증가, 파티션 편향)
+- Redis Queue: **0 수렴** ✅ (4차 330 잔류 → 이번엔 깨끗하게 소진)
+- 5xx 에러: **0** ✅
+
+#### 결론 — 파티션 확장 효과 미미, 병목은 t3.small 단일 인스턴스
+
+```
+API 병목: t3.small 2 vCPU → 1,000 VU 동시 Redis 연산 + JSON 직렬화로 CPU 포화
+파티션 늘려도 API TPS 한계 동일 → 수평 확장(Auto Scaling + ALB)이 근본 해결
+파티션 5개 테스트 스킵 → 3브로커 + Redis Cluster로 직행
+```
+
+---
+
+### 6차 부하 테스트 결과 (2026-04-23, AWS 파티션 3개 — userId 파티션 키 변경)
+
+#### 변경 사항
+- `ParticipationBridge.java` — 파티션 키 `campaignId` → `userId` 변경
+  - regex 추출 → `JsonMapper` 역직렬화 방식으로 개선 (코드리뷰 반영)
+  - fallback: userId 추출 실패 시 campaignId 사용 유지
+
+#### 테스트 환경 (5차와 동일)
+- 앱: batch-kafka-app t3.small / DB: db.t3.micro / Redis: ElastiCache Valkey / Kafka: 파티션 3개
+- k6: terraform-mcp EC2 (VPC 내부)
+- 조건: TOTAL_REQUESTS=15,000, 재고=10,000, MAX_VUS=1,000
+
+#### 결과
+
+| 지표 | 5차 (campaignId 키) | 6차 (userId 키) | 변화 |
+|------|-------------------|----------------|------|
+| TPS | 543/s | **550/s** | +1.3% |
+| avg | 1.79s | **1.77s** | -1% |
+| p95 | 4.39s | **3.12s** | **-29%** |
+| max | 7.41s | 9.93s | +34% ↑ |
+| 재고 초과 발급 | 0건 | **0건** | ✅ |
+
+#### Grafana 핵심 지표
+- HikariCP pending: **거의 0** 유지 ✅
+- HikariCP 활성율: **0%** ✅
+- Consumer 지연: **200~245ms** (5차 1.25s → **-84%** ✅)
+- RDS CPU: **30.2%** ✅
+- 앱 CPU: **85% spike** → max 9.93s 원인 (t3.small CPU credit 순간 소진)
+- Redis Queue: **0 수렴** ✅
+- 5xx 에러: **0** ✅
+
+#### kafka-exporter 확인 결과
+```
+kafka_consumergroup_lag{partition="0"} 0
+kafka_consumergroup_lag{partition="1"} 0
+kafka_consumergroup_lag{partition="2"} 0
+kafka_consumergroup_members = 3
+```
+- Consumer Group Lag = 0 → Consumer 완벽하게 처리 ✅
+- Grafana "No data" = lag=0이라 표시 안 된 것 (문제 아님)
+
+#### 파티션 분산 이슈 (잔존)
+- partition 0: 92%, partition 1: 2%, partition 2: 1% → 여전히 편향
+- 원인: k6 userId가 1~15,000 순차 정수 → Kafka murmur2 해시가 균등 분산 못함
+- 실제 서비스(userId 넓게 분포)에서는 균등 분산 기대 가능
+- Consumer 지연 -84% 개선은 파티션 분산 효과 확실히 확인
+
+#### p95 개선 해석
+- API 응답(202 반환)은 Redis만 타므로 파티션 키와 무관해야 하나 29% 개선
+- 원인 불명확 — t3.small CPU credit 상태 차이, 환경 변동성으로 추정
+- Consumer 지연 -84%만 파티션 분산의 확실한 성과로 해석
+
+---
+
+## 아키텍처 전환 결정 (2026-04-21 확정)
+
+### 배경
+3차 테스트까지 pool 튜닝 시도 → 효과 없음 데이터로 확인 → 구조적 해결로 방향 전환.
+설계가 흔들리는 게 아니라 **실험 → 측정 → 개선** 사이클을 제대로 밟은 결과.
+
+### 확정 아키텍처 (Redis-first)
+
+```
+POST /participate
+  1. RateLimit     (Redis SET NX EX)
+  2. DECR + LPUSH  (Redis Lua 원자적)
+  3. 202 반환      ← DB 미접촉
+
+Bridge (100ms) → RPOP → Kafka publish
+
+Consumer (10파티션) → DB INSERT SUCCESS 직접
+                    → UNIQUE 제약 멱등성 보장
+                    → 실패 시 DLQ
+```
+
+### 각 선택의 근거
+
+| 결정 | 이유 |
+|------|------|
+| API에서 DB 제거 | HikariCP pending 근본 해결, 업계 표준 (토스/카카오/쿠팡) |
+| Redis List 유지 | Kafka 있으니 Redis Stream 중복, 복잡도만 증가 |
+| Redis Stream 미사용 | Kafka가 영속/재처리/병렬화 역할 이미 담당 |
+| Consumer INSERT | UNIQUE 제약으로 멱등성 충분 |
+| Aurora는 선택 | 10파티션 Consumer 병렬화로 먼저 해결 시도, 부족 시 Aurora |
+
+### 복구 전략 변경
+
+| 항목 | 기존 | 변경 후 |
+|------|------|---------|
+| 복구 기준점 | DB PENDING 레코드 | Kafka at-least-once |
+| Consumer 실패 | Spring Batch PENDING 재처리 | DLQ → Slack 알림 |
+| 중복 방지 | DuplicateKeyException + sequence 비교 | UNIQUE INSERT |
+| Redis 장애 유실 | Spring Batch 복구 | Bridge 100ms 이내 미처리분 (수십 건) |
+
+### 수정 파일 (✅ 완료 — 2026-04-22, feature/redis-first-api, develop PR 예정)
+
+| 파일 | 변경 내용 |
+|------|-----------|
+| `ParticipationEvent.java` | `historyId` → `sequence` (Redis DECR 시점 선착순 번호) |
+| `ParticipationHistoryRepository.java` | `bulkUpdateSuccess`, `bulkUpdateFail` 제거 → `insertSuccess` (INSERT IGNORE) 추가 |
+| `ParticipationService.java` | `insertPendingWithRetry` 제거, DECR → sequence 확정 → LPUSH → 202 반환 |
+| `ParticipationEventConsumer.java` | `bulkUpdateSuccess` → `insertSuccess` 직접 호출, fallbackIndividual 제거 |
+| `PendingRecoveryJobConfig.java` | `bulkUpdateFail` 제거, `historyId` → `sequence` (v3에서 PENDING 없음 → 배치 no-op) |
+
+### 100만 트래픽 로드맵
+
+```
+이번:     API DB 제거           → HikariCP pending 해소, TPS 1,000/s+ 예상
+다음:     10파티션 + 3브로커    → Consumer INSERT 10배 병렬화
+그 다음:  Redis Cluster 3샤드   → SPOF 제거
+선택:     Aurora                → Consumer INSERT 병목 시 적용
+```
+
+**이 3단계(코드 + 파티션 + 클러스터)면 100만 트래픽 달성 가능.**
+Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
+
+### 이슈 및 브랜치
+- 이슈 초안: `issue_draft.md` (루트)
+- 브랜치: `feature/redis-first-api` → develop PR 진행 중 (2026-04-22)
+
+### 테스트 로드맵 (2026-04-23 기준)
+
+> 상세 설계: `TEST_ROADMAP.md` (루트) 참고
+
+| Phase | 핵심 변경 | 상태 |
+|-------|-----------|------|
+| 0 | 기준선 (TPS 246/s, p95 6.34s, pool=10) | ✅ 완료 |
+| 1 | HikariCP prod 기본값 수정 (pool=20) + [TIMING] 로그 | ✅ 완료 (TPS 275/s, p95 5.71s) |
+| 1-b | pool=40 테스트 | ✅ 완료 (TPS 323/s, pending ~900 — pool 효과 없음 확인) |
+| 2 | **API DB 제거 (Redis-first 전환)** | ✅ 완료 — 로컬 검증 완료 (TPS 1,331/s, 정합성 완벽) |
+| 3 | AWS 4차 테스트 — 파티션 1개 (v3 before/after 비교) | ✅ 완료 (TPS 526/s, HikariCP pending 0, 정합성 완벽) |
+| 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
+| 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
+| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 **다음** |
+| 6 | Redis Cluster 3샤드 + AOF | ✅ 코드리뷰 반영 완료 (2026-04-25) — terraform apply 대기 |
+| 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
+| 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
+| 9 | 백만 Spike 최종 검증 | 대기 |
+
+#### k6 테스트 인프라 (2026-04-21 업데이트)
+- `stress-test/k6-load-test.js` — BASE_URL env var 처리, thresholds 추가
+- `stress-test/run-test.sh` — 환경별(local/prod) 실행 스크립트
+  - terraform-mcp에서: `CAMPAIGN_ID=<id> TOTAL_REQUESTS=15000 MAX_VUS=1000 DURATION=60 bash stress-test/run-test.sh prod`
+  - 파라미터 오버라이드: `CAMPAIGN_ID=2 TOTAL_REQUESTS=30000 ./run-test.sh prod`
+
+#### 테스트 전 캠페인 생성 (매번 필요)
+- 캠페인 생성 엔드포인트: **`POST /api/admin/campaigns`** (`/api/campaigns` 아님)
+- terraform-mcp에서 실행:
+  ```bash
+  curl -X POST $BASE_URL/api/admin/campaigns \
+    -H "Content-Type: application/json" \
+    -d '{"name":"load-test","totalStock":10000,"startDate":"2026-04-22","endDate":"2026-04-30"}'
+  ```
+- BASE_URL은 `~/.bashrc`에 영구 저장됨 (`http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com`)
+
+#### 파티션별 yml (단일 브로커 한계 테스트용)
+- `application-p2.yml`, `application-p3.yml`, `application-p5.yml`, `application-p10.yml`
+- Consumer concurrency는 KafkaConfig가 Kafka 토픽 파티션 수 자동 감지 (yml 변경 불필요)
+- yml은 HikariCP + Kafka Producer 튜닝용 (v1 기준으로 작성됨 → v2 테스트 후 조정 필요)
+- 파티션 변경 방법: `kafka-topics.sh --alter --partitions N` → 앱 재시작
+
+---
+
+### 성능 개선 계획 (1차 테스트 기반)
+
+> 상세 설계: `DESIGN_IMPROVEMENTS.md` 참고
+> 설계 철학: 공정성·정합성 우선, 처리량은 안정적이면 충분
+
+#### ~~0순위 — 파티션 키 변경~~ ✅ 완료 (2026-04-23)
+
+- `ParticipationBridge.java` 파티션 키 `campaignId` → `userId` 변경
+- userId 추출: regex → `JsonMapper` 역직렬화 방식 (코드리뷰 반영)
+- 6차 테스트 결과: Consumer 지연 1.25s → 200ms (-84%) 확인
+
+#### 1순위 — 코드 개선 (인프라 무관, 즉시 적용 가능)
+
+| 항목 | 내용 | 효과 |
+|------|------|------|
+| 캠페인 자동 종료 + SISMEMBER | Lua로 SISMEMBER + DECR 원자화, remaining==0 시 DB CLOSED + active:campaigns 제거 | 재고 소진 후 Redis 낭비 제거, Bridge 빈 큐 순회 제거 |
+| totalStock Redis 캐싱 | 캠페인 생성 시 `total:campaign:{id}` 저장, Lua 1번으로 SISMEMBER + DECR + GET 통합 | `findById()` DB 조회 완전 제거 → 커넥션 풀 INSERT 전용 확보 |
+
+**기대 효과:**
+```
+DB 커넥션 사용: 25,000번 → 10,000번 (60% 감소)
+avg latency: 3.94s → 2~3s
+hikaricp_connections_pending 감소
+```
+
+**검증 순서:** 단위 테스트 → 통합 테스트 → k6 before/after 비교 → hikaricp 지표 확인
+
+#### 2순위 — 인프라 + 코드 세트
+
+| 항목 | 내용 | 선행 조건 |
+|------|------|-----------|
+| Redis Cluster + AOF | ElastiCache Cluster 3샤드, AOF 활성화 | elasticache.tf 수정 |
+| Intent Key (의도 기록) | DECR + intent key Lua 원자화, 앱 크래시 시 double DECR 방지 | Redis Cluster + AOF 필수 |
+
+#### 3순위 — Spring Batch 안전망
+
+| 항목 | 내용 |
+|------|------|
+| 재고 복구 스케줄러 | Redis 키 없을 때 `total - SUCCESS - PENDING` 공식으로 자동 복구 |
+| 5분 초과 PENDING 재처리 | ItemReader(PENDING 조회) → ItemProcessor(Queue 재발행) → ItemWriter(FAIL UPDATE) |
+
+#### 인프라 개선 (DB 병목 근본 해결)
+
+| 항목 | 효과 | 비고 |
+|------|------|------|
+| ~~EBS gp2 → **gp3** 변경~~ ✅ 완료 | IOPS 3,000 안정 보장 (버스트 없이) | 콘솔 + rds.tf 반영 완료 |
+| RDS Proxy 추가 | 앱 2대 이상 시 커넥션 멀티플렉싱 | 앱 스케일아웃 시 필수 |
+| RDS → **Aurora** 전환 | write TPS 최대 5배, 분산 스토리지 I/O | 코드 변경 없음, 엔드포인트만 교체 |
+
+> ~~현재 db.t3.micro EBS gp2~~ → gp3 전환 완료 (IOPS 3,000 안정 보장)
+> 코드 개선(커넥션 절약) + Aurora(INSERT 속도) 추가 개선 가능
 
 ### Phase 1: Terraform (infra/ 전체 작성)
 

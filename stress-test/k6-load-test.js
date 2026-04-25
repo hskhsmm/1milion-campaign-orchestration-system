@@ -15,7 +15,7 @@ const MAX_VUS = parseInt(__ENV.MAX_VUS) || 5000;     // 최대 가상 사용자 
 const TOTAL_REQUESTS = parseInt(__ENV.TOTAL_REQUESTS) || 30000; // 총 요청 수
 const PARTITIONS = parseInt(__ENV.PARTITIONS) || 3;  // Kafka 파티션 수
 
-console.log(`🚀 Kafka 부하 테스트 설정: 정확히 ${TOTAL_REQUESTS}개 요청, 목표 ${RATE}/s, ${DURATION}s, ${PARTITIONS} 파티션`);
+console.log(`[k6] total=${TOTAL_REQUESTS}, rate=${RATE}/s, duration=${DURATION}s, partitions=${PARTITIONS}`);
 
 // 사전 생성된 userId 배열 (정확히 TOTAL_REQUESTS개)
 const userIds = new SharedArray('userIds', function () {
@@ -36,10 +36,15 @@ export const options = {
       maxDuration: `${DURATION * 2}s`, // 최대 허용 시간 (duration의 2배 여유)
     },
   },
+  thresholds: {
+    http_req_failed: ['rate<0.01'],           // 에러율 1% 미만
+    http_req_duration: ['p(95)<1000'],        // p95 1초 미만
+    participation_success: ['count>9900'],    // 성공 건수 기준
+  },
 };
 
-const BASE_URL = 'http://localhost:8080';
-const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1; // 환경변수로 캠페인 ID 전달 가능
+const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
+const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1;
 
 export default function () {
   // 전역 iteration 인덱스로 userId 결정 (VU 간 중복 없이 유니크)

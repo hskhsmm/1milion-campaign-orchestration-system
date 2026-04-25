@@ -36,8 +36,8 @@ dependencies {
 	// Bridge → Kafka 배치 발행, Consumer PENDING 확정 처리
 	implementation 'org.springframework.kafka:spring-kafka'
 
-	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션
-	implementation 'org.flywaydb:flyway-core'
+	// DB 스키마 버전 관리 — V002__add_pending_and_constraints.sql 등 마이그레이션 작업
+	implementation 'org.springframework.boot:spring-boot-starter-flyway'
 	implementation 'org.flywaydb:flyway-mysql'
 
 	// PendingRetryScheduler(@Scheduled), RedisSyncScheduler(@Scheduled) — @EnableScheduling 활성화
@@ -49,6 +49,7 @@ dependencies {
 	// /actuator/prometheus 엔드포인트 — Micrometer → Prometheus 스크래핑
 	// 모니터링 문서 2장: Spring Boot(Micrometer) → Prometheus → Grafana 파이프라인 필수
 	implementation 'io.micrometer:micrometer-registry-prometheus'
+	implementation 'io.micrometer:micrometer-registry-cloudwatch2'  // application-prod.yml cloudwatch.enabled: true
 
 	// /actuator/health, /actuator/metrics — 헬스체크 및 커스텀 메트릭(TPS, p99, DLQ 등) 노출
 	implementation 'org.springframework.boot:spring-boot-starter-actuator'

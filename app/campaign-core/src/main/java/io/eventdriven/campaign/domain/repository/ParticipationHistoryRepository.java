@@ -40,27 +40,29 @@ public interface ParticipationHistoryRepository extends JpaRepository<Participat
     Long countFailByCampaignId(@Param("campaignId") Long campaignId);
 
     /**
-     * Consumer 배치 처리 후 한 번에 SUCCESS 업데이트
-     * ex) WHERE id IN (1, 2, 3, ... 500) → DB 1번 왕복
+     * v3 — Consumer 직접 INSERT SUCCESS (PENDING 없음)
+     * UNIQUE(campaign_id, user_id) 중복 시 무시 → 멱등성 보장
      */
     @Modifying
     @Transactional
-    @Query("UPDATE ParticipationHistory ph SET ph.status = 'SUCCESS' WHERE ph.id IN :historyIds AND ph.status = 'PENDING'")
-    int bulkUpdateSuccess(@Param("historyIds") List<Long> historyIds);
-
-    /**
-     * Consumer 배치 처리 실패 시 한 번에 FAIL 업데이트
-     * PENDING 상태로 방치 시 Spring Batch 재처리 대상이 되므로 명시적으로 마킹
-     */
-    @Modifying
-    @Transactional
-    @Query("UPDATE ParticipationHistory ph SET ph.status = 'FAIL' WHERE ph.id IN :historyIds")
-    int bulkUpdateFail(@Param("historyIds") List<Long> historyIds);
+    @Query(value = """
+        INSERT IGNORE INTO participation_history
+            (campaign_id, user_id, sequence, status, created_at)
+        VALUES (:campaignId, :userId, :sequence, 'SUCCESS', NOW())
+        """, nativeQuery = true)
+    void insertSuccess(
+        @Param("campaignId") Long campaignId,
+        @Param("userId")     Long userId,
+        @Param("sequence")   Long sequence
+    );
 
     /**
      * PollingController DB fallback 및 중복 참여 확인용
      */
     Optional<ParticipationHistory> findByCampaignIdAndUserId(Long campaignId, Long userId);
+
+    // 5분 초과 PENDING 재처리 배치용
+    List<ParticipationHistory> findByStatusAndCreatedAtBefore(ParticipationStatus status, LocalDateTime cutoff);
 
     /**
      * 캠페인별 참여 이력 조회 (Kafka 메시지 생성 시간 순서대로, 순서 분석용)

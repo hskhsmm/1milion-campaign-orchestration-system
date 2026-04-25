@@ -14,7 +14,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 /**
  * 배치 메타데이터 정리 잡 설정
  * - 90일 이상 오래된 Spring Batch 메타데이터 자동 삭제
- * - 스케줄러를 통해 주기적으로 실행 (예: 매주 일요일)
+ * - 스케줄러를 통해 주기적으로 실행 (예: 매주 일요일)..
  */
 @Configuration
 public class BatchMetadataCleanupJobConfig {

@@ -2,14 +2,11 @@
 # 사용법: SPRING_PROFILES_ACTIVE=prod,p3
 
 spring:
-  kafka:
-    listener:
-      concurrency: 3  # Consumer 스레드 3개 (파티션 수와 동일)
-
+  # concurrency는 KafkaConfig가 토픽 파티션 수 자동 감지 → 여기서 설정 불필요
   datasource:
     hikari:
-      maximum-pool-size: 30     # 25 → 30 (Consumer 스레드 3개 + 여유)
-      minimum-idle: 15
+      maximum-pool-size: 15     # v3 Redis-first: Consumer INSERT 전용, Consumer 3개 × 여유
+      minimum-idle: 8
       connection-timeout: 20000
       idle-timeout: 300000
       max-lifetime: 1800000
@@ -29,9 +26,7 @@ kafka:
     session-timeout-ms: 45000    # 45초 (유지)
 
 # 실험 메모
-# 파티션: 3개
-# Consumer 스레드: 3개 (자동)
-# 예상 TPS: 2,000 ~ 2,500
-# 예상 CPU: 60~65%
-# 순서 보장: 파티션별로만 보장
-# 파티션 편향 가능성 있음 (해시 함수 의존)
+# 파티션: 3개 (kafka-topics.sh --alter --partitions 3 후 앱 재시작)
+# Consumer 스레드: 3개 (KafkaConfig 자동 감지)
+# HikariCP: API DB 제거(v3)로 Consumer INSERT 전용 → pool 15로 충분
+# 순서 보장: 파티션별로만 보장 (파티션 편향 가능성 있음)

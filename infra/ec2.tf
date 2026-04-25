@@ -165,6 +165,10 @@ resource "aws_instance" "batch_kafka_app" {
   tags = {
     Name = "batch-kafka-app"
   }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
+  }
 }
 
 # ──────────────────────────────────────────
@@ -188,6 +192,58 @@ resource "aws_instance" "kafka_1" {
 
   tags = {
     Name = "kafka-1"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
+  }
+}
+
+resource "aws_instance" "kafka_2" {
+  ami                         = "ami-0b818a04bc9c2133c"
+  instance_type               = "t3.small"
+  subnet_id                   = aws_subnet.public_2b.id
+  vpc_security_group_ids      = [aws_security_group.kafka.id]
+  iam_instance_profile        = aws_iam_instance_profile.batch_kafka_app.name
+  associate_public_ip_address = true
+  private_ip                  = "172.31.16.164"
+
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 8
+    encrypted   = false
+  }
+
+  tags = {
+    Name = "kafka-2"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
+  }
+}
+
+resource "aws_instance" "kafka_3" {
+  ami                         = "ami-0b818a04bc9c2133c"
+  instance_type               = "t3.small"
+  subnet_id                   = aws_subnet.public_2c.id
+  vpc_security_group_ids      = [aws_security_group.kafka.id]
+  iam_instance_profile        = aws_iam_instance_profile.batch_kafka_app.name
+  associate_public_ip_address = true
+  private_ip                  = "172.31.32.164"
+
+  root_block_device {
+    volume_type = "gp3"
+    volume_size = 8
+    encrypted   = false
+  }
+
+  tags = {
+    Name = "kafka-3"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
   }
 }
 
@@ -218,5 +274,9 @@ resource "aws_instance" "terraform_mcp" {
   tags = {
     Name    = "terraform-mcp"
     Purpose = "MCP-Server"
+  }
+
+  lifecycle {
+    ignore_changes = [associate_public_ip_address]
   }
 }
