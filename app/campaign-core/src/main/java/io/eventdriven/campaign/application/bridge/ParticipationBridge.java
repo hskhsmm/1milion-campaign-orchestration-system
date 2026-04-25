@@ -1,6 +1,7 @@
 package io.eventdriven.campaign.application.bridge;
 
 import io.eventdriven.campaign.application.event.ParticipationEvent;
+import io.eventdriven.campaign.application.service.RedisStockService;
 import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.config.KafkaConfig;
 import io.micrometer.core.instrument.Counter;
@@ -39,6 +40,7 @@ public class ParticipationBridge {
 
     private final RedisTemplate<String, String> redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
+    private final RedisStockService redisStockService;
     private final SlackNotificationService slackNotificationService;
     private final MeterRegistry meterRegistry;  // Spring Bean → 생성자 주입
     private final JsonMapper jsonMapper;
@@ -57,11 +59,13 @@ public class ParticipationBridge {
 
     public ParticipationBridge(RedisTemplate<String, String> redisTemplate,
                                KafkaTemplate<String, String> kafkaTemplate,
+                               RedisStockService redisStockService,
                                SlackNotificationService slackNotificationService,
                                MeterRegistry meterRegistry,
                                JsonMapper jsonMapper) {
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
+        this.redisStockService = redisStockService;
         this.slackNotificationService = slackNotificationService;
         this.meterRegistry = meterRegistry;  // 1. Bean 주입 완료
         this.jsonMapper = jsonMapper;
@@ -104,7 +108,13 @@ public class ParticipationBridge {
         for (int i = 0; i < dynamicBatchSize; i++) {
             String message = redisTemplate.opsForList().rightPop(queueKey);
             if (message == null) {
-                break; // 큐 소진 → 다음 캠페인으로
+                // 큐가 비었고 active flag도 없으면 재고까지 소진된 캠페인
+                // → Lua가 DEL한 active:campaign:{id}를 확인 후 전역 Set에서도 제거
+                if (!redisStockService.isActive(campaignId)) {
+                    redisStockService.deactivateCampaign(campaignId);
+                    log.info("캠페인 {} 재고 소진 + 큐 드레인 완료 → active:campaigns 제거", campaignId);
+                }
+                break;
             }
             publishWithRetry(campaignId, message);
         }
