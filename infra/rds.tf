@@ -39,7 +39,7 @@ resource "aws_db_instance" "batch_kafka_db" {
   }
 
   # 파라미터/옵션 그룹
-  parameter_group_name = "default.mysql8.0"
+  parameter_group_name = "slow"
   option_group_name    = "default:mysql-8-0"
 
   tags = {}

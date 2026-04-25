@@ -90,7 +90,7 @@ resource "aws_security_group" "rds_mysql" {
   tags = {}
 }
 
-# Kafka 보안그룹 - app-sg에서 9092, 9094 허용
+# Kafka 보안그룹 - app/monitoring은 9092만, broker/controller 내부 통신은 self 허용
 resource "aws_security_group" "kafka" {
   name        = "Kafka-SG"
   description = "launch-wizard-1 created 2025-12-27T06:24:22.804Z"
@@ -112,26 +112,19 @@ resource "aws_security_group" "kafka" {
   }
 
   ingress {
-    from_port       = 9094
-    to_port         = 9094
-    protocol        = "tcp"
-    security_groups = [aws_security_group.app.id]
+    from_port   = 9092
+    to_port     = 9092
+    protocol    = "tcp"
+    self        = true
+    description = "Broker internal communication"
   }
 
   ingress {
-    from_port       = 9092
-    to_port         = 9092
-    protocol        = "tcp"
-    security_groups = [aws_security_group.kafka.id]
-    description     = "Broker internal communication"
-  }
-
-  ingress {
-    from_port       = 9094
-    to_port         = 9094
-    protocol        = "tcp"
-    security_groups = [aws_security_group.kafka.id]
-    description     = "Controller quorum communication"
+    from_port   = 9094
+    to_port     = 9094
+    protocol    = "tcp"
+    self        = true
+    description = "Controller quorum communication"
   }
 
   egress {
