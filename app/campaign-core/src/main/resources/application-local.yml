@@ -50,6 +50,15 @@ spring:
       pool:
         size: 2
 
+  data:
+    redis:
+      cluster:
+        # 로컬 표준: docker compose up (app 서비스 포함) — IDE 직접 실행 시 cluster redirect가
+        # redis-1/2/3 호스트명으로 돌아와 연결 불가. 반드시 compose 안에서 실행할 것.
+        # docker-compose.yml의 SPRING_DATA_REDIS_CLUSTER_NODES 환경변수가 이 값을 오버라이드함.
+        nodes: localhost:7001,localhost:7002,localhost:7003
+        max-redirects: 3
+
   kafka:
     bootstrap-servers: localhost:9092
     consumer:

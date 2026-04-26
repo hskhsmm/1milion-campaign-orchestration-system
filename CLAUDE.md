@@ -174,14 +174,55 @@ Kafka Consumer (10 파티션)
 - Slack Incoming Webhook URL 발급 → SSM `/batch-kafka/prod/SLACK_WEBHOOK_URL` 등록
 - SSM에 `KAFKA_BROKER_1`, `KAFKA_BROKER_2`, `KAFKA_BROKER_3` 등록 (3-broker 구성 후)
 
-### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당, A/B 완성 후)
-- [ ] `elasticache.tf` 수정 (단일 노드 → Cluster 모드 3샤드)
-- [ ] `RedisConfig.java` 수정 (RedisClusterConfiguration 적용)
-- [ ] `application-prod.yml` Redis Cluster 엔드포인트 반영
+### #5 Redis 클러스터링 — ElastiCache Cluster 모드 전환 (hskhsmm 담당) ✅ 코드 완료 (2026-04-25)
 
-### #6 Kafka 3-broker (hskhsmm 담당, Redis 클러스터링 이후)
-- [ ] EC2 2대 추가 (kafka-2, kafka-3) — `ec2.tf`
-- [ ] `application-prod.yml` broker 설정 반영
+#### ✅ 완료
+- [x] `scripts/check-and-decr.lua` 삭제 — v3에서 미사용 dead code
+- [x] `scripts/check-decr-total.lua` — CROSSSLOT 해결: `active:campaigns`(전역 Set) → `active:campaign:{id}`(해시태그 플래그)로 교체, `SISMEMBER`→`EXISTS`, `SREM`→`DEL`
+- [x] `RedisConfig.java` — `checkAndDecrScript` Bean 제거
+- [x] `RedisStockService.java` — 키 해시태그 추가 (`stock:campaign:{id}`, `total:campaign:{id}`), `getActiveFlagKey()` 신규, `activateCampaign()`/`deactivateCampaign()` 전역 Set + 플래그 둘 다 처리, `isActive()` 신규
+- [x] `CampaignService.java` — `redisTemplate` 직접 의존 제거, `activateCampaign()` 위임
+- [x] `ParticipationBridge.java` — RPOP null 시 `isActive()` 확인 → `deactivateCampaign()` cleanup (Known Issue 해결)
+- [x] `docker-compose.yml` — 단일 redis → redis-1/2/3 + redis-cluster-init (3노드 로컬 클러스터)
+- [x] `application-local.yml` — `cluster.nodes: localhost:7001,7002,7003` 추가 (로컬 표준은 compose 실행)
+- [x] `application-prod.yml` — `host/port` → `cluster.nodes: ${SPRING_DATA_REDIS_CLUSTER_NODES}`
+- [x] `deploy/scripts/beforeInstall.sh` — `SPRING_DATA_REDIS_HOST` → `SPRING_DATA_REDIS_CLUSTER_NODES`, `REDIS_EXPORTER_ADDR`, `SLACK_WEBHOOK_URL` 추가
+- [x] `deploy/docker-compose.prod.yml` — redis-exporter `REDIS_ADDR` SSM 주입, `REDIS_EXPORTER_IS_CLUSTER: "true"` 추가
+- [x] `infra/elasticache.tf` — CME 3샤드 1레플리카 + AOF 커스텀 파라미터 그룹 (`valkey7-cluster-aof`)
+
+#### ✅ 코드리뷰 반영 완료 (2026-04-25)
+- [x] `infra/elasticache.tf` — `aws_ssm_parameter` 2개 추가: terraform apply 시 SSM 자동 등록
+  - `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` — configuration endpoint 기반 자동 생성
+  - `/batch-kafka/prod/REDIS_EXPORTER_ADDR` — 동일
+  - `lifecycle { ignore_changes = [value] }` — 수동 업데이트 보호
+- [x] `infra/elasticache.tf` — `output "redis_configuration_endpoint"` 추가
+- [x] `docker-compose.yml` — `redis-cluster-init` idempotent 처리: 클러스터 존재 시 create 생략
+- [x] `application-local.yml` — IDE 직접 실행 불가 이유 주석 추가 (cluster redirect 문제)
+
+#### ✅ terraform apply 완료 (2026-04-26)
+- CMD → CME 전환은 in-place 불가 → `terraform destroy -target=...redis` 후 신규 생성
+- AOF 커스텀 파라미터 그룹 제거: ElastiCache CME에서 appendonly 파라미터 수정 불가 (AWS 자체 관리)
+  - 로컬 docker-compose.yml은 `--appendonly yes` 유지
+  - `default.valkey7.cluster.on` 기본 그룹 사용 (Valkey는 standalone/CME 모두 family `valkey7` 하나)
+  - `valkey7.cluster.on` family는 존재하지 않음 — AWS CLI describe-cache-parameter-groups로 확인
+- SSM null 조건 처리 추가: plan 시 configuration_endpoint_address null 에러 방지
+- ElastiCache CME 3샤드 1레플리카 생성 완료
+  - SSM `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 자동 등록 ✅
+  - SSM `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 자동 등록 ✅
+- 비용: cache.t3.micro × 6개 (3샤드 × primary+replica) — 단일 노드 대비 약 6배
+  - 작업 후 비용 절감 시: `terraform destroy -target=aws_elasticache_replication_group.redis`
+
+#### 📌 남은 작업
+- `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 삭제 (구 단일 노드 키, 앱에서 미사용)
+- feature/redis-cluster → develop → main 머지 → CI/CD 재배포
+
+### #6 Kafka 3-broker (hskhsmm 담당) 🔄 진행 중 (2026-04-26)
+- [x] EC2 kafka-2 (172.31.16.164, public_2b), kafka-3 (172.31.32.164, public_2c) 추가 — `ec2.tf`
+- [x] Kafka SG self-ingress 추가 (9092 브로커 내부, 9094 controller quorum) — `security_groups.tf`
+- [x] RDS slow query 파라미터 그룹 (`aws_db_parameter_group.slow`) — `rds.tf`
+- [x] `application-prod.yml` — 10파티션 3브로커 기준 설정 반영 (max-poll-records: 100, buffer-memory: 512MB 등)
+- [ ] kafka-2, kafka-3 브로커 직접 설치 및 KRaft 3브로커 클러스터 구성
+- [ ] SSM `SPRING_KAFKA_BOOTSTRAP_SERVERS` 3브로커 값으로 업데이트
 
 ### Spring Batch v2 PENDING 재처리 (A/B 머지 + 인프라 구성 후)
 - [ ] ItemReader: 5분 초과 PENDING 조회
@@ -587,6 +628,60 @@ API 병목: t3.small 2 vCPU → 1,000 VU 동시 Redis 연산 + JSON 직렬화로
 
 ---
 
+### 6차 부하 테스트 결과 (2026-04-23, AWS 파티션 3개 — userId 파티션 키 변경)
+
+#### 변경 사항
+- `ParticipationBridge.java` — 파티션 키 `campaignId` → `userId` 변경
+  - regex 추출 → `JsonMapper` 역직렬화 방식으로 개선 (코드리뷰 반영)
+  - fallback: userId 추출 실패 시 campaignId 사용 유지
+
+#### 테스트 환경 (5차와 동일)
+- 앱: batch-kafka-app t3.small / DB: db.t3.micro / Redis: ElastiCache Valkey / Kafka: 파티션 3개
+- k6: terraform-mcp EC2 (VPC 내부)
+- 조건: TOTAL_REQUESTS=15,000, 재고=10,000, MAX_VUS=1,000
+
+#### 결과
+
+| 지표 | 5차 (campaignId 키) | 6차 (userId 키) | 변화 |
+|------|-------------------|----------------|------|
+| TPS | 543/s | **550/s** | +1.3% |
+| avg | 1.79s | **1.77s** | -1% |
+| p95 | 4.39s | **3.12s** | **-29%** |
+| max | 7.41s | 9.93s | +34% ↑ |
+| 재고 초과 발급 | 0건 | **0건** | ✅ |
+
+#### Grafana 핵심 지표
+- HikariCP pending: **거의 0** 유지 ✅
+- HikariCP 활성율: **0%** ✅
+- Consumer 지연: **200~245ms** (5차 1.25s → **-84%** ✅)
+- RDS CPU: **30.2%** ✅
+- 앱 CPU: **85% spike** → max 9.93s 원인 (t3.small CPU credit 순간 소진)
+- Redis Queue: **0 수렴** ✅
+- 5xx 에러: **0** ✅
+
+#### kafka-exporter 확인 결과
+```
+kafka_consumergroup_lag{partition="0"} 0
+kafka_consumergroup_lag{partition="1"} 0
+kafka_consumergroup_lag{partition="2"} 0
+kafka_consumergroup_members = 3
+```
+- Consumer Group Lag = 0 → Consumer 완벽하게 처리 ✅
+- Grafana "No data" = lag=0이라 표시 안 된 것 (문제 아님)
+
+#### 파티션 분산 이슈 (잔존)
+- partition 0: 92%, partition 1: 2%, partition 2: 1% → 여전히 편향
+- 원인: k6 userId가 1~15,000 순차 정수 → Kafka murmur2 해시가 균등 분산 못함
+- 실제 서비스(userId 넓게 분포)에서는 균등 분산 기대 가능
+- Consumer 지연 -84% 개선은 파티션 분산 효과 확실히 확인
+
+#### p95 개선 해석
+- API 응답(202 반환)은 Redis만 타므로 파티션 키와 무관해야 하나 29% 개선
+- 원인 불명확 — t3.small CPU credit 상태 차이, 환경 변동성으로 추정
+- Consumer 지연 -84%만 파티션 분산의 확실한 성과로 해석
+
+---
+
 ## 아키텍처 전환 결정 (2026-04-21 확정)
 
 ### 배경
@@ -664,11 +759,13 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 1-b | pool=40 테스트 | ✅ 완료 (TPS 323/s, pending ~900 — pool 효과 없음 확인) |
 | 2 | **API DB 제거 (Redis-first 전환)** | ✅ 완료 — 로컬 검증 완료 (TPS 1,331/s, 정합성 완벽) |
 | 3 | AWS 4차 테스트 — 파티션 1개 (v3 before/after 비교) | ✅ 완료 (TPS 526/s, HikariCP pending 0, 정합성 완벽) |
-| 4 | AWS 5차 테스트 — 파티션 3개 | ✅ 완료 (TPS 543/s — 파티션 효과 미미, t3.small 단일 인스턴스 한계 확인) |
-| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 다음 (인프라만, 코드 변경 없음) |
-| 6 | Redis Cluster 3샤드 | 대기 (elasticache.tf 수정) |
-| 7 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
-| 8 | 백만 Spike 최종 검증 | 대기 |
+| 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
+| 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
+| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 진행 중 (kafka-2/3 EC2 생성 완료, 브로커 설치 대기) |
+| 6 | Redis Cluster 3샤드 | ✅ terraform apply 완료 (2026-04-26) |
+| 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
+| 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
+| 9 | 백만 Spike 최종 검증 | 대기 |
 
 #### k6 테스트 인프라 (2026-04-21 업데이트)
 - `stress-test/k6-load-test.js` — BASE_URL env var 처리, thresholds 추가
@@ -699,16 +796,11 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 > 상세 설계: `DESIGN_IMPROVEMENTS.md` 참고
 > 설계 철학: 공정성·정합성 우선, 처리량은 안정적이면 충분
 
-#### 0순위 — 파티션 키 변경 (3브로커 구성 전 필수 확인)
+#### ~~0순위 — 파티션 키 변경~~ ✅ 완료 (2026-04-23)
 
-**현재 문제**: 파티션 키 = `String.valueOf(campaignId)` → 같은 캠페인 요청이 항상 같은 파티션으로 몰림
-- 실제 서비스 시나리오: 에어팟 선착순처럼 단일 캠페인에 100만 명 동시 요청
-- 파티션 3개여도 사실상 1개 파티션만 사용 → 파티션 확장 효과 없음
-- 5차 테스트(파티션 3개)에서 TPS +3%만 나온 원인
-
-**해결 방향**: v3에서 공정성(선착순)이 Redis DECR 시점에 이미 확정 → Kafka 파티션 순서 보장 불필요
-- 파티션 키를 `userId` 또는 랜덤으로 변경 → 파티션 3개가 진짜 분산 동작
-- 3브로커 구성 후 테스트 시 이 변경 적용 후 before/after 비교 필요
+- `ParticipationBridge.java` 파티션 키 `campaignId` → `userId` 변경
+- userId 추출: regex → `JsonMapper` 역직렬화 방식 (코드리뷰 반영)
+- 6차 테스트 결과: Consumer 지연 1.25s → 200ms (-84%) 확인
 
 #### 1순위 — 코드 개선 (인프라 무관, 즉시 적용 가능)
 
