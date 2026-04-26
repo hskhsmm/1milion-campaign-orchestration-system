@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'app/campaign-core/**'
+      - 'stress-test/**'
       - '.github/workflows/**'
 
 # 배포 중 새 push 발생 시 기존 배포 취소하고 새 배포 실행
@@ -72,9 +73,16 @@ jobs:
       # 6. CodeDeploy 번들 zip 생성
       - name: Zip deployment bundle
         run: |
-          zip -r deploy.zip \
+          rm -rf bundle deploy.zip
+          mkdir -p bundle
+          cp appspec.yml bundle/
+          cp -r deploy bundle/
+          cp -r ../../stress-test bundle/
+          cd bundle
+          zip -r ../deploy.zip \
             appspec.yml \
-            deploy/
+            deploy/ \
+            stress-test/
 
       # 7. S3 업로드
       - name: Upload to S3
