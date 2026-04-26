@@ -216,13 +216,15 @@ Kafka Consumer (10 파티션)
 - `/batch-kafka/prod/SPRING_DATA_REDIS_HOST` SSM 삭제 (구 단일 노드 키, 앱에서 미사용)
 - feature/redis-cluster → develop → main 머지 → CI/CD 재배포
 
-### #6 Kafka 3-broker (hskhsmm 담당) 🔄 진행 중 (2026-04-26)
+### #6 Kafka 3-broker (hskhsmm 담당) ✅ 완료 (2026-04-26)
 - [x] EC2 kafka-2 (172.31.16.164, public_2b), kafka-3 (172.31.32.164, public_2c) 추가 — `ec2.tf`
 - [x] Kafka SG self-ingress 추가 (9092 브로커 내부, 9094 controller quorum) — `security_groups.tf`
 - [x] RDS slow query 파라미터 그룹 (`aws_db_parameter_group.slow`) — `rds.tf`
 - [x] `application-prod.yml` — 10파티션 3브로커 기준 설정 반영 (max-poll-records: 100, buffer-memory: 512MB 등)
-- [ ] kafka-2, kafka-3 브로커 직접 설치 및 KRaft 3브로커 클러스터 구성
-- [ ] SSM `SPRING_KAFKA_BOOTSTRAP_SERVERS` 3브로커 값으로 업데이트
+- [x] kafka-2, kafka-3 브로커 직접 설치 및 KRaft 3브로커 클러스터 구성
+  - cluster.id: 9CA3K977Q5GdJDSdlKZVEw, MaxFollowerLag: 0 (브로커 전체 정상)
+- [x] 토픽 campaign-participation-topic — PartitionCount: 10, ReplicationFactor: 3, min.insync.replicas=2
+- [x] SSM `SPRING_KAFKA_BOOTSTRAP_SERVERS` 3브로커 값으로 업데이트
 
 ### Spring Batch v2 PENDING 재처리 (A/B 머지 + 인프라 구성 후)
 - [ ] ItemReader: 5분 초과 PENDING 조회
@@ -628,6 +630,61 @@ API 병목: t3.small 2 vCPU → 1,000 VU 동시 Redis 연산 + JSON 직렬화로
 
 ---
 
+### 7차 부하 테스트 결과 (2026-04-26, AWS 파티션 10개 — 3브로커 + Redis CME 3샤드, 12만)
+
+#### 테스트 환경
+- 앱: batch-kafka-app t3.small / DB: db.t3.micro / Redis: ElastiCache CME 3샤드
+- Kafka: 3-broker KRaft, 파티션 10개, replication-factor=3
+- k6: terraform-mcp EC2 (VPC 내부)
+- 조건: TOTAL_REQUESTS=120,000, 재고=100,000, MAX_VUS=1,000
+
+#### 결과
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **~1,150/s** (역대 최고) |
+| 앱 CPU | **90%** 병목 확인 |
+| HikariCP pending | 거의 0 ✅ |
+| RDS CPU | 낮음 ✅ |
+| SUCCESS | 100,000건 ✅ |
+| 재고 초과 발급 | 0건 ✅ |
+
+---
+
+### 8차 부하 테스트 결과 (2026-04-26, AWS 파티션 10개 — 50만)
+
+#### 테스트 환경 (7차와 동일)
+- 조건: TOTAL_REQUESTS=600,000, 재고=500,000, MAX_VUS=2,000, DURATION=1,200s
+
+#### 결과
+
+| 지표 | 값 |
+|------|-----|
+| TPS | **~1,220/s** (평균) |
+| avg | 1.63s |
+| p95 | 2.81s |
+| max | 7.46s |
+| 앱 CPU | **80%** 병목 확인 |
+| HikariCP pending | 거의 0 ✅ |
+| HikariCP 활성율 | ~50% ✅ (이전 100% 포화 → 해소) |
+| RDS CPU | **9.44%** ✅ (DB 완전 여유) |
+| WriteIOPS | 피크 240/s (Consumer 500K INSERT 처리) |
+| Redis Queue | 피크 100K → 테스트 종료 후 0 수렴 ✅ |
+| Bridge 드레인 사이클 | 최대 4.17분 (큐 100K 소진 시간) |
+| Consumer 지연 | 150ms → 1.25s (큐 쌓이는 구간 증가) |
+| 5xx 에러 | 0건 ✅ |
+| SUCCESS | 500,000건 ✅ (정합성 완벽) |
+| 재고 초과 발급 | 0건 ✅ |
+| 완료 시간 | 8분 11초 |
+
+#### 확정 병목 분석
+- 앱 CPU 80~90% 고착 (7차/8차 모두) → t3.small 단일 인스턴스 한계
+- HikariCP pending 거의 0 → DB 병목 아님 (v3 Redis-first 효과 완벽 유지)
+- RDS CPU 9.44% → DB 서버 여유 충분
+- **결론**: 수직 확장(스케일업) 대신 ASG 수평 확장으로 해결 → #7 이슈 작성 완료
+
+---
+
 ### 6차 부하 테스트 결과 (2026-04-23, AWS 파티션 3개 — userId 파티션 키 변경)
 
 #### 변경 사항
@@ -748,7 +805,7 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 - 이슈 초안: `issue_draft.md` (루트)
 - 브랜치: `feature/redis-first-api` → develop PR 진행 중 (2026-04-22)
 
-### 테스트 로드맵 (2026-04-23 기준)
+### 테스트 로드맵 (2026-04-26 기준)
 
 > 상세 설계: `TEST_ROADMAP.md` (루트) 참고
 
@@ -761,9 +818,11 @@ Aurora는 Consumer DB INSERT가 병목으로 확인될 때 결정.
 | 3 | AWS 4차 테스트 — 파티션 1개 (v3 before/after 비교) | ✅ 완료 (TPS 526/s, HikariCP pending 0, 정합성 완벽) |
 | 4 | AWS 5차 테스트 — 파티션 3개 (campaignId 키) | ✅ 완료 (TPS 543/s — 파티션 편향, Consumer 지연 1.25s) |
 | 4-b | AWS 6차 테스트 — 파티션 3개 (userId 키) | ✅ 완료 (TPS 550/s, Consumer 지연 200ms, p95 3.12s) |
-| 5 | Kafka 3브로커 + 파티션 10개 | 🔄 진행 중 (kafka-2/3 EC2 생성 완료, 브로커 설치 대기) |
+| 5 | Kafka 3브로커 + 파티션 10개 | ✅ 완료 (2026-04-26, 파티션 10개/RF=3/ISR=3 확인) |
+| 5-a | 7차 테스트 — 12만, 파티션 10개, 3브로커 | ✅ 완료 (TPS ~1,150/s, CPU 90%, 정합성 완벽) |
+| 5-b | 8차 테스트 — 50만, 파티션 10개, 3브로커 | ✅ 완료 (TPS ~1,220/s, CPU 80%, 정합성 완벽) |
 | 6 | Redis Cluster 3샤드 | ✅ terraform apply 완료 (2026-04-26) |
-| 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 대기 |
+| 7 | 앱 Auto Scaling (t3.small 단일 CPU 한계 해결) | 🔄 진행 중 — codedeploy.tf + asg.tf Terraform 작업 |
 | 8 | Aurora *(Consumer INSERT 병목 시)* | 선택 |
 | 9 | 백만 Spike 최종 검증 | 대기 |
 
