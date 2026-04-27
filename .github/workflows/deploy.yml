@@ -96,5 +96,5 @@ jobs:
           aws deploy create-deployment \
             --application-name batch-kafka-app \
             --deployment-group-name batch-kafka-prod-dg \
-            --deployment-config-name CodeDeployDefault.AllAtOnce \
+            --deployment-config-name CodeDeployDefault.OneAtATime \
             --s3-location bucket=batch-kafka-deploy-631124976154,key=deploy-${{ github.sha }}.zip,bundleType=zip
