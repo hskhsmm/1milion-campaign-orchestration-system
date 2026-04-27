@@ -1,6 +1,8 @@
 package io.eventdriven.campaign.application.consumer;
 
+import io.eventdriven.campaign.application.event.DlqEventPayload;
 import io.eventdriven.campaign.application.event.ParticipationEvent;
+import io.eventdriven.campaign.application.service.DlqMessageService;
 import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
 import io.micrometer.core.instrument.MeterRegistry;
@@ -14,7 +16,6 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
-import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
@@ -22,35 +23,24 @@ import tools.jackson.databind.json.JsonMapper;
 import java.time.Duration;
 import java.time.LocalDateTime;
 import java.util.ArrayList;
-import java.util.HashMap;
 import java.util.List;
-import java.util.Map;
 import java.util.concurrent.TimeUnit;
 
-/**
- * 선착순 참여 이벤트 Consumer (v3)
- *
- * v3 역할: API에서 Redis DECR만 하고 DB 미접촉 → Consumer가 DB INSERT SUCCESS 직접 처리
- * - API: RateLimit → DECR → LPUSH → 202 (DB 없음)
- * - Consumer: (campaignId, userId, sequence) → INSERT SUCCESS
- * - 멱등성: UNIQUE(campaign_id, user_id) 제약 → DataIntegrityViolationException 무시
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
 public class ParticipationEventConsumer {
 
+    private static final String RESULT_CACHE_PREFIX = "participation:result:";
+    private static final Duration RESULT_CACHE_TTL = Duration.ofSeconds(300);
+
     private final JsonMapper jsonMapper;
     private final ParticipationHistoryRepository participationHistoryRepository;
     private final JdbcTemplate jdbcTemplate;
-    private final KafkaTemplate<String, String> kafkaTemplate;
     private final RedisTemplate<String, String> redisTemplate;
     private final SlackNotificationService slackNotificationService;
+    private final DlqMessageService dlqMessageService;
     private final MeterRegistry meterRegistry;
-
-    private static final String DLQ_TOPIC = "campaign-participation-topic.dlq";
-    private static final String RESULT_CACHE_PREFIX = "participation:result:";
-    private static final Duration RESULT_CACHE_TTL = Duration.ofSeconds(300);
 
     @KafkaListener(
             topics = "campaign-participation-topic",
@@ -58,67 +48,67 @@ public class ParticipationEventConsumer {
             containerFactory = "kafkaListenerContainerFactory"
     )
     public void consumeParticipationEvent(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
-
-        // ① 메시지 파싱 — sequence 없는 메시지는 Poison Pill로 DLQ
         List<ParticipationEvent> events = parseRecords(records);
-
         if (events.isEmpty()) {
             acknowledgment.acknowledge();
             return;
         }
 
-        // ② DB INSERT SUCCESS 직접 처리 (배치 INSERT → 단건 폴백)
         LocalDateTime batchStart = LocalDateTime.now();
         List<ParticipationEvent> successEvents = new ArrayList<>();
 
         try {
-            // 배치 INSERT IGNORE — 한 번의 JDBC 왕복으로 전체 처리
             List<Object[]> batchArgs = new ArrayList<>(events.size());
             for (ParticipationEvent event : events) {
                 batchArgs.add(new Object[]{event.getCampaignId(), event.getUserId(), event.getSequence()});
             }
             jdbcTemplate.batchUpdate(
-                    "INSERT IGNORE INTO participation_history (campaign_id, user_id, sequence, status, created_at) VALUES (?, ?, ?, 'SUCCESS', NOW())",
+                    "INSERT IGNORE INTO participation_history "
+                            + "(campaign_id, user_id, sequence, status, created_at) "
+                            + "VALUES (?, ?, ?, 'SUCCESS', NOW())",
                     batchArgs
             );
             successEvents.addAll(events);
-
-        } catch (Exception batchEx) {
-            // 배치 실패 시 단건 폴백 (어떤 레코드가 문제인지 파악 + DLQ 전송)
-            log.warn("배치 INSERT 실패 → 단건 폴백. {}건", events.size(), batchEx);
+        } catch (Exception batchException) {
+            log.warn("Batch insert failed. Falling back to row-by-row insert. count={}", events.size(), batchException);
             for (ParticipationEvent event : events) {
                 try {
                     participationHistoryRepository.insertSuccess(
-                            event.getCampaignId(), event.getUserId(), event.getSequence());
+                            event.getCampaignId(),
+                            event.getUserId(),
+                            event.getSequence()
+                    );
                     successEvents.add(event);
                 } catch (DataIntegrityViolationException e) {
-                    log.warn("중복 INSERT 무시 (멱등). campaignId={}, userId={}, sequence={}",
+                    log.warn("Duplicate success ignored. campaignId={}, userId={}, sequence={}",
                             event.getCampaignId(), event.getUserId(), event.getSequence());
                     successEvents.add(event);
                 } catch (Exception e) {
-                    log.error("INSERT 실패 → DLQ. campaignId={}, userId={}, sequence={}",
+                    log.error("Insert failed. campaignId={}, userId={}, sequence={}",
                             event.getCampaignId(), event.getUserId(), event.getSequence(), e);
-                    sendToDlqWithSlack(buildMessageStr(event), "INSERT_FAILED", e);
+                    sendToDlqWithSlack(
+                            String.valueOf(event.getUserId()),
+                            serializeEvent(event),
+                            "INSERT_FAILED",
+                            e
+                    );
                 }
             }
         }
 
-        // ③ 지연시간 측정 (API LPUSH ~ Consumer INSERT 완료)
         long latencyMs = Duration.between(batchStart, LocalDateTime.now()).toMillis();
         Timer.builder("consumer.pending_to_success.latency")
-                .description("API LPUSH ~ Consumer INSERT SUCCESS 지연시간")
+                .description("Time from consumer batch start to DB success insert")
                 .register(meterRegistry)
                 .record(latencyMs, TimeUnit.MILLISECONDS);
 
-        log.info("batch processed. polled={}, parsed={}, success={}, latency_ms={}",
+        log.info("Consumer batch processed. polled={}, parsed={}, success={}, latencyMs={}",
                 records.size(), events.size(), successEvents.size(), latencyMs);
 
-        // ④ 결과 캐시 적재 (DB 커밋 후)
         if (!successEvents.isEmpty()) {
             writeResultCache(successEvents);
         }
 
-        // ⑤ Kafka 오프셋 커밋
         acknowledgment.acknowledge();
     }
 
@@ -136,9 +126,8 @@ public class ParticipationEventConsumer {
                     return null;
                 }
             });
-            log.debug("결과 캐시 적재 완료. {}건", events.size());
         } catch (Exception e) {
-            log.error("결과 캐시 적재 실패 (무시 — DB는 이미 SUCCESS). {}건", events.size(), e);
+            log.error("Failed to write result cache. count={}", events.size(), e);
         }
     }
 
@@ -148,36 +137,47 @@ public class ParticipationEventConsumer {
             try {
                 ParticipationEvent event = jsonMapper.readValue(record.value(), ParticipationEvent.class);
                 if (event.getSequence() == null) {
-                    log.warn("sequence 없는 메시지 (Poison Pill) - DLQ 전송: {}", record.value());
-                    sendToDlqWithSlack(record.value(), "MISSING_SEQUENCE", null);
+                    log.warn("Missing sequence. Sending to DLQ. payload={}", record.value());
+                    sendToDlqWithSlack(record.key(), record.value(), "MISSING_SEQUENCE", null);
                     continue;
                 }
                 events.add(event);
             } catch (Exception e) {
-                log.error("JSON 파싱 실패 - DLQ 전송: {}", record.value(), e);
-                sendToDlqWithSlack(record.value(), "JSON_PARSE_ERROR", e);
+                log.error("Failed to parse consumer payload. payload={}", record.value(), e);
+                sendToDlqWithSlack(record.key(), record.value(), "JSON_PARSE_ERROR", e);
             }
         }
         return events;
     }
 
-    private void sendToDlqWithSlack(String originalMessage, String errorReason, Exception exception) {
+    private void sendToDlqWithSlack(
+            String originalKey,
+            String originalMessage,
+            String errorReason,
+            Exception exception
+    ) {
         try {
-            Map<String, Object> dlqMessage = new HashMap<>();
-            dlqMessage.put("originalMessage", originalMessage);
-            dlqMessage.put("errorReason", errorReason);
-            dlqMessage.put("errorMessage", exception != null ? exception.getMessage() : null);
-            dlqMessage.put("timestamp", LocalDateTime.now().toString());
-            kafkaTemplate.send(DLQ_TOPIC, jsonMapper.writeValueAsString(dlqMessage));
-            log.info("DLQ 전송 완료 - 사유: {}", errorReason);
+            DlqEventPayload payload = dlqMessageService.createConsumerPayload(
+                    originalKey,
+                    originalMessage,
+                    errorReason,
+                    exception != null ? exception.getMessage() : null
+            );
+            dlqMessageService.publishAndStore(payload);
         } catch (Exception e) {
-            log.error("CRITICAL: DLQ 전송 실패! 원본: {}", originalMessage, e);
+            log.error("Failed to publish consumer DLQ payload. reason={}", errorReason, e);
         }
+
         slackNotificationService.sendDlqAlert("Consumer " + errorReason, originalMessage);
     }
 
-    private String buildMessageStr(ParticipationEvent event) {
-        return String.format("{campaignId:%d, userId:%d, sequence:%d}",
-                event.getCampaignId(), event.getUserId(), event.getSequence());
+    private String serializeEvent(ParticipationEvent event) {
+        try {
+            return jsonMapper.writeValueAsString(event);
+        } catch (Exception e) {
+            return "{\"campaignId\":" + event.getCampaignId()
+                    + ",\"userId\":" + event.getUserId()
+                    + ",\"sequence\":" + event.getSequence() + "}";
+        }
     }
 }

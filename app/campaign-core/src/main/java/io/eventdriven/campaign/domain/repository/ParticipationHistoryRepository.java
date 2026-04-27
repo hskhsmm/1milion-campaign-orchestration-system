@@ -61,6 +61,19 @@ public interface ParticipationHistoryRepository extends JpaRepository<Participat
      */
     Optional<ParticipationHistory> findByCampaignIdAndUserId(Long campaignId, Long userId);
 
+    @Query("""
+        SELECT COUNT(ph) > 0
+        FROM ParticipationHistory ph
+        WHERE ph.campaign.id = :campaignId
+          AND ph.userId = :userId
+          AND ph.status = :status
+    """)
+    boolean existsSuccessHistory(
+            @Param("campaignId") Long campaignId,
+            @Param("userId") Long userId,
+            @Param("status") ParticipationStatus status
+    );
+
     // 5분 초과 PENDING 재처리 배치용
     List<ParticipationHistory> findByStatusAndCreatedAtBefore(ParticipationStatus status, LocalDateTime cutoff);
 
