@@ -35,7 +35,7 @@ POST /api/campaigns/{id}/participation
      remaining < 0  → 보상 INCR + 400
      remaining == 0 → DB CLOSED + active flag DEL
   3. sequence = total - remaining (선착순 확정)
-  4. RedisQueueService    LPUSH queue:campaign:{id}
+  4. RedisQueueService    LPUSH queue:campaign:{id}  (MAX_QUEUE_SIZE=500K)
   5. 202 반환 (DB 미접촉)
 
 ParticipationBridge (@Scheduled 100ms)
@@ -43,7 +43,9 @@ ParticipationBridge (@Scheduled 100ms)
   → 동적 batchSize: <10K→500 / <100K→1000 / >=100K→2000
 
 Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
-  → INSERT IGNORE (멱등성) → Redis 결과 캐시
+  → jdbcTemplate.batchUpdate() INSERT IGNORE 배치 처리 (멱등성)
+  → 배치 실패 시 단건 폴백 + DLQ
+  → Redis 결과 캐시
 ```
 
 ---
@@ -60,12 +62,24 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | 6차 | 파티션 3개 (userId 키) | 550/s | Consumer 지연 200ms |
 | 7차 | 3브로커+파티션 10개, 12만 | ~1,150/s | **앱 CPU 90%** |
 | 8차 | 3브로커+파티션 10개, 50만 | ~1,220/s | **앱 CPU 80%** |
+| 9차 | **ASG 2대**, 50만 | ~2,014/s | 앱 CPU 80% (인스턴스당) |
 
-### 8차 테스트 상세 (현재 한계)
+### 9차 테스트 상세 (ASG 2대, 50만)
 - 조건: TOTAL_REQUESTS=600,000, 재고=500,000, MAX_VUS=2,000, DURATION=1,200s
-- HikariCP pending: 거의 0 ✅ / RDS CPU: 9.44% ✅ / 5xx: 0 ✅
-- **확정 병목: 앱 CPU 80~90% 고착 — t3.small 단일 인스턴스 한계**
-- 다음 단계: ASG 수평 확장 (스케일업 대비 비용 2배 + SPOF 제거 + 탄력성)
+- TPS ~2,014/s (+65%) / avg 988ms (-39%) / 5xx: 0 ✅ / HikariCP pending 거의 0 ✅
+- Redis Queue 100K 상한 도달 → MAX_QUEUE_SIZE 500K로 상향 완료
+- **수평 확장 효과 확인: TPS 2배, avg 절반. 인스턴스당 CPU는 동일 수준 유지**
+
+### 100만 테스트 시도 (9차 이후, 미완료)
+- 조건: TOTAL_REQUESTS=1,200,000, 재고=1,000,000, MAX_VUS=2,000
+- 78만 근처에서 k6 응답시간 폭발 → 테스트 중단
+- **원인: Redis Queue 적체 (유입 속도 > Consumer 배출 속도)**
+  - Consumer가 Kafka 메시지를 1건씩 DB INSERT → Consumer 처리 병목
+  - Kafka lag 누적 → Bridge 배출 속도 제한 → Queue 500K 상한 도달 → 신규 요청 적재 실패
+- **조치 (develop 브랜치, 배포 대기 중)**:
+  - Consumer `jdbcTemplate.batchUpdate()` 배치 INSERT (DB 왕복 N→1)
+  - JDBC URL `rewriteBatchedStatements=true` 추가 (SSM 업데이트 필요)
+  - Consumer 건별 INFO 로그 제거 → 배치 단위 요약 로그로 교체
 
 ---
 
@@ -84,15 +98,38 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 
 ---
 
-## 다음 작업 — Phase B: 9차 부하 테스트 (100만)
+## 다음 작업 — Phase B: 100만 트래픽 테스트
 
-**목표**: ASG 2대 환경에서 100만 트래픽 처리 검증. TPS ~2,400/s, CPU 각 ~40% 분산 기대.
+**목표**: Consumer 배치 INSERT 적용 후 100만 트래픽 처리 검증.
+
+### 배포 전 필수 작업
+```bash
+# SSM JDBC URL에 rewriteBatchedStatements=true 추가 (terraform-mcp에서)
+CURRENT_URL=$(aws ssm get-parameter \
+  --name /batch-kafka/prod/SPRING_DATASOURCE_URL \
+  --with-decryption --query Parameter.Value --output text)
+
+if [[ "$CURRENT_URL" == *"rewriteBatchedStatements=true"* ]]; then
+  NEW_URL="$CURRENT_URL"
+elif [[ "$CURRENT_URL" == *"?"* ]]; then
+  NEW_URL="${CURRENT_URL}&rewriteBatchedStatements=true"
+else
+  NEW_URL="${CURRENT_URL}?rewriteBatchedStatements=true"
+fi
+
+aws ssm put-parameter \
+  --name /batch-kafka/prod/SPRING_DATASOURCE_URL \
+  --value "$NEW_URL" --type SecureString --overwrite
+```
 
 ### 전체 로드맵
 ```
 [완료] v3 Redis-first, Kafka 3-broker, ElastiCache CME, 8차 테스트 (50만 TPS ~1,220/s)
 [완료] Phase A — ASG Terraform (asg.tf, codedeploy.tf, EC2 SD, min=2 운영 중)
-[진행] Phase B — 9차 테스트 (100만)
+[완료] 9차 테스트 (ASG 2대, 50만 TPS ~2,014/s)
+[진행] Phase B — Consumer 배치 INSERT 적용 후 100만 테스트
+       → 10만 검증 먼저 (records.size() 분포, Queue slope, Kafka lag 확인)
+       → 통과 시 100만 테스트
 [예정] Phase C — API 엔드포인트 v3 정리
 [예정] Phase D — Spring Batch 안전망
 [예정] Phase E — MCP 서버 (AI 자율 운영)
@@ -124,7 +161,34 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 ## CI/CD
 
 `.github/workflows/deploy.yml` — main 브랜치 + `app/campaign-core/**` 변경 시 트리거
-OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.AllAtOnce`)
+OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.OneAtATime`)
+
+---
+
+## 인프라 ON/OFF 순서
+
+### 켤 때
+```
+1. RDS 시작 (3~5분 대기)
+2. ASG desired=2, min=2, max=3
+3. kafka-1/2/3 시작
+4. terraform-mcp 시작
+5. terraform-mcp SSM 접속 후 redis-exporter 실행:
+   sudo docker run -d --name redis-exporter --restart unless-stopped -p 9121:9121 \
+     -e REDIS_ADDR="$(aws ssm get-parameter --name /batch-kafka/prod/REDIS_EXPORTER_ADDR \
+     --with-decryption --query Parameter.Value --output text)" \
+     -e REDIS_EXPORTER_IS_CLUSTER=true oliver006/redis_exporter
+```
+
+### 끌 때
+```
+1. ASG desired=0, min=0, max=0
+2. kafka-1/2/3 중지
+3. terraform-mcp 중지
+4. RDS 중지
+```
+
+> ElastiCache는 중지 기능 없음 — 장기 미사용 시 terraform destroy
 
 ---
 
@@ -134,10 +198,17 @@ OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.AllAtOnce`)
 # 캠페인 생성
 curl -X POST $BASE_URL/api/admin/campaigns \
   -H "Content-Type: application/json" \
-  -d '{"name":"load-test","totalStock":1000000,"startDate":"2026-04-27","endDate":"2026-12-31"}'
+  -d '{"name":"load-test-1M","totalStock":1000000,"startDate":"2026-04-28","endDate":"2026-12-31"}'
 
-# 테스트 실행
-CAMPAIGN_ID=<id> TOTAL_REQUESTS=1200000 MAX_VUS=3000 DURATION=2400 \
+# Step 1 — 10만 검증 (배치 INSERT 효과 확인)
+CAMPAIGN_ID=<id> TOTAL_REQUESTS=100000 MAX_VUS=2000 DURATION=300 \
+  bash ~/1milion-campaign-orchestration-system/stress-test/run-test.sh prod
+
+# 검증 포인트: 로그에서 records.size() 분포 확인
+sudo docker logs <container> --follow 2>&1 | grep "batch processed"
+
+# Step 2 — 10만 통과 후 100만 테스트
+CAMPAIGN_ID=<id> TOTAL_REQUESTS=1200000 MAX_VUS=2000 DURATION=3600 \
   bash ~/1milion-campaign-orchestration-system/stress-test/run-test.sh prod
 ```
 
@@ -152,3 +223,5 @@ BASE_URL: `http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.co
 **CI/CD**: "OIDC 기반 키 없는 AWS 인증, SSH 차단 + SSM Session Manager, Blue-Green 무중단 배포"
 
 **한계 인지**: "단일 인스턴스 CPU 한계 → ASG 수평 확장, 데이터로 근거 제시"
+
+**Consumer 병목 개선**: "Kafka batch listener로 받아도 DB INSERT가 1건씩이면 소용없다는 걸 로그로 확인 후, JdbcTemplate.batchUpdate + rewriteBatchedStatements=true로 DB 왕복 N→1로 줄임"
