@@ -38,7 +38,6 @@ fetch_param SPRING_DATASOURCE_USERNAME    "/batch-kafka/prod/SPRING_DATASOURCE_U
 fetch_param SPRING_DATASOURCE_PASSWORD    "/batch-kafka/prod/SPRING_DATASOURCE_PASSWORD"
 fetch_param SPRING_KAFKA_BOOTSTRAP_SERVERS "/batch-kafka/prod/SPRING_KAFKA_BOOTSTRAP_SERVERS"
 fetch_param SPRING_DATA_REDIS_CLUSTER_NODES "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
-fetch_param REDIS_EXPORTER_ADDR            "/batch-kafka/prod/REDIS_EXPORTER_ADDR"
 fetch_param SLACK_WEBHOOK_URL             "/batch-kafka/prod/SLACK_WEBHOOK_URL"
 fetch_param ECR_IMAGE                     "/batch-kafka/prod/ECR_IMAGE"
 
