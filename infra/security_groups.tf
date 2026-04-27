@@ -150,5 +150,13 @@ resource "aws_security_group" "elasticache_redis" {
     security_groups = [aws_security_group.app.id]
   }
 
+  ingress {
+    from_port       = 6379
+    to_port         = 6379
+    protocol        = "tcp"
+    security_groups = [aws_security_group.terraform_mcp.id]
+    description     = "redis-exporter scrape from terraform-mcp"
+  }
+
   tags = {}
 }
