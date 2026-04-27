@@ -22,6 +22,21 @@ resource "aws_iam_role_policy_attachment" "terraform_mcp_ssm" {
   policy_arn = "arn:aws:iam::aws:policy/AmazonSSMManagedInstanceCore"
 }
 
+# Prometheus EC2 Service Discovery용 — ASG 인스턴스 동적 감지
+resource "aws_iam_role_policy" "terraform_mcp_ec2_describe" {
+  name = "EC2Describe-for-prometheus"
+  role = aws_iam_role.terraform_mcp.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["ec2:DescribeInstances"]
+      Resource = "*"
+    }]
+  })
+}
+
 # terraform-mcp 보안 그룹
 resource "aws_security_group" "terraform_mcp" {
   name        = "terraform-mcp-sg"
@@ -143,33 +158,7 @@ resource "aws_iam_role_policy_attachment" "batch_kafka_ssm_parameter_read" {
   policy_arn = aws_iam_policy.ssm_parameter_read.arn
 }
 
-# ──────────────────────────────────────────
-# batch-kafka-app EC2
-# ──────────────────────────────────────────
-
-resource "aws_instance" "batch_kafka_app" {
-  ami                         = "ami-0b818a04bc9c2133c"
-  instance_type               = "t3.small"
-  subnet_id                   = aws_subnet.private_app_2a.id
-  vpc_security_group_ids      = [aws_security_group.app.id]
-  iam_instance_profile        = aws_iam_instance_profile.batch_kafka_app.name
-  associate_public_ip_address = true
-  private_ip                  = "172.31.100.157"
-
-  root_block_device {
-    volume_type = "gp3"
-    volume_size = 8
-    encrypted   = false
-  }
-
-  tags = {
-    Name = "batch-kafka-app"
-  }
-
-  lifecycle {
-    ignore_changes = [associate_public_ip_address]
-  }
-}
+# batch-kafka-app EC2는 ASG(asg.tf)로 대체됨
 
 # ──────────────────────────────────────────
 # kafka-1 EC2
