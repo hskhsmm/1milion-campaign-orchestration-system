@@ -66,8 +66,7 @@ resource "aws_subnet" "public_2d" {
   tags = {}
 }
 
-# 앱 서브넷 (이름만 Private, 실제론 IGW 연결된 Public)
-# v2에서 NAT Gateway 추가 후 진짜 Private으로 전환 예정
+# 앱 서브넷 2a (이름만 Private, 실제론 IGW 연결된 Public)
 resource "aws_subnet" "private_app_2a" {
   vpc_id                  = aws_vpc.main.id
   cidr_block              = "172.31.100.0/24"
@@ -76,5 +75,17 @@ resource "aws_subnet" "private_app_2a" {
 
   tags = {
     Name = "private-app-subnet-1"
+  }
+}
+
+# 앱 서브넷 2b (ASG multi-AZ용, 이름만 Private 실제론 IGW 연결된 Public)
+resource "aws_subnet" "private_app_2b" {
+  vpc_id                  = aws_vpc.main.id
+  cidr_block              = "172.31.101.0/24"
+  availability_zone       = "ap-northeast-2b"
+  map_public_ip_on_launch = false
+
+  tags = {
+    Name = "private-app-subnet-2"
   }
 }
