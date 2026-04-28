@@ -15,6 +15,7 @@ import io.eventdriven.campaign.domain.repository.DlqReplayExecutionRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.stereotype.Service;
@@ -27,6 +28,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class DlqReplayService {
@@ -169,11 +171,33 @@ public class DlqReplayService {
         DlqReplayPolicyService.DlqReplayDecision decision = dlqReplayPolicyService.decide(message);
         LocalDateTime now = LocalDateTime.now();
 
+        log.info(
+                "DLQ replay decision. executionId={}, messageId={}, classification={}, action={}, publishKey={}, reason={}, detail={}",
+                execution.getId(),
+                message.getId(),
+                message.getReplayClassification(),
+                decision.action(),
+                decision.replayKey(),
+                decision.reason(),
+                decision.detail()
+        );
+
         if (execution.isDryRun()) {
             recordItem(execution, message, decision, DlqReplayItemResult.DRY_RUN,
                     "Dry run only: " + decision.detail());
             incrementExecutionCounter(execution, decision.action());
             counterFor(decision.action(), true).increment();
+            log.info(
+                    "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
+                    execution.getId(),
+                    message.getId(),
+                    message.getReplayClassification(),
+                    decision.action(),
+                    decision.replayKey(),
+                    DlqReplayItemResult.DRY_RUN,
+                    message.getProcessingStatus(),
+                    message.getReplayAttemptCount()
+            );
             return;
         }
 
@@ -205,6 +229,17 @@ public class DlqReplayService {
                     now
             ));
             counterFor(DlqReplayAction.REPLAY, false).increment();
+            log.info(
+                    "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
+                    execution.getId(),
+                    message.getId(),
+                    message.getReplayClassification(),
+                    decision.action(),
+                    decision.replayKey(),
+                    DlqReplayItemResult.SUCCESS,
+                    message.getProcessingStatus(),
+                    message.getReplayAttemptCount()
+            );
         } catch (Exception e) {
             message.incrementReplayAttempt();
             execution.incrementPublishFailed();
@@ -218,6 +253,18 @@ public class DlqReplayService {
                     now
             ));
             counterForFailure().increment();
+            log.warn(
+                    "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}, error={}",
+                    execution.getId(),
+                    message.getId(),
+                    message.getReplayClassification(),
+                    decision.action(),
+                    decision.replayKey(),
+                    DlqReplayItemResult.FAILED,
+                    message.getProcessingStatus(),
+                    message.getReplayAttemptCount(),
+                    e.getMessage()
+            );
         }
     }
 
@@ -231,6 +278,17 @@ public class DlqReplayService {
         execution.incrementSkipped();
         recordItem(execution, message, decision, DlqReplayItemResult.SKIPPED, decision.detail());
         counterFor(DlqReplayAction.SKIP, false).increment();
+        log.info(
+                "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
+                execution.getId(),
+                message.getId(),
+                message.getReplayClassification(),
+                decision.action(),
+                decision.replayKey(),
+                DlqReplayItemResult.SKIPPED,
+                message.getProcessingStatus(),
+                message.getReplayAttemptCount()
+        );
     }
 
     private void finalFail(
@@ -243,6 +301,17 @@ public class DlqReplayService {
         execution.incrementFinalFailed();
         recordItem(execution, message, decision, DlqReplayItemResult.FINAL_FAILED, decision.detail());
         counterFor(DlqReplayAction.FINAL_FAIL, false).increment();
+        log.info(
+                "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
+                execution.getId(),
+                message.getId(),
+                message.getReplayClassification(),
+                decision.action(),
+                decision.replayKey(),
+                DlqReplayItemResult.FINAL_FAILED,
+                message.getProcessingStatus(),
+                message.getReplayAttemptCount()
+        );
     }
 
     private void recordItem(
