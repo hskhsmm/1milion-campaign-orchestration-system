@@ -96,6 +96,7 @@ public class ParticipationEventConsumer {
             }
         }
 
+        // ③ 지연시간 측정 (API LPUSH ~ Consumer INSERT 완료)
         long latencyMs = Duration.between(batchStart, LocalDateTime.now()).toMillis();
         Timer.builder("consumer.pending_to_success.latency")
                 .description("Time from consumer batch start to DB success insert")
@@ -105,10 +106,8 @@ public class ParticipationEventConsumer {
         log.info("Consumer batch processed. polled={}, parsed={}, success={}, latencyMs={}",
                 records.size(), events.size(), successEvents.size(), latencyMs);
 
-        if (!successEvents.isEmpty()) {
-            writeResultCache(successEvents);
-        }
 
+        // ⑤ Kafka 오프셋 커밋
         acknowledgment.acknowledge();
     }
 
@@ -126,8 +125,9 @@ public class ParticipationEventConsumer {
                     return null;
                 }
             });
+            log.debug("결과 캐시 적재 완료. {}건", events.size());
         } catch (Exception e) {
-            log.error("Failed to write result cache. count={}", events.size(), e);
+            log.error("결과 캐시 적재 실패 (무시 — DB는 이미 SUCCESS). {}건", events.size(), e);
         }
     }
 
