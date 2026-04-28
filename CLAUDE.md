@@ -76,10 +76,11 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 - **원인: Redis Queue 적체 (유입 속도 > Consumer 배출 속도)**
   - Consumer가 Kafka 메시지를 1건씩 DB INSERT → Consumer 처리 병목
   - Kafka lag 누적 → Bridge 배출 속도 제한 → Queue 500K 상한 도달 → 신규 요청 적재 실패
-- **조치 (develop 브랜치, 배포 대기 중)**:
-  - Consumer `jdbcTemplate.batchUpdate()` 배치 INSERT (DB 왕복 N→1)
-  - JDBC URL `rewriteBatchedStatements=true` 추가 (SSM 업데이트 필요)
-  - Consumer 건별 INFO 로그 제거 → 배치 단위 요약 로그로 교체
+  - RDS CPU는 41%로 여유 있었음 — DB 용량 문제 아닌 순수 패턴 문제
+- **조치 완료 (develop 브랜치, 머지 대기 중)**:
+  - Consumer `jdbcTemplate.batchUpdate()` 배치 INSERT (DB 왕복 N→1) ✅
+  - SSM JDBC URL `rewriteBatchedStatements=true` 추가 완료 ✅
+  - Consumer 건별 INFO 로그 제거 → 배치 단위 요약 로그로 교체 ✅
 
 ---
 
@@ -102,33 +103,18 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 
 **목표**: Consumer 배치 INSERT 적용 후 100만 트래픽 처리 검증.
 
-### 배포 전 필수 작업
-```bash
-# SSM JDBC URL에 rewriteBatchedStatements=true 추가 (terraform-mcp에서)
-CURRENT_URL=$(aws ssm get-parameter \
-  --name /batch-kafka/prod/SPRING_DATASOURCE_URL \
-  --with-decryption --query Parameter.Value --output text)
-
-if [[ "$CURRENT_URL" == *"rewriteBatchedStatements=true"* ]]; then
-  NEW_URL="$CURRENT_URL"
-elif [[ "$CURRENT_URL" == *"?"* ]]; then
-  NEW_URL="${CURRENT_URL}&rewriteBatchedStatements=true"
-else
-  NEW_URL="${CURRENT_URL}?rewriteBatchedStatements=true"
-fi
-
-aws ssm put-parameter \
-  --name /batch-kafka/prod/SPRING_DATASOURCE_URL \
-  --value "$NEW_URL" --type SecureString --overwrite
-```
+### 배포 전 필수 작업 (모두 완료 ✅)
+- SSM JDBC URL `rewriteBatchedStatements=true` 추가 완료
+- develop 브랜치 배치 INSERT 코드 작성 완료
+- **남은 것: develop → main 머지 → CI/CD 자동 배포**
 
 ### 전체 로드맵
 ```
 [완료] v3 Redis-first, Kafka 3-broker, ElastiCache CME, 8차 테스트 (50만 TPS ~1,220/s)
 [완료] Phase A — ASG Terraform (asg.tf, codedeploy.tf, EC2 SD, min=2 운영 중)
 [완료] 9차 테스트 (ASG 2대, 50만 TPS ~2,014/s)
-[진행] Phase B — Consumer 배치 INSERT 적용 후 100만 테스트
-       → 10만 검증 먼저 (records.size() 분포, Queue slope, Kafka lag 확인)
+[진행] Phase B — develop→main 머지 후 10만 검증 → 100만 테스트
+       → 10만 검증: batch processed 로그에서 polled= 분포 확인
        → 통과 시 100만 테스트
 [예정] Phase C — API 엔드포인트 v3 정리
 [예정] Phase D — Spring Batch 안전망
@@ -146,7 +132,7 @@ aws ssm put-parameter \
 | VPC | vpc-02bacd8c658dc632e (172.31.0.0/16) |
 | ASG (앱) | batch-kafka-app-asg (t3.small, min=2/max=3, private_app_2a+2b) |
 | EC2 (Kafka) | kafka-1/2/3 (t3.small, public 2a/2b/2c) |
-| EC2 (MCP) | terraform-mcp (t3.small, public_2a, Prometheus+Grafana 실행 중) |
+| EC2 (MCP) | terraform-mcp (t3.small, public_2a, Prometheus+Grafana+redis-exporter 실행 중) |
 | RDS | batch-kafka-db (MySQL 8.0.44, db.t3.micro) |
 | ALB | alb-batch-kafka-api → tg-api-8080 |
 | ElastiCache | CME 3샤드 (Valkey 7.2, cache.t3.micro × 6) |
@@ -155,6 +141,23 @@ aws ssm put-parameter \
 | S3 (tfstate) | campaign-terraform-state-631124976154 |
 | CodeDeploy | App: batch-kafka-app / DG: batch-kafka-prod-dg (ASG 연결, IaC 완료) |
 | SSM | /batch-kafka/prod/* |
+
+---
+
+## 모니터링 구성 (terraform-mcp)
+
+- Prometheus + Grafana + redis-exporter + kafka-exporter 모두 Docker 컨테이너
+- **Docker monitoring 네트워크**: 컨테이너 이름 기반 통신 (IP 변경 무관)
+  ```bash
+  # 컨테이너 재생성 시 네트워크 연결 필수
+  sudo docker network connect monitoring <container>
+  ```
+- **prometheus.yml 타겟** (IP 아닌 컨테이너 이름):
+  - spring-boot: ec2_sd_configs (ASG 동적 감지, :8080)
+  - kafka-exporter: `kafka-exporter:9308`
+  - redis-exporter: `redis-exporter:9121`
+- prometheus.yml 위치: `/home/ec2-user/prometheus.yml`
+- redis-exporter는 terraform-mcp 단독 실행 (ASG 중복 수집 방지)
 
 ---
 
@@ -167,28 +170,48 @@ OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.OneAtATime`)
 
 ## 인프라 ON/OFF 순서
 
-### 켤 때
+### 켤 때 (ElastiCache destroy 후 재apply 시)
 ```
-1. RDS 시작 (3~5분 대기)
-2. ASG desired=2, min=2, max=3
+1. terraform apply (ElastiCache + SSM 자동 갱신, ~10~15분)
+2. RDS 시작 (3~5분 대기)
 3. kafka-1/2/3 시작
 4. terraform-mcp 시작
-5. terraform-mcp SSM 접속 후 redis-exporter 실행:
+5. terraform-mcp에서 redis-exporter 재실행 (SSM에서 새 엔드포인트 자동 읽음):
+   sudo docker rm -f redis-exporter
    sudo docker run -d --name redis-exporter --restart unless-stopped -p 9121:9121 \
+     --network monitoring \
      -e REDIS_ADDR="$(aws ssm get-parameter --name /batch-kafka/prod/REDIS_EXPORTER_ADDR \
      --with-decryption --query Parameter.Value --output text)" \
      -e REDIS_EXPORTER_IS_CLUSTER=true oliver006/redis_exporter
+   sudo docker network connect monitoring redis-exporter
+6. ASG 콘솔에서 desired=2, min=2, max=3 (terraform apply와 독립)
+```
+
+### 켤 때 (EC2 재시작만, ElastiCache 유지 시)
+```
+1. RDS 시작
+2. kafka-1/2/3 시작
+3. terraform-mcp 시작 (--restart unless-stopped로 컨테이너 자동 복구)
+4. ASG 콘솔에서 desired=2, min=2, max=3
 ```
 
 ### 끌 때
 ```
-1. ASG desired=0, min=0, max=0
+1. ASG 콘솔에서 desired=0, min=0, max=0
 2. kafka-1/2/3 중지
 3. terraform-mcp 중지
 4. RDS 중지
 ```
 
-> ElastiCache는 중지 기능 없음 — 장기 미사용 시 terraform destroy
+### 비용 절감 (장기 미사용)
+```bash
+terraform destroy -target=aws_elasticache_replication_group.redis \
+  -target=aws_ssm_parameter.redis_cluster_nodes \
+  -target=aws_ssm_parameter.redis_exporter_addr
+```
+
+> ElastiCache destroy → apply 시 SSM(SPRING_DATA_REDIS_CLUSTER_NODES, REDIS_EXPORTER_ADDR)은 자동 갱신됨
+> ASG min/max는 ignore_changes로 보호 — terraform apply가 용량을 건드리지 않음
 
 ---
 
