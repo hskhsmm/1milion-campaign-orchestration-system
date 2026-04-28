@@ -12,6 +12,7 @@ import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.data.redis.core.RedisOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SessionCallback;
+import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.Acknowledgment;
@@ -41,6 +42,7 @@ public class ParticipationEventConsumer {
 
     private final JsonMapper jsonMapper;
     private final ParticipationHistoryRepository participationHistoryRepository;
+    private final JdbcTemplate jdbcTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final RedisTemplate<String, String> redisTemplate;
     private final SlackNotificationService slackNotificationService;
@@ -56,7 +58,6 @@ public class ParticipationEventConsumer {
             containerFactory = "kafkaListenerContainerFactory"
     )
     public void consumeParticipationEvent(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
-        log.info("Kafka 배치 수신. {}건", records.size());
 
         // ① 메시지 파싱 — sequence 없는 메시지는 Poison Pill로 DLQ
         List<ParticipationEvent> events = parseRecords(records);
@@ -66,29 +67,39 @@ public class ParticipationEventConsumer {
             return;
         }
 
-        // ② DB INSERT SUCCESS 직접 처리
+        // ② DB INSERT SUCCESS 직접 처리 (배치 INSERT → 단건 폴백)
         LocalDateTime batchStart = LocalDateTime.now();
         List<ParticipationEvent> successEvents = new ArrayList<>();
 
-        for (ParticipationEvent event : events) {
-            try {
-                // INSERT IGNORE → UNIQUE 중복 시 조용히 무시 (멱등성)
-                participationHistoryRepository.insertSuccess(
-                        event.getCampaignId(), event.getUserId(), event.getSequence());
-                successEvents.add(event);
-                log.info("INSERT SUCCESS. campaignId={}, userId={}, sequence={}",
-                        event.getCampaignId(), event.getUserId(), event.getSequence());
+        try {
+            // 배치 INSERT IGNORE — 한 번의 JDBC 왕복으로 전체 처리
+            List<Object[]> batchArgs = new ArrayList<>(events.size());
+            for (ParticipationEvent event : events) {
+                batchArgs.add(new Object[]{event.getCampaignId(), event.getUserId(), event.getSequence()});
+            }
+            jdbcTemplate.batchUpdate(
+                    "INSERT IGNORE INTO participation_history (campaign_id, user_id, sequence, status, created_at) VALUES (?, ?, ?, 'SUCCESS', NOW())",
+                    batchArgs
+            );
+            successEvents.addAll(events);
 
-            } catch (DataIntegrityViolationException e) {
-                // INSERT IGNORE로 대부분 처리되지만 혹시 모를 중복 예외 방어
-                log.warn("중복 INSERT 무시 (멱등). campaignId={}, userId={}, sequence={}",
-                        event.getCampaignId(), event.getUserId(), event.getSequence());
-                successEvents.add(event);
-
-            } catch (Exception e) {
-                log.error("INSERT 실패 → DLQ. campaignId={}, userId={}, sequence={}",
-                        event.getCampaignId(), event.getUserId(), event.getSequence(), e);
-                sendToDlqWithSlack(buildMessageStr(event), "INSERT_FAILED", e);
+        } catch (Exception batchEx) {
+            // 배치 실패 시 단건 폴백 (어떤 레코드가 문제인지 파악 + DLQ 전송)
+            log.warn("배치 INSERT 실패 → 단건 폴백. {}건", events.size(), batchEx);
+            for (ParticipationEvent event : events) {
+                try {
+                    participationHistoryRepository.insertSuccess(
+                            event.getCampaignId(), event.getUserId(), event.getSequence());
+                    successEvents.add(event);
+                } catch (DataIntegrityViolationException e) {
+                    log.warn("중복 INSERT 무시 (멱등). campaignId={}, userId={}, sequence={}",
+                            event.getCampaignId(), event.getUserId(), event.getSequence());
+                    successEvents.add(event);
+                } catch (Exception e) {
+                    log.error("INSERT 실패 → DLQ. campaignId={}, userId={}, sequence={}",
+                            event.getCampaignId(), event.getUserId(), event.getSequence(), e);
+                    sendToDlqWithSlack(buildMessageStr(event), "INSERT_FAILED", e);
+                }
             }
         }
 
@@ -99,7 +110,8 @@ public class ParticipationEventConsumer {
                 .register(meterRegistry)
                 .record(latencyMs, TimeUnit.MILLISECONDS);
 
-        log.info("배치 처리 완료. 성공={}건, 지연={}ms", successEvents.size(), latencyMs);
+        log.info("batch processed. polled={}, parsed={}, success={}, latency_ms={}",
+                records.size(), events.size(), successEvents.size(), latencyMs);
 
         // ④ 결과 캐시 적재 (DB 커밋 후)
         if (!successEvents.isEmpty()) {
@@ -124,7 +136,7 @@ public class ParticipationEventConsumer {
                     return null;
                 }
             });
-            log.info("결과 캐시 적재 완료. {}건", events.size());
+            log.debug("결과 캐시 적재 완료. {}건", events.size());
         } catch (Exception e) {
             log.error("결과 캐시 적재 실패 (무시 — DB는 이미 SUCCESS). {}건", events.size(), e);
         }

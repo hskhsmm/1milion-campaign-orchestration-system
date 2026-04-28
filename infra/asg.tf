@@ -53,7 +53,7 @@ resource "aws_autoscaling_group" "app" {
   }
 
   lifecycle {
-    ignore_changes = [desired_capacity]  # 수동 스케일 조정 보호
+    ignore_changes = [desired_capacity, min_size, max_size]  # 수동 스케일 조정 보호
   }
 }
 
