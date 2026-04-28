@@ -4,6 +4,8 @@ import jakarta.persistence.*;
 import lombok.AccessLevel;
 import lombok.Getter;
 import lombok.NoArgsConstructor;
+import org.hibernate.annotations.JdbcTypeCode;
+import org.hibernate.type.SqlTypes;
 
 import java.time.LocalDateTime;
 
@@ -27,8 +29,8 @@ public class DlqMessageRecord extends BaseTimeEntity {
     @Column(name = "original_key")
     private String originalKey;
 
-    @Lob
-    @Column(name = "original_message", nullable = false)
+    @JdbcTypeCode(SqlTypes.LONGVARCHAR)
+    @Column(name = "original_message", nullable = false, columnDefinition = "TEXT")
     private String originalMessage;
 
     @Column(name = "error_reason", nullable = false, length = 100)
