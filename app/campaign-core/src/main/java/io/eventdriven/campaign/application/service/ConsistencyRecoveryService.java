@@ -9,6 +9,7 @@ import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.Page;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.data.domain.Sort;
@@ -21,6 +22,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
 
+@Slf4j
 @Service
 @RequiredArgsConstructor
 public class ConsistencyRecoveryService {
@@ -238,6 +240,7 @@ public class ConsistencyRecoveryService {
             CampaignRuntimeSnapshot snapshot,
             AnomalyDecision decision
     ) {
+        Map<String, Object> beforeState = snapshotState(snapshot);
         boolean fixed = false;
         ConsistencyRecoveryAction actionTaken = decision.action();
         String detailMessage = decision.detail();
@@ -261,6 +264,10 @@ public class ConsistencyRecoveryService {
             }
         }
 
+        Map<String, Object> afterState = fixed
+                ? refreshRuntimeState(snapshot.campaign().getId(), snapshot)
+                : beforeState;
+
         execution.incrementAnomalyCount();
         if (fixed) {
             execution.incrementFixedCount();
@@ -269,6 +276,19 @@ public class ConsistencyRecoveryService {
             execution.incrementReportOnlyCount();
             anomalyCounter(decision.anomalyType()).increment();
         }
+
+        log.info(
+                "Consistency recovery decision. executionId={}, campaignId={}, anomalyType={}, requestedAction={}, actionTaken={}, fixed={}, before={}, after={}, detail={}",
+                execution.getId(),
+                snapshot.campaign().getId(),
+                decision.anomalyType(),
+                decision.action(),
+                actionTaken,
+                fixed,
+                beforeState,
+                afterState,
+                detailMessage
+        );
 
         resultRepository.save(new ConsistencyRecoveryResult(
                 execution,
@@ -388,6 +408,36 @@ public class ConsistencyRecoveryService {
         return Counter.builder("batch.consistency_recovery.fixed")
                 .tag("type", anomalyType.name())
                 .register(meterRegistry);
+    }
+
+    private Map<String, Object> snapshotState(CampaignRuntimeSnapshot snapshot) {
+        Map<String, Object> state = new HashMap<>();
+        state.put("campaignStatus", snapshot.campaign().getStatus());
+        state.put("totalStock", snapshot.campaign().getTotalStock());
+        state.put("successCount", snapshot.successCount());
+        state.put("pendingCount", snapshot.pendingCount());
+        state.put("derivedRemainingStock", snapshot.derivedRemainingStock());
+        state.put("redisRemainingStock", snapshot.redisRemainingStock());
+        state.put("redisTotalStock", snapshot.redisTotalStock());
+        state.put("queueSize", snapshot.queueSize());
+        state.put("activeFlagPresent", snapshot.activeFlagPresent());
+        state.put("activeSetPresent", snapshot.activeSetPresent());
+        return state;
+    }
+
+    private Map<String, Object> refreshRuntimeState(Long campaignId, CampaignRuntimeSnapshot snapshot) {
+        Map<String, Object> state = new HashMap<>();
+        state.put("campaignStatus", snapshot.campaign().getStatus());
+        state.put("totalStock", snapshot.campaign().getTotalStock());
+        state.put("successCount", snapshot.successCount());
+        state.put("pendingCount", snapshot.pendingCount());
+        state.put("derivedRemainingStock", snapshot.derivedRemainingStock());
+        state.put("redisRemainingStock", redisStockService.getStock(campaignId));
+        state.put("redisTotalStock", redisStockService.getTotal(campaignId));
+        state.put("queueSize", nvl(redisQueueService.size(campaignId)));
+        state.put("activeFlagPresent", redisStockService.isActive(campaignId));
+        state.put("activeSetPresent", redisStockService.isRegisteredInActiveCampaigns(campaignId));
+        return state;
     }
 
     private record CampaignRuntimeSnapshot(
