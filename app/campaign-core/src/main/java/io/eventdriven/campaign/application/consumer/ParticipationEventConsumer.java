@@ -113,10 +113,6 @@ public class ParticipationEventConsumer {
         log.info("batch processed. polled={}, parsed={}, success={}, latency_ms={}",
                 records.size(), events.size(), successEvents.size(), latencyMs);
 
-        // ④ 결과 캐시 적재 (DB 커밋 후)
-        if (!successEvents.isEmpty()) {
-            writeResultCache(successEvents);
-        }
 
         // ⑤ Kafka 오프셋 커밋
         acknowledgment.acknowledge();
