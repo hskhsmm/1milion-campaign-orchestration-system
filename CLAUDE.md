@@ -35,7 +35,7 @@ POST /api/campaigns/{id}/participation
      remaining < 0  → 보상 INCR + 400
      remaining == 0 → DB CLOSED + active flag DEL
   3. sequence = total - remaining (선착순 확정)
-  4. RedisQueueService    LPUSH queue:campaign:{id}  (MAX_QUEUE_SIZE=500K)
+  4. RedisQueueService    LPUSH queue:campaign:{id}  (MAX_QUEUE_SIZE=1M)
   5. 202 반환 (DB 미접촉)
 
 ParticipationBridge (@Scheduled 100ms)
@@ -45,7 +45,7 @@ ParticipationBridge (@Scheduled 100ms)
 Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
   → jdbcTemplate.batchUpdate() INSERT IGNORE 배치 처리 (멱등성)
   → 배치 실패 시 단건 폴백 + DLQ
-  → Redis 결과 캐시
+  (Redis 결과 캐시 제거 — CME pipeline 병목 원인이었음)
 ```
 
 ---
@@ -63,24 +63,21 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | 7차 | 3브로커+파티션 10개, 12만 | ~1,150/s | **앱 CPU 90%** |
 | 8차 | 3브로커+파티션 10개, 50만 | ~1,220/s | **앱 CPU 80%** |
 | 9차 | **ASG 2대**, 50만 | ~2,014/s | 앱 CPU 80% (인스턴스당) |
+| 10차 | **writeResultCache 제거 + 배치 INSERT**, 100만 | ~2,613/s | Queue 500K 상한 도달 → 데이터 유실 |
+| **11차** | **MAX_QUEUE_SIZE 1M**, 100만 | **~2,442/s** | **정합성 1,000,000 완벽 ✅** |
 
-### 9차 테스트 상세 (ASG 2대, 50만)
-- 조건: TOTAL_REQUESTS=600,000, 재고=500,000, MAX_VUS=2,000, DURATION=1,200s
-- TPS ~2,014/s (+65%) / avg 988ms (-39%) / 5xx: 0 ✅ / HikariCP pending 거의 0 ✅
-- Redis Queue 100K 상한 도달 → MAX_QUEUE_SIZE 500K로 상향 완료
-- **수평 확장 효과 확인: TPS 2배, avg 절반. 인스턴스당 CPU는 동일 수준 유지**
-
-### 100만 테스트 시도 (9차 이후, 미완료)
+### 11차 테스트 상세 (100만, 최종 성공) ✅
 - 조건: TOTAL_REQUESTS=1,200,000, 재고=1,000,000, MAX_VUS=2,000
-- 78만 근처에서 k6 응답시간 폭발 → 테스트 중단
-- **원인: Redis Queue 적체 (유입 속도 > Consumer 배출 속도)**
-  - Consumer가 Kafka 메시지를 1건씩 DB INSERT → Consumer 처리 병목
-  - Kafka lag 누적 → Bridge 배출 속도 제한 → Queue 500K 상한 도달 → 신규 요청 적재 실패
-  - RDS CPU는 41%로 여유 있었음 — DB 용량 문제 아닌 순수 패턴 문제
-- **조치 완료 (develop 브랜치, 머지 대기 중)**:
-  - Consumer `jdbcTemplate.batchUpdate()` 배치 INSERT (DB 왕복 N→1) ✅
-  - SSM JDBC URL `rewriteBatchedStatements=true` 추가 완료 ✅
-  - Consumer 건별 INFO 로그 제거 → 배치 단위 요약 로그로 교체 ✅
+- TPS ~2,442/s / avg 816ms / p95 2.74s / 5xx: 0 ✅
+- DB COUNT = **1,000,000** (정합성 완벽) ✅
+- Redis Queue 최대 700K (1M 상한 여유 있음) ✅
+- Consumer 지연 7.5~15ms (배치 INSERT 효과) ✅
+- Kafka lag 거의 0 (rebalancing 순간 700 스파이크 → 즉시 해소) ✅
+- HikariCP pending 거의 0 ✅ / RDS CPU 최대 47% ✅
+
+### 10차 → 11차 개선 포인트
+- 10차: writeResultCache(CME pipeline) 제거 → Kafka lag 9K→거의 0, TPS 2,613/s 달성했으나 Queue 500K 상한으로 **데이터 425K 유실**
+- 11차: MAX_QUEUE_SIZE 1M으로 상향 → Queue 700K까지만 차서 유실 0건
 
 ---
 
@@ -99,23 +96,17 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 
 ---
 
-## 다음 작업 — Phase B: 100만 트래픽 테스트
+## 전체 로드맵
 
-**목표**: Consumer 배치 INSERT 적용 후 100만 트래픽 처리 검증.
-
-### 배포 전 필수 작업 (모두 완료 ✅)
-- SSM JDBC URL `rewriteBatchedStatements=true` 추가 완료
-- develop 브랜치 배치 INSERT 코드 작성 완료
-- **남은 것: develop → main 머지 → CI/CD 자동 배포**
-
-### 전체 로드맵
 ```
 [완료] v3 Redis-first, Kafka 3-broker, ElastiCache CME, 8차 테스트 (50만 TPS ~1,220/s)
 [완료] Phase A — ASG Terraform (asg.tf, codedeploy.tf, EC2 SD, min=2 운영 중)
 [완료] 9차 테스트 (ASG 2대, 50만 TPS ~2,014/s)
-[진행] Phase B — develop→main 머지 후 10만 검증 → 100만 테스트
-       → 10만 검증: batch processed 로그에서 polled= 분포 확인
-       → 통과 시 100만 테스트
+[완료] Phase B — 100만 트래픽 테스트 성공 (11차, TPS ~2,442/s, 정합성 1,000,000 ✅)
+       - writeResultCache 제거 (CME pipeline 병목)
+       - Consumer jdbcTemplate.batchUpdate() 배치 INSERT
+       - MAX_QUEUE_SIZE 500K → 1M (데이터 유실 방지)
+       - terraform-mcp t3.large (k6 OOM 방지)
 [예정] Phase C — API 엔드포인트 v3 정리
 [예정] Phase D — Spring Batch 안전망
 [예정] Phase E — MCP 서버 (AI 자율 운영)
@@ -132,7 +123,7 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | VPC | vpc-02bacd8c658dc632e (172.31.0.0/16) |
 | ASG (앱) | batch-kafka-app-asg (t3.small, min=2/max=3, private_app_2a+2b) |
 | EC2 (Kafka) | kafka-1/2/3 (t3.small, public 2a/2b/2c) |
-| EC2 (MCP) | terraform-mcp (t3.small, public_2a, Prometheus+Grafana+redis-exporter 실행 중) |
+| EC2 (MCP) | terraform-mcp (t3.large, public_2a, Prometheus+Grafana+redis-exporter+kafka-exporter 실행 중) |
 | RDS | batch-kafka-db (MySQL 8.0.44, db.t3.micro) |
 | ALB | alb-batch-kafka-api → tg-api-8080 |
 | ElastiCache | CME 3샤드 (Valkey 7.2, cache.t3.micro × 6) |
@@ -201,16 +192,14 @@ OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.OneAtATime`)
 2. kafka-1/2/3 중지
 3. terraform-mcp 중지
 4. RDS 중지
+5. (장기 미사용 시) 로컬에서:
+   terraform destroy -target=aws_elasticache_replication_group.redis
+   terraform destroy -target=aws_ssm_parameter.redis_cluster_nodes
+   terraform destroy -target=aws_ssm_parameter.redis_exporter_addr
 ```
 
-### 비용 절감 (장기 미사용)
-```bash
-terraform destroy -target=aws_elasticache_replication_group.redis \
-  -target=aws_ssm_parameter.redis_cluster_nodes \
-  -target=aws_ssm_parameter.redis_exporter_addr
-```
-
-> ElastiCache destroy → apply 시 SSM(SPRING_DATA_REDIS_CLUSTER_NODES, REDIS_EXPORTER_ADDR)은 자동 갱신됨
+> ASG 인스턴스는 콘솔에서 직접 중지 금지 → desired=0으로만
+> ElastiCache destroy → apply 시 SSM(SPRING_DATA_REDIS_CLUSTER_NODES) 자동 갱신
 > ASG min/max는 ignore_changes로 보호 — terraform apply가 용량을 건드리지 않음
 
 ---
@@ -241,10 +230,14 @@ BASE_URL: `http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.co
 
 ## 면접 핵심 멘트
 
-**프로젝트 소개**: "Redis Lua로 병목 원인을 찾고 해결한 뒤 재실험으로 검증, 데이터 기반으로 트레이드오프를 결정한 실험 중심 프로젝트"
+**프로젝트 소개**: "Redis Lua로 병목 원인을 찾고 해결한 뒤 재실험으로 검증, 데이터 기반으로 트레이드오프를 결정한 실험 중심 프로젝트. 최종적으로 100만 트래픽, 정합성 1,000,000건, 5xx 0건 달성"
 
-**CI/CD**: "OIDC 기반 키 없는 AWS 인증, SSH 차단 + SSM Session Manager, Blue-Green 무중단 배포"
+**CI/CD**: "OIDC 기반 키 없는 AWS 인증, SSH 차단 + SSM Session Manager, CodeDeploy OneAtATime 무중단 배포"
 
-**한계 인지**: "단일 인스턴스 CPU 한계 → ASG 수평 확장, 데이터로 근거 제시"
+**한계 인지**: "단일 인스턴스 CPU 한계 → ASG 수평 확장, 데이터로 근거 제시. TPS 1,220→2,014/s (+65%) 확인"
 
-**Consumer 병목 개선**: "Kafka batch listener로 받아도 DB INSERT가 1건씩이면 소용없다는 걸 로그로 확인 후, JdbcTemplate.batchUpdate + rewriteBatchedStatements=true로 DB 왕복 N→1로 줄임"
+**Consumer 병목 개선**: "Kafka batch listener로 받아도 DB INSERT가 1건씩이면 소용없다는 걸 로그로 확인 후, JdbcTemplate.batchUpdate + rewriteBatchedStatements=true로 DB 왕복 N→1로 줄임. Consumer 지연 200ms → 7.5ms"
+
+**데이터 유실 발견 및 해결**: "10차 테스트에서 DB 정합성 검증 중 574,888건만 INSERT된 것 발견. Redis Queue 500K 상한 초과 시 LPUSH 실패해도 202 반환하는 구조적 문제. MAX_QUEUE_SIZE 1M으로 상향해 11차에서 정합성 완벽 달성"
+
+**모니터링**: "Prometheus + Grafana 커스텀 메트릭 4종(Bridge 드레인 속도/사이클, Consumer 지연, Redis Queue 적재량). Docker monitoring 네트워크로 컨테이너 이름 기반 DNS — IP 관리 불필요"

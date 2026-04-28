@@ -15,7 +15,7 @@ public class RedisQueueService {
 
     private final RedisTemplate<String, String> redisTemplate;
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
-    private static final long MAX_QUEUE_SIZE = 500_000;
+    private static final long MAX_QUEUE_SIZE = 1_000_000;
     private final DefaultRedisScript<Long> pushQueueScript;
 
 
