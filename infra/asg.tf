@@ -4,7 +4,7 @@
 resource "aws_launch_template" "app" {
   name          = "batch-kafka-app-lt"
   image_id      = "ami-01c64e7a84a57e681"  # batch-kafka-app-ami (Docker + CodeDeploy 포함)
-  instance_type = "t3.small"
+  instance_type = "t3.large"
 
   iam_instance_profile {
     name = aws_iam_instance_profile.batch_kafka_app.name
