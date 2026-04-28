@@ -1,8 +1,8 @@
 # 1Million Campaign Orchestration System — 아키텍처 문서
 
-> 작성일: 2026-04-27
-> v1(10만 트래픽) → v3 Redis-first(100만 트래픽 목표) 전체 설계 및 구현 정리
-> 현재 상태: Phase A(ASG) 완료, Phase B(100만 테스트) 진행 예정
+> 작성일: 2026-04-27  최종 업데이트: 2026-04-28
+> v1(10만 트래픽) → v3 Redis-first(100만 트래픽) 전체 설계 및 구현 정리
+> 현재 상태: Phase B(100만 테스트) 완료 ✅ — TPS ~2,442/s, 정합성 1,000,000건
 
 ---
 
@@ -81,8 +81,8 @@
     v
 [ParticipationEventConsumer — concurrency=10]
     |
-    |-- INSERT IGNORE INTO participation_history (멱등성 보장)
-    |-- Redis 결과 캐시 적재  participation:result:{userId}:{campaignId}
+    |-- jdbcTemplate.batchUpdate() INSERT IGNORE (배치, DB 왕복 N→1)
+    |-- (Redis 결과 캐시 제거 — CME pipeline 병목 원인이었음)
     |
     v
 [MySQL RDS — batch-kafka-db]
@@ -174,8 +174,9 @@ redis.call('LPUSH', KEYS[1], ARGV[2])
 return 1
 ```
 
-- MAX_QUEUE_SIZE = 100,000 (시스템 과부하 방지)
+- MAX_QUEUE_SIZE = 1,000,000 (100만 트래픽 기준, 데이터 유실 방지)
 - LLEN + LPUSH 원자적 실행으로 race condition 없음
+- Queue 상한 초과 시 push() false 반환 → DECR 이미 완료된 상태로 유실 위험 → 상한을 충분히 크게 유지
 
 ---
 
@@ -374,7 +375,7 @@ kafka:
 
 ## 7. ParticipationEventConsumer — DB 최종 기록
 
-v3에서 Consumer의 역할은 단순합니다: **Kafka 메시지를 받아 DB에 INSERT SUCCESS**
+v3에서 Consumer의 역할은 단순합니다: **Kafka 메시지를 받아 DB에 배치 INSERT SUCCESS**
 
 ```java
 @KafkaListener(
@@ -389,19 +390,22 @@ public void consumeParticipationEvent(
     // 1. 메시지 파싱 (sequence 없으면 DLQ)
     List<ParticipationEvent> events = parseRecords(records);
 
-    // 2. DB INSERT IGNORE (멱등성 — UNIQUE(campaign_id, user_id) 제약)
-    for (ParticipationEvent event : events) {
-        participationHistoryRepository.insertSuccess(
-                event.getCampaignId(), event.getUserId(), event.getSequence());
-        // DataIntegrityViolationException → 중복으로 무시 (at-least-once 보장)
-    }
+    // 2. 배치 INSERT IGNORE (DB 왕복 N→1, rewriteBatchedStatements=true)
+    List<Object[]> batchArgs = events.stream()
+        .map(e -> new Object[]{e.getCampaignId(), e.getUserId(), e.getSequence()})
+        .toList();
+    jdbcTemplate.batchUpdate(
+        "INSERT IGNORE INTO participation_history (campaign_id, user_id, sequence, status, created_at) VALUES (?, ?, ?, 'SUCCESS', NOW())",
+        batchArgs
+    );
+    // 배치 실패 시 단건 폴백 + DLQ
 
-    // 3. Redis 결과 캐시 적재 (파이프라인으로 배치 처리)
-    writeResultCache(successEvents);
-
-    // 4. Kafka 오프셋 수동 커밋 (처리 완료 후)
+    // 3. Kafka 오프셋 수동 커밋
     acknowledgment.acknowledge();
 }
+// Redis 결과 캐시(writeResultCache) 제거 — ElastiCache CME pipeline 병목 원인
+// 제거 전: Kafka lag 9K 누적, Consumer 지연 200ms+
+// 제거 후: lag 거의 0, Consumer 지연 7.5~15ms
 ```
 
 ### 멱등성 보장 메커니즘
@@ -648,6 +652,9 @@ SSH를 완전히 차단하고 SSM Session Manager로만 접속합니다. 민감 
 | 6차 | 파티션 3개 (userId 키) | 550/s | 3.12s | 거의 0 | ✅ |
 | 7차 | 3브로커 + 파티션 10개, 12만 | ~1,150/s | - | 거의 0 | ✅ |
 | 8차 | 3브로커 + 파티션 10개, 50만 | ~1,220/s | 2.81s | 거의 0 | ✅ |
+| 9차 | **ASG 2대**, 50만 | ~2,014/s | - | 거의 0 | ✅ |
+| 10차 | **writeResultCache 제거 + 배치 INSERT**, 100만 | ~2,613/s | 2.22s | 거의 0 | ❌ 574,888 (Queue 오버플로우) |
+| **11차** | **MAX_QUEUE_SIZE 1M**, 100만 | **~2,442/s** | **2.74s** | **거의 0** | **✅ 1,000,000** |
 
 ### 병목 분석 및 해결
 
@@ -899,15 +906,18 @@ ItemWriter:    LPUSH 재적재 → Bridge → Kafka → Consumer INSERT
 [완료] Kafka 3-broker KRaft 클러스터
 [완료] ElastiCache CME 3샤드
 [완료] 8차 테스트 (50만, TPS ~1,220/s, 정합성 완벽)
+[완료] Phase A — ASG Terraform (asg.tf, codedeploy.tf, min=2/max=3, CPU 60% Target Tracking)
+[완료] Phase B — 100만 트래픽 테스트 ✅
+              - 9차: ASG 2대, TPS ~2,014/s
+              - writeResultCache 제거 (CME pipeline 병목)
+              - Consumer jdbcTemplate.batchUpdate() + rewriteBatchedStatements=true
+              - MAX_QUEUE_SIZE 500K → 1M (데이터 유실 방지)
+              - terraform-mcp t3.large (k6 OOM 방지)
+              - 11차 최종: TPS ~2,442/s, 정합성 1,000,000 ✅
 
-[진행 중] Phase A — ASG Terraform 구성
-              codedeploy.tf + asg.tf + user-data-app.sh
-              기존 단일 EC2 제거 + Prometheus EC2 SD 전환
-
-[예정] Phase B — 9차 테스트 (100만, TPS ~2,400/s 기대)
 [예정] Phase C — API 엔드포인트 v3 기준 정리
 [예정] Phase D — Spring Batch 안전망 (재고 정합성 검증 + 유실 복구)
 [예정] Phase E — MCP 서버 (AI 자율 운영)
 ```
 
-**최종 목표**: 100만 트래픽 처리 + AI가 자율적으로 운영 판단하는 시스템
+**최종 목표**: 100만 트래픽 처리 ✅ + AI가 자율적으로 운영 판단하는 시스템
