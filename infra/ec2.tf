@@ -255,7 +255,7 @@ resource "aws_instance" "terraform_mcp" {
   metadata_options {
     http_tokens                 = "required" # IMDSv2 강제
     http_endpoint               = "enabled"
-    http_put_response_hop_limit = 1
+    http_put_response_hop_limit = 2
   }
 
   user_data = filebase64("${path.module}/user-data.sh")
