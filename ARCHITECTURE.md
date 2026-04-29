@@ -808,19 +808,62 @@ bash ~/1milion-campaign-orchestration-system/stress-test/run-test.sh prod
 
 ---
 
-### Phase C — API 엔드포인트 정리 (v3 기준 재정비)
+### Phase C — API 엔드포인트 정리 + 프론트 운영 콘솔화
 
-v1/v2 잔재 엔드포인트를 v3 아키텍처 기준으로 정리합니다.
+v1/v2 잔재 제거 + 프론트를 "성능 실험실"에서 "운영 콘솔"로 재편합니다.
 
-**주요 작업:**
+#### 백엔드 API 분류
 
-| 작업 | 내용 |
-|------|------|
-| 불필요한 컨트롤러 제거 | v1 LoadTestController, TestController, KafkaManagementController 등 정리 |
-| 폴링 API 개선 | `GET /api/campaigns/{id}/participation/{userId}/result` — Redis 캐시 우선, DB fallback |
-| 캠페인 상태 조회 API | 재고/상태 Redis 우선 조회 (DB 미접촉) |
-| Admin API 정리 | 캠페인 생성 시 Redis 초기화 (stock, total, active flag) 흐름 명확화 |
-| API 문서화 | Swagger/OpenAPI 또는 README에 엔드포인트 명세 정리 |
+| 분류 | API | 조치 |
+|------|-----|------|
+| A. 핵심 유지 | `POST /api/campaigns/{id}/participation` | 유지 |
+| A. 핵심 유지 | `GET /api/campaigns/{id}/participation/{userId}/result` | 유지 |
+| A. 핵심 유지 | `GET/POST /api/admin/campaigns` | 유지 |
+| A. 핵심 유지 | `GET /api/admin/stats/daily` | 유지 |
+| A. 핵심 유지 | `GET /api/admin/stats/campaign/{id}` | 유지 |
+| A. 핵심 유지 | `POST/GET /api/admin/batch/*` | 유지 |
+| B. 보조 | `GET /api/campaigns/{id}/status` | 유지 (운영 요약 목적으로 제한) |
+| B. 보조 | `POST /api/admin/kafka/reload-consumers` | 내부 운영용으로만 |
+| C. 실험용 | `LoadTestController` 전체 | 비노출 + @deprecated 표기 |
+| C. 실험용 | `GET /api/admin/stats/raw` | 비노출 + @deprecated 표기 |
+| C. 실험용 | `GET /api/admin/stats/order-analysis/{id}` | 비노출 + @deprecated 표기 |
+| C. 실험용 | `GET /api/admin/stats/order-violations/{id}` | 비노출 + @deprecated 표기 |
+| C. 실험용 | `AdminLogController` 전체 | 비노출 + @deprecated 표기 |
+| C. 실험용 | `POST /api/admin/test/participate-bulk` | 비노출 + @deprecated 표기 |
+| v2 잔재 | `POST /api/campaigns/{id}/participation-sync` | 제거 대상 |
+| 불필요 | `AdminViewController` | React SPA라면 제거 |
+
+> 이번 단계는 **삭제가 아니라 비노출 + @deprecated 표기**. 실제 미사용 확인 후 최종 삭제.
+
+#### 프론트 목표 구조
+
+```
+사용자 영역
+  /               랜딩 + 진행 중 캠페인 요약
+  /campaigns      캠페인 목록 + 참여 + 결과 확인
+
+관리자 영역
+  /admin/campaigns    캠페인 생성/조회/상태/재고
+  /admin/stats        일별 통계 + 캠페인별 통계
+  /admin/operations   배치 실행/이력 + DLQ 재처리 + 정합성 점검/복구
+  /admin/system       운영 링크 포털 (Grafana/CloudWatch/Kafka UI 링크)
+```
+
+제거 대상 라우트: `/admin/performance`, `/admin/load-test`, `/admin/monitoring`
+
+> Grafana/CloudWatch가 하는 모니터링을 프론트에서 재구현하지 않는다.
+> `/admin/system`은 직접 차트를 그리는 게 아니라 운영 링크 포털 역할만 수행.
+
+#### 단계별 실행
+
+```
+1단계. App.tsx/Layout.tsx 라우트 + 메뉴 재구성
+2단계. 실험용 페이지 라우트 제거 (파일은 유지)
+3단계. 실험용 API에 @deprecated 주석 추가
+4단계. StatsDashboard + CampaignDetailStats → /admin/stats 통합
+5단계. BatchManagement → /admin/operations 재구성 (시뮬레이션 제거)
+6단계. /admin/system 신설 (Grafana/CloudWatch/Kafka UI 링크 카드)
+```
 
 ---
 
