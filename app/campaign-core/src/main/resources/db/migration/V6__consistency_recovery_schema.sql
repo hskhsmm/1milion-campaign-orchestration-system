@@ -1,0 +1,47 @@
+CREATE TABLE consistency_recovery_execution (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    requested_by VARCHAR(100) NULL,
+    dry_run BIT NOT NULL,
+    auto_fix BIT NOT NULL,
+    filter_campaign_id BIGINT NULL,
+    max_campaigns INT NOT NULL,
+    target_count BIGINT NOT NULL DEFAULT 0,
+    anomaly_count BIGINT NOT NULL DEFAULT 0,
+    fixed_count BIGINT NOT NULL DEFAULT 0,
+    report_only_count BIGINT NOT NULL DEFAULT 0,
+    status VARCHAR(32) NOT NULL,
+    started_at DATETIME NULL,
+    ended_at DATETIME NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    INDEX idx_consistency_execution_status (status),
+    INDEX idx_consistency_execution_campaign (filter_campaign_id)
+);
+
+CREATE TABLE consistency_recovery_result (
+    id BIGINT NOT NULL AUTO_INCREMENT PRIMARY KEY,
+    execution_id BIGINT NOT NULL,
+    campaign_id BIGINT NOT NULL,
+    campaign_status VARCHAR(32) NOT NULL,
+    total_stock BIGINT NOT NULL,
+    success_count BIGINT NOT NULL,
+    pending_count BIGINT NOT NULL,
+    redis_remaining_stock BIGINT NULL,
+    redis_total_stock BIGINT NULL,
+    queue_size BIGINT NOT NULL,
+    active_flag_present BIT NOT NULL,
+    active_set_present BIT NOT NULL,
+    anomaly_type VARCHAR(64) NOT NULL,
+    severity VARCHAR(32) NOT NULL,
+    action_taken VARCHAR(32) NOT NULL,
+    fixed BIT NOT NULL,
+    detail_message VARCHAR(1000) NULL,
+    checked_at DATETIME NOT NULL,
+    created_at DATETIME NOT NULL,
+    updated_at DATETIME NOT NULL,
+    CONSTRAINT fk_consistency_result_execution
+        FOREIGN KEY (execution_id) REFERENCES consistency_recovery_execution(id),
+    INDEX idx_consistency_result_execution (execution_id),
+    INDEX idx_consistency_result_campaign (campaign_id),
+    INDEX idx_consistency_result_anomaly (anomaly_type)
+);

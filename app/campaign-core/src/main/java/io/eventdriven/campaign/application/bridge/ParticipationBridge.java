@@ -1,6 +1,8 @@
 package io.eventdriven.campaign.application.bridge;
 
+import io.eventdriven.campaign.application.event.DlqEventPayload;
 import io.eventdriven.campaign.application.event.ParticipationEvent;
+import io.eventdriven.campaign.application.service.DlqMessageService;
 import io.eventdriven.campaign.application.service.RedisStockService;
 import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.config.KafkaConfig;
@@ -18,66 +20,45 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 
-/**
- * Redis Queue → Kafka 유량 조절 브릿지 (v2)
- *
- * 역할: API에서 LPUSH된 메시지를 RPOP 후 Kafka로 발행.
- * - active:campaigns Set 순회 → 캠페인별 큐 드레인
- * - MAX_RETRY 3회 + exponential backoff 후 실패 시 DLQ + Slack 알림
- * - RPOP 실패 시 LPUSH 재적재 금지 (Queue 순서 뒤섞임 방지)
- * - 파티션 키: userId (파티션 균등 분산, v3에서 선착순은 Redis DECR 시점에 이미 확정)
- *
- * 주의: @EnableScheduling이 CampaignCoreApplication에 있어야 동작.
- */
 @Slf4j
 @Component
-// @RequiredArgsConstructor 미사용 이유:
-// Timer는 Spring Bean이 아닌 직접 생성 객체(Timer.builder().register())이므로
-// Lombok이 생성자 파라미터로 주입할 수 없음.
-// MeterRegistry(Bean)를 먼저 주입받은 뒤 생성자 안에서 Timer를 직접 만들어야 하므로
-// 생성자를 수동으로 작성함.
 public class ParticipationBridge {
+
+    private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
+    private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
+    private static final int MAX_RETRY = 3;
 
     private final RedisTemplate<String, String> redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final RedisStockService redisStockService;
     private final SlackNotificationService slackNotificationService;
-    private final MeterRegistry meterRegistry;  // Spring Bean → 생성자 주입
+    private final MeterRegistry meterRegistry;
     private final JsonMapper jsonMapper;
-
-    private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
-    private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
-    private static final String DLQ_TOPIC = "campaign-participation-topic.dlq";
-    private static final int MAX_RETRY = 3;
-
-    // campaignId별 Counter 캐시
-    // campaignId는 런타임에 결정되므로 생성자에서 미리 만들 수 없음 , 첫 발행 시 lazily 생성 후 재사용
+    private final DlqMessageService dlqMessageService;
+    private final Timer drainTimer;
     private final Map<Long, Counter> publishedCounters = new ConcurrentHashMap<>();
 
-    // Timer는 Bean이 아닌 직접 생성 객체, 생성자에서 MeterRegistry를 받아 초기화
-    private final Timer drainTimer;
-
-    public ParticipationBridge(RedisTemplate<String, String> redisTemplate,
-                               KafkaTemplate<String, String> kafkaTemplate,
-                               RedisStockService redisStockService,
-                               SlackNotificationService slackNotificationService,
-                               MeterRegistry meterRegistry,
-                               JsonMapper jsonMapper) {
+    public ParticipationBridge(
+            RedisTemplate<String, String> redisTemplate,
+            KafkaTemplate<String, String> kafkaTemplate,
+            RedisStockService redisStockService,
+            SlackNotificationService slackNotificationService,
+            MeterRegistry meterRegistry,
+            JsonMapper jsonMapper,
+            DlqMessageService dlqMessageService
+    ) {
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.redisStockService = redisStockService;
         this.slackNotificationService = slackNotificationService;
-        this.meterRegistry = meterRegistry;  // 1. Bean 주입 완료
+        this.meterRegistry = meterRegistry;
         this.jsonMapper = jsonMapper;
+        this.dlqMessageService = dlqMessageService;
         this.drainTimer = Timer.builder("bridge.drain.duration")
-                .description("drainQueues() 실행 소요시간")
-                .register(meterRegistry);    // 2. 주입된 MeterRegistry로 Timer 등록
+                .description("Time spent draining Redis queues into Kafka")
+                .register(meterRegistry);
     }
 
-    /**
-     * 100ms마다 실행 (fixedDelay: 이전 실행 완료 후 100ms 대기)
-     * active:campaigns Set에 등록된 캠페인별로 큐 드레인
-     */
     @Scheduled(fixedDelay = 100)
     public void drainQueues() {
         drainTimer.record(() -> {
@@ -90,16 +71,12 @@ public class ParticipationBridge {
                 try {
                     drainCampaignQueue(Long.parseLong(campaignIdStr));
                 } catch (Exception e) {
-                    log.error("캠페인 큐 드레인 중 예외 발생. campaignId={}", campaignIdStr, e);
+                    log.error("Failed to drain campaign queue. campaignId={}", campaignIdStr, e);
                 }
             }
         });
     }
 
-    /**
-     * 단일 캠페인 큐 드레인
-     * 큐 크기에 따라 동적으로 batchSize 결정 후 RPOP → Kafka 발행. 큐가 비면 즉시 종료.
-     */
     private void drainCampaignQueue(Long campaignId) {
         String queueKey = QUEUE_KEY_PREFIX + campaignId;
         Long queueSize = redisTemplate.opsForList().size(queueKey);
@@ -108,11 +85,9 @@ public class ParticipationBridge {
         for (int i = 0; i < dynamicBatchSize; i++) {
             String message = redisTemplate.opsForList().rightPop(queueKey);
             if (message == null) {
-                // 큐가 비었고 active flag도 없으면 재고까지 소진된 캠페인
-                // → Lua가 DEL한 active:campaign:{id}를 확인 후 전역 Set에서도 제거
                 if (!redisStockService.isActive(campaignId)) {
                     redisStockService.deactivateCampaign(campaignId);
-                    log.info("캠페인 {} 재고 소진 + 큐 드레인 완료 → active:campaigns 제거", campaignId);
+                    log.info("Campaign drained and deactivated. campaignId={}", campaignId);
                 }
                 break;
             }
@@ -120,54 +95,45 @@ public class ParticipationBridge {
         }
     }
 
-    /**
-     * 큐 크기 기반 동적 batchSize 결정
-     * 큐 적체량에 비례해 드레인 속도 자동 조절
-     */
     private int resolveBatchSize(Long queueSize) {
-        if (queueSize == null || queueSize < 10_000) return 500;
-        if (queueSize < 100_000) return 1_000;
+        if (queueSize == null || queueSize < 10_000) {
+            return 500;
+        }
+        if (queueSize < 100_000) {
+            return 1_000;
+        }
         return 2_000;
     }
 
-    /**
-     * Kafka 발행 (MAX_RETRY 3회 + exponential backoff)
-     * 최종 실패 시 DLQ 전송 + Slack 알림.
-     * 실패 메시지를 Redis Queue에 재적재하지 않음 (순서 보장 우선).
-     */
     private void publishWithRetry(Long campaignId, String message) {
         String partitionKey = extractUserIdKey(message, campaignId);
         for (int attempt = 1; attempt <= MAX_RETRY; attempt++) {
             try {
                 kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message);
-                // Kafka 발행 성공 카운터 — campaignId 태그로 캠페인별 구분
                 publishedCounters.computeIfAbsent(campaignId, id ->
                         Counter.builder("bridge.messages.published")
-                                .description("Kafka 발행 성공 건수")
+                                .description("Kafka messages published by bridge")
                                 .tag("campaignId", String.valueOf(id))
                                 .register(meterRegistry)
                 ).increment();
-                return; // 성공
+                return;
             } catch (Exception e) {
-                log.warn("Kafka 발행 실패 (시도 {}/{}). campaignId={}", attempt, MAX_RETRY, campaignId, e);
-
+                log.warn("Kafka publish failed. attempt={}/{}, campaignId={}", attempt, MAX_RETRY, campaignId, e);
                 if (attempt < MAX_RETRY) {
-                    long backoffMs = (long) Math.pow(2, attempt) * 100L; // 200ms → 400ms
+                    long backoffMs = (long) Math.pow(2, attempt) * 100L;
                     try {
                         Thread.sleep(backoffMs);
-                    } catch (InterruptedException ie) {
+                    } catch (InterruptedException interruptedException) {
                         Thread.currentThread().interrupt();
-                        log.error("Bridge 스레드 인터럽트. campaignId={}", campaignId);
-                        sendToDlqWithSlack(campaignId, message, "THREAD_INTERRUPTED");
+                        sendToDlqWithSlack(campaignId, partitionKey, message,
+                                "THREAD_INTERRUPTED", interruptedException.getMessage());
                         return;
                     }
                 }
             }
         }
 
-        // MAX_RETRY 모두 소진
-        log.error("Bridge MAX_RETRY({}) 초과. DLQ 전송. campaignId={}", MAX_RETRY, campaignId);
-        sendToDlqWithSlack(campaignId, message, "MAX_RETRY_EXCEEDED");
+        sendToDlqWithSlack(campaignId, partitionKey, message, "MAX_RETRY_EXCEEDED", null);
     }
 
     private String extractUserIdKey(String message, Long campaignId) {
@@ -175,26 +141,35 @@ public class ParticipationBridge {
             ParticipationEvent event = jsonMapper.readValue(message, ParticipationEvent.class);
             return String.valueOf(event.getUserId());
         } catch (Exception e) {
-            log.warn("Kafka key userId 추출 실패. campaignId={} fallback 적용", campaignId);
+            log.warn("Failed to extract userId partition key. campaignId={}", campaignId, e);
             return String.valueOf(campaignId);
         }
     }
 
-    /**
-     * DLQ 전송 + Slack 알림
-     * DLQ 전송 자체 실패 시 로그로만 기록 (무한 루프 방지)
-     */
-    private void sendToDlqWithSlack(Long campaignId, String message, String errorReason) {
+    private void sendToDlqWithSlack(
+            Long campaignId,
+            String originalKey,
+            String originalMessage,
+            String errorReason,
+            String errorMessage
+    ) {
         try {
-            kafkaTemplate.send(DLQ_TOPIC, String.valueOf(campaignId), message);
-            log.info("Bridge DLQ 전송 완료. campaignId={}, reason={}", campaignId, errorReason);
+            DlqEventPayload payload = dlqMessageService.createBridgePayload(
+                    campaignId,
+                    originalKey,
+                    originalMessage,
+                    errorReason,
+                    errorMessage
+            );
+            dlqMessageService.publishAndStore(payload);
+            log.info("Bridge message moved to DLQ. campaignId={}, reason={}", campaignId, errorReason);
         } catch (Exception e) {
-            log.error("CRITICAL: Bridge DLQ 전송도 실패! campaignId={}, message={}", campaignId, message, e);
+            log.error("Failed to move bridge message to DLQ. campaignId={}", campaignId, e);
         }
 
         slackNotificationService.sendDlqAlert(
-                "Bridge Produce " + errorReason,
-                "campaignId=" + campaignId
+                "Bridge " + errorReason,
+                "campaignId=" + campaignId + ", key=" + originalKey
         );
     }
 }
