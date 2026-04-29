@@ -5,6 +5,7 @@ import org.springframework.beans.factory.annotation.Value;
 import org.springframework.http.HttpEntity;
 import org.springframework.http.HttpHeaders;
 import org.springframework.http.MediaType;
+import org.springframework.scheduling.annotation.Async;
 import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
@@ -19,10 +20,12 @@ public class SlackNotificationService {
 
     private final RestTemplate restTemplate = new RestTemplate();
 
+    @Async("slackTaskExecutor")
     public void sendDlqAlert(String reason, String detail) {
         sendAlert("[DLQ 알림] " + reason, detail);
     }
 
+    @Async("slackTaskExecutor")
     public void sendBatchAlert(String title, String detail) {
         sendAlert("[Batch 알림] " + title, detail);
     }
