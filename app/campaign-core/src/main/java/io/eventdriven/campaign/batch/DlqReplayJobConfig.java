@@ -39,26 +39,26 @@ public class DlqReplayJobConfig {
     @Bean
     public Step dlqReplayStartStep() {
         return new StepBuilder("dlqReplayStartStep", jobRepository)
-                .tasklet(markRunningTasklet(), transactionManager)
+                .tasklet(dlqReplayMarkRunningTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
     public Step dlqReplayProcessStep() {
         return new StepBuilder("dlqReplayProcessStep", jobRepository)
-                .tasklet(processReplayTasklet(), transactionManager)
+                .tasklet(dlqReplayProcessTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
     public Step dlqReplayFinishStep() {
         return new StepBuilder("dlqReplayFinishStep", jobRepository)
-                .tasklet(markCompletedTasklet(), transactionManager)
+                .tasklet(dlqReplayMarkCompletedTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
-    public Tasklet markRunningTasklet() {
+    public Tasklet dlqReplayMarkRunningTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext().getJobParameters().get("replayExecutionId");
             dlqReplayService.markRunning(executionId);
@@ -67,7 +67,7 @@ public class DlqReplayJobConfig {
     }
 
     @Bean
-    public Tasklet processReplayTasklet() {
+    public Tasklet dlqReplayProcessTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext().getJobParameters().get("replayExecutionId");
             dlqReplayService.processExecution(executionId);
@@ -76,7 +76,7 @@ public class DlqReplayJobConfig {
     }
 
     @Bean
-    public Tasklet markCompletedTasklet() {
+    public Tasklet dlqReplayMarkCompletedTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext().getJobParameters().get("replayExecutionId");
             dlqReplayService.markCompleted(executionId);

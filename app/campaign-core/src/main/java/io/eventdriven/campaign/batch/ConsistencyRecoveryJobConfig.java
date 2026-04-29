@@ -39,26 +39,26 @@ public class ConsistencyRecoveryJobConfig {
     @Bean
     public Step consistencyRecoveryStartStep() {
         return new StepBuilder("consistencyRecoveryStartStep", jobRepository)
-                .tasklet(markRunningTasklet(), transactionManager)
+                .tasklet(consistencyRecoveryMarkRunningTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
     public Step consistencyRecoveryProcessStep() {
         return new StepBuilder("consistencyRecoveryProcessStep", jobRepository)
-                .tasklet(processTasklet(), transactionManager)
+                .tasklet(consistencyRecoveryProcessTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
     public Step consistencyRecoveryFinishStep() {
         return new StepBuilder("consistencyRecoveryFinishStep", jobRepository)
-                .tasklet(markCompletedTasklet(), transactionManager)
+                .tasklet(consistencyRecoveryMarkCompletedTasklet(), transactionManager)
                 .build();
     }
 
     @Bean
-    public Tasklet markRunningTasklet() {
+    public Tasklet consistencyRecoveryMarkRunningTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext()
                     .getJobParameters().get("consistencyRecoveryExecutionId");
@@ -68,7 +68,7 @@ public class ConsistencyRecoveryJobConfig {
     }
 
     @Bean
-    public Tasklet processTasklet() {
+    public Tasklet consistencyRecoveryProcessTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext()
                     .getJobParameters().get("consistencyRecoveryExecutionId");
@@ -78,7 +78,7 @@ public class ConsistencyRecoveryJobConfig {
     }
 
     @Bean
-    public Tasklet markCompletedTasklet() {
+    public Tasklet consistencyRecoveryMarkCompletedTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext()
                     .getJobParameters().get("consistencyRecoveryExecutionId");
