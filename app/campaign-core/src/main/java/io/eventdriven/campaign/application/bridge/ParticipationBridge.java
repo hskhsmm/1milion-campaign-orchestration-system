@@ -18,6 +18,7 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.util.Map;
 import java.util.Set;
+import java.util.concurrent.CompletionException;
 import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
@@ -26,7 +27,8 @@ public class ParticipationBridge {
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
-    private static final int MAX_RETRY = 3;
+    private static final String IMMEDIATE_SEND_FAILED = "IMMEDIATE_SEND_FAILED";
+    private static final String ASYNC_SEND_FAILED = "ASYNC_SEND_FAILED";
 
     private final RedisTemplate<String, String> redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -91,7 +93,7 @@ public class ParticipationBridge {
                 }
                 break;
             }
-            publishWithRetry(campaignId, message);
+            publishAsync(campaignId, message);
         }
     }
 
@@ -105,35 +107,43 @@ public class ParticipationBridge {
         return 2_000;
     }
 
-    private void publishWithRetry(Long campaignId, String message) {
+    private void publishAsync(Long campaignId, String message) {
         String partitionKey = extractUserIdKey(message, campaignId);
-        for (int attempt = 1; attempt <= MAX_RETRY; attempt++) {
-            try {
-                kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message);
-                publishedCounters.computeIfAbsent(campaignId, id ->
-                        Counter.builder("bridge.messages.published")
-                                .description("Kafka messages published by bridge")
-                                .tag("campaignId", String.valueOf(id))
-                                .register(meterRegistry)
-                ).increment();
-                return;
-            } catch (Exception e) {
-                log.warn("Kafka publish failed. attempt={}/{}, campaignId={}", attempt, MAX_RETRY, campaignId, e);
-                if (attempt < MAX_RETRY) {
-                    long backoffMs = (long) Math.pow(2, attempt) * 100L;
-                    try {
-                        Thread.sleep(backoffMs);
-                    } catch (InterruptedException interruptedException) {
-                        Thread.currentThread().interrupt();
-                        sendToDlqWithSlack(campaignId, partitionKey, message,
-                                "THREAD_INTERRUPTED", interruptedException.getMessage());
-                        return;
-                    }
-                }
-            }
-        }
+        try {
+            kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message)
+                    .whenComplete((result, ex) -> {
+                        if (ex != null) {
+                            Throwable failure = unwrapCompletionException(ex);
+                            log.warn("Kafka publish completed with failure. campaignId={}", campaignId, failure);
+                            sendToDlqWithSlack(
+                                    campaignId,
+                                    partitionKey,
+                                    message,
+                                    ASYNC_SEND_FAILED,
+                                    failure.getMessage()
+                            );
+                            return;
+                        }
 
-        sendToDlqWithSlack(campaignId, partitionKey, message, "MAX_RETRY_EXCEEDED", null);
+                        publishedCounters.computeIfAbsent(campaignId, id ->
+                                Counter.builder("bridge.messages.published")
+                                        .description("Kafka messages published by bridge")
+                                        .tag("campaignId", String.valueOf(id))
+                                        .register(meterRegistry)
+                        ).increment();
+                    });
+        } catch (Exception e) {
+            log.warn("Kafka publish failed before enqueue. campaignId={}", campaignId, e);
+            sendToDlqWithSlack(campaignId, partitionKey, message, IMMEDIATE_SEND_FAILED, e.getMessage());
+        }
+    }
+
+    private Throwable unwrapCompletionException(Throwable throwable) {
+        if (throwable instanceof CompletionException completionException
+                && completionException.getCause() != null) {
+            return completionException.getCause();
+        }
+        return throwable;
     }
 
     private String extractUserIdKey(String message, Long campaignId) {

@@ -11,9 +11,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
 import org.springframework.dao.DataIntegrityViolationException;
-import org.springframework.data.redis.core.RedisOperations;
-import org.springframework.data.redis.core.RedisTemplate;
-import org.springframework.data.redis.core.SessionCallback;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.kafka.annotation.KafkaListener;
 import org.springframework.kafka.support.Acknowledgment;
@@ -31,13 +28,9 @@ import java.util.concurrent.TimeUnit;
 @RequiredArgsConstructor
 public class ParticipationEventConsumer {
 
-    private static final String RESULT_CACHE_PREFIX = "participation:result:";
-    private static final Duration RESULT_CACHE_TTL = Duration.ofSeconds(300);
-
     private final JsonMapper jsonMapper;
     private final ParticipationHistoryRepository participationHistoryRepository;
     private final JdbcTemplate jdbcTemplate;
-    private final RedisTemplate<String, String> redisTemplate;
     private final SlackNotificationService slackNotificationService;
     private final DlqMessageService dlqMessageService;
     private final MeterRegistry meterRegistry;
@@ -109,26 +102,6 @@ public class ParticipationEventConsumer {
 
         // ⑤ Kafka 오프셋 커밋
         acknowledgment.acknowledge();
-    }
-
-    @SuppressWarnings("unchecked")
-    private void writeResultCache(List<ParticipationEvent> events) {
-        try {
-            redisTemplate.executePipelined(new SessionCallback<Object>() {
-                @Override
-                public <K, V> Object execute(RedisOperations<K, V> operations) {
-                    RedisOperations<String, String> ops = (RedisOperations<String, String>) operations;
-                    for (ParticipationEvent event : events) {
-                        String key = RESULT_CACHE_PREFIX + event.getUserId() + ":" + event.getCampaignId();
-                        ops.opsForValue().set(key, "SUCCESS", RESULT_CACHE_TTL);
-                    }
-                    return null;
-                }
-            });
-            log.debug("결과 캐시 적재 완료. {}건", events.size());
-        } catch (Exception e) {
-            log.error("결과 캐시 적재 실패 (무시 — DB는 이미 SUCCESS). {}건", events.size(), e);
-        }
     }
 
     private List<ParticipationEvent> parseRecords(List<ConsumerRecord<String, String>> records) {
