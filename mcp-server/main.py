@@ -30,14 +30,7 @@ async def lifespan(app: FastAPI):
     logger.info("스케줄러 종료")
 
 
-app = FastAPI(title="MCP Monitor Server", routes=mcp_routes, lifespan=lifespan, redirect_slashes=False)
-
-
-@app.middleware("http")
-async def normalize_mcp_messages_path(request, call_next):
-    if request.scope["path"] == "/mcp/messages":
-        request.scope["path"] = "/mcp/messages/"
-    return await call_next(request)
+app = FastAPI(title="MCP Monitor Server", routes=mcp_routes, lifespan=lifespan)
 
 
 @app.get("/health")
