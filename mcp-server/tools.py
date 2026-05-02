@@ -6,8 +6,7 @@ import requests
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
-from starlette.responses import Response
-from starlette.routing import Mount, Route
+from starlette.routing import Route
 
 import config
 import state
@@ -432,16 +431,19 @@ def _handle_trigger_consistency_check() -> list[TextContent]:
 # FastAPI 마운트용 SSE transport
 # ---------------------------------------------------------------------------
 
-sse = SseServerTransport("/mcp/messages/")
+sse = SseServerTransport("/mcp/messages")
 
 
 async def handle_sse(request):
     async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
         await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
-    return Response()
+
+
+async def handle_messages(request):
+    await sse.handle_post_message(request.scope, request.receive, request._send)
 
 
 mcp_routes = [
     Route("/mcp/sse", endpoint=handle_sse, methods=["GET"]),
-    Mount("/mcp/messages/", app=sse.handle_post_message),
+    Route("/mcp/messages", endpoint=handle_messages, methods=["POST"]),
 ]
