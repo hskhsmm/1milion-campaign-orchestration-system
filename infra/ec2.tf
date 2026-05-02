@@ -37,6 +37,24 @@ resource "aws_iam_role_policy" "terraform_mcp_ec2_describe" {
   })
 }
 
+# MCP 모니터링 서버용 — CloudWatch 읽기 (ASG CPU, RDS CPU)
+resource "aws_iam_role_policy" "terraform_mcp_cloudwatch_read" {
+  name = "CloudWatchRead-for-mcp"
+  role = aws_iam_role.terraform_mcp.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # terraform-mcp 보안 그룹
 resource "aws_security_group" "terraform_mcp" {
   name        = "terraform-mcp-sg"
@@ -239,7 +257,7 @@ resource "aws_instance" "kafka_3" {
 # terraform-mcp EC2 인스턴스
 resource "aws_instance" "terraform_mcp" {
   ami                    = "ami-0ecfdfd1c8ae01aec" # Amazon Linux 2023 ap-northeast-2 (2026-03-27)
-  instance_type          = "t3.small"
+  instance_type          = "t3.large"
   subnet_id              = aws_subnet.public_2a.id
   vpc_security_group_ids = [aws_security_group.terraform_mcp.id]
   iam_instance_profile   = aws_iam_instance_profile.terraform_mcp.name
