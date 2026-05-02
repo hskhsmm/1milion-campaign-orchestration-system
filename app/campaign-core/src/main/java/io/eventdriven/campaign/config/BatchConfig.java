@@ -3,15 +3,20 @@ package io.eventdriven.campaign.config;
 import org.springframework.batch.core.launch.JobLauncher;
 import org.springframework.batch.core.launch.support.TaskExecutorJobLauncher;
 import org.springframework.batch.core.repository.JobRepository;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 import org.springframework.context.annotation.Primary;
+import org.springframework.scheduling.annotation.EnableAsync;
 import org.springframework.scheduling.concurrent.ThreadPoolTaskExecutor;
+
+import java.util.concurrent.ThreadPoolExecutor;
 
 /**
  * Spring Batch 설정
  * - 비동기 JobLauncher: 배치 실행 시 API 응답 지연 방지
  */
+@EnableAsync
 @Configuration
 @SuppressWarnings("removal")
 public class BatchConfig {
@@ -36,6 +41,18 @@ public class BatchConfig {
         return executor;
     }
 
+    @Bean(name = "slackTaskExecutor")
+    public ThreadPoolTaskExecutor slackTaskExecutor() {
+        ThreadPoolTaskExecutor executor = new ThreadPoolTaskExecutor();
+        executor.setCorePoolSize(2);
+        executor.setMaxPoolSize(4);
+        executor.setQueueCapacity(50);
+        executor.setThreadNamePrefix("slack-");
+        executor.setRejectedExecutionHandler(new ThreadPoolExecutor.DiscardPolicy());
+        executor.initialize();
+        return executor;
+    }
+
     /**
      * 비동기 JobLauncher
      * - 배치 작업을 백그라운드에서 실행
@@ -47,7 +64,7 @@ public class BatchConfig {
     @Bean(name = "asyncJobLauncher")
     public JobLauncher asyncJobLauncher(
             JobRepository jobRepository,
-            ThreadPoolTaskExecutor batchTaskExecutor
+            @Qualifier("batchTaskExecutor") ThreadPoolTaskExecutor batchTaskExecutor
     ) throws Exception {
         TaskExecutorJobLauncher jobLauncher = new TaskExecutorJobLauncher();
         jobLauncher.setJobRepository(jobRepository);

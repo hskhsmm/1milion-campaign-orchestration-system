@@ -1,0 +1,12 @@
+package io.eventdriven.campaign.domain.entity;
+
+public enum ConsistencyAnomalyType {
+    MISSING_REDIS_STOCK,
+    MISSING_REDIS_TOTAL,
+    MISSING_ACTIVE_STATE,
+    CLOSED_REDIS_RESIDUE,
+    QUEUE_WITHOUT_ACTIVE_STATE,
+    SUCCESS_PENDING_EXCEEDS_TOTAL,
+    REDIS_REMAINING_MISMATCH,
+    NEGATIVE_REDIS_STOCK
+}

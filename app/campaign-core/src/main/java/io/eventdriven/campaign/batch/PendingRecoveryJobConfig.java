@@ -20,6 +20,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.time.LocalDateTime;
+import java.time.temporal.ChronoUnit;
 import java.util.HashMap;
 import java.util.List;
 import java.util.Map;
@@ -52,38 +53,56 @@ public class PendingRecoveryJobConfig {
     @Bean
     public Tasklet pendingRecoveryTasklet() {
         return (contribution, chunkContext) -> {
-            LocalDateTime cutoff = LocalDateTime.now().minusMinutes(5);
+            LocalDateTime now = LocalDateTime.now();
+            LocalDateTime cutoff = now.minusMinutes(5);
             List<ParticipationHistory> pendingList =
                     participationHistoryRepository.findByStatusAndCreatedAtBefore(
                             ParticipationStatus.PENDING, cutoff);
 
             if (pendingList.isEmpty()) {
+                log.info("Pending recovery completed. candidates=0, republished=0");
                 return RepeatStatus.FINISHED;
             }
 
             int successCount = 0;
             for (ParticipationHistory history : pendingList) {
                 String message = buildMessage(history);
+                Long ageMinutes = history.getCreatedAt() == null
+                        ? null
+                        : Math.max(0L, ChronoUnit.MINUTES.between(history.getCreatedAt(), now));
                 try {
-                    // Redis Queue 대신 Kafka 직접 발행
-                    // 이유: 재고 소진 시 active:campaigns에서 SREM → Bridge가 큐를 드레인하지 않음
-                    //       Batch 복구 대상은 소량이므로 Bridge 우회해도 부하 없음
                     kafkaTemplate.send(KafkaConfig.TOPIC_NAME, String.valueOf(history.getCampaign().getId()), message)
                             .whenComplete((result, ex) -> {
                                 if (ex != null) {
-                                    log.error("PENDING 재발행 실패. historyId={}", history.getId(), ex);
+                                    log.error(
+                                            "Pending recovery publish result. historyId={}, campaignId={}, ageMinutes={}, republished=false",
+                                            history.getId(),
+                                            history.getCampaign().getId(),
+                                            ageMinutes,
+                                            ex
+                                    );
                                 } else {
-                                    log.info("PENDING 재발행 성공. historyId={}", history.getId());
+                                    log.info(
+                                            "Pending recovery publish result. historyId={}, campaignId={}, ageMinutes={}, republished=true",
+                                            history.getId(),
+                                            history.getCampaign().getId(),
+                                            ageMinutes
+                                    );
                                 }
                             });
                     successCount++;
                 } catch (Exception e) {
-                    log.warn("PENDING 재발행 실패. historyId={}, campaignId={}",
-                            history.getId(), history.getCampaign().getId(), e);
+                    log.warn(
+                            "Pending recovery publish result. historyId={}, campaignId={}, ageMinutes={}, republished=false",
+                            history.getId(),
+                            history.getCampaign().getId(),
+                            ageMinutes,
+                            e
+                    );
                 }
             }
 
-            log.info("PENDING 재처리 완료. 전체={}, 재발행={}", pendingList.size(), successCount);
+            log.info("Pending recovery completed. candidates={}, republished={}", pendingList.size(), successCount);
 
             return RepeatStatus.FINISHED;
         };
@@ -97,7 +116,7 @@ public class PendingRecoveryJobConfig {
             msg.put("sequence", history.getSequence());
             return jsonMapper.writeValueAsString(msg);
         } catch (Exception e) {
-            throw new RuntimeException("메시지 직렬화 실패. historyId=" + history.getId(), e);
+            throw new RuntimeException("Message serialization failed. historyId=" + history.getId(), e);
         }
     }
 }
