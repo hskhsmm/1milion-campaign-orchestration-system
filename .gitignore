@@ -14,6 +14,11 @@ infra/terraform.tfstate
 infra/terraform.tfstate.backup
 infra/*.tfvars
 
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+
 # 환경변수 (민감정보)
 .env
 app/campaign-core/.env
