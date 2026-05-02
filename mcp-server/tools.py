@@ -439,7 +439,11 @@ async def handle_sse(request):
         await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
 
 
+async def handle_messages(request):
+    await sse.handle_post_message(request.scope, request.receive, request._send)
+
+
 mcp_routes = [
     Route("/mcp/sse", endpoint=handle_sse),
-    Route("/mcp/messages", endpoint=sse.handle_post_message, methods=["POST"]),
+    Route("/mcp/messages", endpoint=handle_messages, methods=["POST"]),
 ]
