@@ -6,7 +6,8 @@ import requests
 from mcp.server import Server
 from mcp.server.sse import SseServerTransport
 from mcp.types import TextContent, Tool
-from starlette.routing import Route
+from starlette.responses import Response
+from starlette.routing import Mount, Route
 
 import config
 import state
@@ -437,13 +438,10 @@ sse = SseServerTransport("/mcp/messages")
 async def handle_sse(request):
     async with sse.connect_sse(request.scope, request.receive, request._send) as streams:
         await mcp_server.run(streams[0], streams[1], mcp_server.create_initialization_options())
-
-
-async def handle_messages(request):
-    await sse.handle_post_message(request.scope, request.receive, request._send)
+    return Response()
 
 
 mcp_routes = [
-    Route("/mcp/sse", endpoint=handle_sse),
-    Route("/mcp/messages", endpoint=handle_messages, methods=["POST"]),
+    Route("/mcp/sse", endpoint=handle_sse, methods=["GET"]),
+    Mount("/mcp/messages", app=sse.handle_post_message),
 ]
