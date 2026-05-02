@@ -19,7 +19,7 @@
 ```
 app/campaign-core/     ← Spring Boot 앱 (v3 Redis-first)
 infra/                 ← Terraform IaC
-mcp-server/            ← Python/FastAPI AI 운영 서버 (Phase E, 미작성)
+mcp-server/            ← Python/FastAPI AI 운영 서버 (Phase E, 구현 완료 — 배포 대기)
 stress-test/           ← k6 부하 테스트 스크립트
 .github/workflows/     ← deploy.yml
 ```
@@ -93,6 +93,7 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | #7 ASG 수평 확장 | ✅ 완료 (2026-04-27, ASG 2대 운영 중) |
 | Spring Batch PENDING 재처리 | 미작성 |
 | 모니터링 #22~#25 | ✅ 완료 (Grafana 13패널, 커스텀 메트릭 4종) |
+| Phase E MCP 서버 (#62~#66) | ✅ 코드 완료 — terraform-mcp 수동 배포 필요 |
 
 ---
 
@@ -109,7 +110,11 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
        - terraform-mcp t3.large (k6 OOM 방지)
 [예정] Phase C — API 엔드포인트 v3 정리
 [예정] Phase D — Spring Batch 안전망
-[예정] Phase E — MCP 서버 (AI 자율 운영)
+[진행중] Phase E — MCP 서버 (AI 자율 운영)
+       - 코드 완료 (feat/mcp-server 브랜치)
+       - terraform apply -target=aws_iam_role_policy.terraform_mcp_cloudwatch_read 필요
+       - terraform-mcp EC2에서 수동 docker build & run으로 배포
+       - CI/CD 파이프라인 미구성 (mcp-server/** 트리거 없음, 수동 배포)
 ```
 
 ---
@@ -137,7 +142,7 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 
 ## 모니터링 구성 (terraform-mcp)
 
-- Prometheus + Grafana + redis-exporter + kafka-exporter 모두 Docker 컨테이너
+- Prometheus + Grafana + redis-exporter + kafka-exporter + **mcp-server** 모두 Docker 컨테이너
 - **Docker monitoring 네트워크**: 컨테이너 이름 기반 통신 (IP 변경 무관)
   ```bash
   # 컨테이너 재생성 시 네트워크 연결 필수
@@ -183,7 +188,8 @@ OIDC → ECR → S3 → CodeDeploy (`CodeDeployDefault.OneAtATime`)
 1. RDS 시작
 2. kafka-1/2/3 시작
 3. terraform-mcp 시작 (--restart unless-stopped로 컨테이너 자동 복구)
-4. ASG 콘솔에서 desired=2, min=2, max=3
+4. mcp-server 컨테이너 확인: `sudo docker ps | grep mcp-server` (미실행 시 아래 mcp-server 배포 섹션 참고)
+5. ASG 콘솔에서 desired=2, min=2, max=3
 ```
 
 ### 끌 때
@@ -228,6 +234,42 @@ BASE_URL: `http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.co
 
 ---
 
+## mcp-server 배포 (terraform-mcp에서 수동)
+
+```bash
+# 최초 배포 또는 코드 업데이트 시
+cd ~/1milion-campaign-orchestration-system
+git pull
+
+sudo docker build -t mcp-server:latest ./mcp-server
+
+sudo docker run -d \
+  --name mcp-server \
+  --restart unless-stopped \
+  --network monitoring \
+  -p 8000:8000 \
+  -e SLACK_WEBHOOK_URL="$(aws ssm get-parameter --name /batch-kafka/prod/SLACK_WEBHOOK_URL \
+    --with-decryption --query Parameter.Value --output text)" \
+  -e BATCH_API_URL="http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com" \
+  -e BATCH_CAMPAIGN_ID="<캠페인ID>" \
+  mcp-server:latest
+
+# 검증
+curl http://localhost:8000/health
+sudo docker logs mcp-server --follow
+```
+
+MCP 도구 7개 (Claude에서 호출 가능):
+- `get_monitor_status` — cooldown 상태 조회
+- `run_check` — P1/P2/P3 수동 실행
+- `query_prometheus` — PromQL instant 쿼리
+- `query_prometheus_range` — 구간 메트릭 조회 (테스트 후 분석용)
+- `get_test_report` — 테스트 구간 핵심 메트릭 요약
+- `reset_cooldown` — 쿨다운 초기화
+- `trigger_consistency_check` — 정합성 검사 즉시 실행
+
+---
+
 ## 면접 핵심 멘트
 
 **프로젝트 소개**: "Redis Lua로 병목 원인을 찾고 해결한 뒤 재실험으로 검증, 데이터 기반으로 트레이드오프를 결정한 실험 중심 프로젝트. 최종적으로 100만 트래픽, 정합성 1,000,000건, 5xx 0건 달성"
@@ -241,3 +283,5 @@ BASE_URL: `http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.co
 **데이터 유실 발견 및 해결**: "10차 테스트에서 DB 정합성 검증 중 574,888건만 INSERT된 것 발견. Redis Queue 500K 상한 초과 시 LPUSH 실패해도 202 반환하는 구조적 문제. MAX_QUEUE_SIZE 1M으로 상향해 11차에서 정합성 완벽 달성"
 
 **모니터링**: "Prometheus + Grafana 커스텀 메트릭 4종(Bridge 드레인 속도/사이클, Consumer 지연, Redis Queue 적재량). Docker monitoring 네트워크로 컨테이너 이름 기반 DNS — IP 관리 불필요"
+
+**MCP 서버 (Phase E)**: "Grafana 대시보드를 사람이 직접 보던 수동 감시를 자동화. Prometheus/CloudWatch 30초 폴링 → P1/P2/P3 임계값 비교 → Slack 알림. Claude MCP 도구 7개로 운영 중 즉시 쿼리 가능. AI는 탐지와 설명만, 실행은 사람이 판단하는 구조로 설계"

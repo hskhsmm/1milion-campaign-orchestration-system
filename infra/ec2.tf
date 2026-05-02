@@ -37,6 +37,24 @@ resource "aws_iam_role_policy" "terraform_mcp_ec2_describe" {
   })
 }
 
+# MCP 모니터링 서버용 — CloudWatch 읽기 (ASG CPU, RDS CPU)
+resource "aws_iam_role_policy" "terraform_mcp_cloudwatch_read" {
+  name = "CloudWatchRead-for-mcp"
+  role = aws_iam_role.terraform_mcp.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect = "Allow"
+      Action = [
+        "cloudwatch:GetMetricStatistics",
+        "cloudwatch:ListMetrics"
+      ]
+      Resource = "*"
+    }]
+  })
+}
+
 # terraform-mcp 보안 그룹
 resource "aws_security_group" "terraform_mcp" {
   name        = "terraform-mcp-sg"

@@ -87,6 +87,31 @@ public class RedisStockService {
         redisTemplate.opsForValue().set(getTotalKey(campaignId), String.valueOf(totalStock));
     }
 
+    public Long getTotal(Long campaignId) {
+        String total = redisTemplate.opsForValue().get(getTotalKey(campaignId));
+        return total != null ? Long.parseLong(total) : null;
+    }
+
+    public boolean hasTotal(Long campaignId) {
+        return Boolean.TRUE.equals(redisTemplate.hasKey(getTotalKey(campaignId)));
+    }
+
+    public boolean isRegisteredInActiveCampaigns(Long campaignId) {
+        return Boolean.TRUE.equals(
+                redisTemplate.opsForSet().isMember(ACTIVE_CAMPAIGNS_KEY, campaignId.toString())
+        );
+    }
+
+    public void deleteTotal(Long campaignId) {
+        redisTemplate.delete(getTotalKey(campaignId));
+    }
+
+    public void clearRuntimeState(Long campaignId) {
+        deleteStock(campaignId);
+        deleteTotal(campaignId);
+        deactivateCampaign(campaignId);
+    }
+
     private String getTotalKey(Long campaignId) {
         return TOTAL_KEY_PREFIX + campaignId + "}";
     }
