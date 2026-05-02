@@ -12,7 +12,7 @@ BATCH_API_URL     = os.environ.get(
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
 
 # P1
-HTTP_5XX_THRESHOLD           = 0
+HTTP_5XX_THRESHOLD           = 1
 REDIS_QUEUE_WARNING          = 700_000   # 70%
 REDIS_QUEUE_CRITICAL         = 850_000   # 85%
 

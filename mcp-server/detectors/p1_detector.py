@@ -5,7 +5,7 @@ import requests
 
 import config
 from slack import send_alert
-from state import can_alert, record_alert, reset_alert
+from state import check_and_record, reset_alert
 
 logger = logging.getLogger(__name__)
 
@@ -45,14 +45,13 @@ def _check_5xx() -> None:
 
     if delta > config.HTTP_5XX_THRESHOLD:
         key = "5xx_error"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P1",
                 "5xx 에러 발생",
                 f"최근 30초간 5xx 에러 *{delta:.0f}건* 감지\n"
                 f"Prometheus: `{promql}`",
             )
-            record_alert(key)
             logger.warning("P1 5xx=%.0f", delta)
     else:
         reset_alert("5xx_error")
@@ -72,27 +71,25 @@ def _check_redis_queue() -> None:
 
     if queue_size >= config.REDIS_QUEUE_CRITICAL:
         key = "redis_queue_critical"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P1",
                 "Redis Queue CRITICAL",
                 f"Queue 적재량 *{queue_size:,}* (임계값 {config.REDIS_QUEUE_CRITICAL:,} / 85%)\n"
                 f"데이터 유실 위험 — MAX_QUEUE_SIZE 초과 임박",
             )
-            record_alert(key)
             logger.warning("P1 redis_queue CRITICAL size=%d", queue_size)
         reset_alert("redis_queue_warning")
 
     elif queue_size >= config.REDIS_QUEUE_WARNING:
         key = "redis_queue_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "Redis Queue WARNING",
                 f"Queue 적재량 *{queue_size:,}* (임계값 {config.REDIS_QUEUE_WARNING:,} / 70%)\n"
                 f"Consumer 처리 속도 확인 권장",
             )
-            record_alert(key)
             logger.warning("P1 redis_queue WARNING size=%d", queue_size)
 
     else:
@@ -127,7 +124,7 @@ def check_consistency() -> None:
 
     if diff > 0:
         key = "consistency_mismatch"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P1",
                 "데이터 정합성 불일치",
@@ -135,7 +132,6 @@ def check_consistency() -> None:
                 f"DB INSERT 건수: *{db_count:,}*\n"
                 f"차이: *{diff:,}건* — 유실 또는 중복 가능성",
             )
-            record_alert(key)
     else:
         reset_alert("consistency_mismatch")
         send_alert(

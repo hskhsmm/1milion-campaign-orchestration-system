@@ -200,7 +200,7 @@ async def call_tool(name: str, arguments: dict) -> list[TextContent]:
 
 def _handle_get_monitor_status() -> list[TextContent]:
     now = time.time()
-    alert_state = state._alert_state
+    alert_state = state.list_alerts()
 
     if not alert_state:
         return [TextContent(type="text", text="현재 활성화된 alert 없음 (모든 쿨다운 초기화 상태)")]
@@ -275,11 +275,10 @@ def _handle_reset_cooldown(key: str) -> list[TextContent]:
         return [TextContent(type="text", text="key 파라미터가 필요합니다.")]
 
     if key == "all":
-        cleared = list(state._alert_state.keys())
-        state._alert_state.clear()
+        cleared = state.reset_all()
         return [TextContent(type="text", text=f"전체 쿨다운 초기화 완료: {cleared}")]
 
-    if key in state._alert_state:
+    if key in state.list_alerts():
         state.reset_alert(key)
         return [TextContent(type="text", text=f"`{key}` 쿨다운 리셋 완료")]
 

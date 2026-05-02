@@ -7,7 +7,7 @@ import requests
 
 import config
 from slack import send_alert
-from state import can_alert, record_alert, reset_alert
+from state import check_and_record, reset_alert
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def _check_rds_cpu() -> None:
 
     if cpu >= config.RDS_CPU_WARNING_PERCENT:
         key = "rds_cpu_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P3",
                 "RDS CPU WARNING",
@@ -79,7 +79,6 @@ def _check_rds_cpu() -> None:
                 f"slow query 또는 HikariCP pool 크기 확인 권장\n"
                 f"11차 테스트 최대치: 47% — 현재 {cpu:.0f}%는 비정상 수준",
             )
-            record_alert(key)
             logger.warning("P3 RDS CPU WARNING=%.1f%%", cpu)
     else:
         reset_alert("rds_cpu_warning")
@@ -100,7 +99,7 @@ def _check_bridge_cycle() -> None:
 
     if cycle_sec >= config.BRIDGE_CYCLE_WARNING_SECONDS:
         key = "bridge_cycle_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P3",
                 "Bridge 드레인 사이클 지연",
@@ -109,7 +108,6 @@ def _check_bridge_cycle() -> None:
                 f"Queue → Kafka 전송 지연 — Redis Queue 적재량 함께 확인\n"
                 f"정상 범위: 100ms 간격 스케줄, 사이클당 최대 2,000건 배치",
             )
-            record_alert(key)
             logger.warning("P3 Bridge cycle WARNING=%.2fs", cycle_sec)
     else:
         reset_alert("bridge_cycle_warning")

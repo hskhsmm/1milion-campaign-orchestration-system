@@ -7,7 +7,7 @@ import requests
 
 import config
 from slack import send_alert
-from state import can_alert, record_alert, reset_alert
+from state import check_and_record, reset_alert
 
 logger = logging.getLogger(__name__)
 
@@ -70,7 +70,7 @@ def _check_cpu() -> None:
 
     if cpu >= config.CPU_CRITICAL_PERCENT:
         key = "cpu_critical"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "앱 CPU CRITICAL",
@@ -78,13 +78,12 @@ def _check_cpu() -> None:
                 f"(임계값 {config.CPU_CRITICAL_PERCENT}%)\n"
                 f"ASG Scale-out 또는 인스턴스 타입 확인 필요",
             )
-            record_alert(key)
             logger.warning("P2 CPU CRITICAL=%.1f%%", cpu)
         reset_alert("cpu_warning")
 
     elif cpu >= config.CPU_WARNING_PERCENT:
         key = "cpu_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "앱 CPU WARNING",
@@ -92,7 +91,6 @@ def _check_cpu() -> None:
                 f"(임계값 {config.CPU_WARNING_PERCENT}%)\n"
                 f"트래픽 추이 모니터링 권장",
             )
-            record_alert(key)
             logger.warning("P2 CPU WARNING=%.1f%%", cpu)
 
     else:
@@ -115,7 +113,7 @@ def _check_kafka_lag() -> None:
 
     if lag >= config.KAFKA_LAG_CRITICAL:
         key = "kafka_lag_critical"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "Kafka lag CRITICAL",
@@ -123,13 +121,12 @@ def _check_kafka_lag() -> None:
                 f"(임계값 {config.KAFKA_LAG_CRITICAL:,})\n"
                 f"Consumer 처리 속도 저하 또는 재균형 발생 가능",
             )
-            record_alert(key)
             logger.warning("P2 Kafka lag CRITICAL=%d", lag)
         reset_alert("kafka_lag_warning")
 
     elif lag >= config.KAFKA_LAG_WARNING:
         key = "kafka_lag_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "Kafka lag WARNING",
@@ -137,7 +134,6 @@ def _check_kafka_lag() -> None:
                 f"(임계값 {config.KAFKA_LAG_WARNING:,})\n"
                 f"일시적 스파이크인지 추이 확인 권장",
             )
-            record_alert(key)
             logger.warning("P2 Kafka lag WARNING=%d", lag)
 
     else:
@@ -159,7 +155,7 @@ def _check_consumer_latency() -> None:
 
     if latency >= config.CONSUMER_LATENCY_CRITICAL_MS:
         key = "consumer_latency_critical"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "Consumer 지연 CRITICAL",
@@ -167,13 +163,12 @@ def _check_consumer_latency() -> None:
                 f"(임계값 {config.CONSUMER_LATENCY_CRITICAL_MS}ms)\n"
                 f"DB INSERT 병목 또는 Kafka rebalancing 의심",
             )
-            record_alert(key)
             logger.warning("P2 consumer latency CRITICAL=%.1fms", latency)
         reset_alert("consumer_latency_warning")
 
     elif latency >= config.CONSUMER_LATENCY_WARNING_MS:
         key = "consumer_latency_warning"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "Consumer 지연 WARNING",
@@ -181,7 +176,6 @@ def _check_consumer_latency() -> None:
                 f"(임계값 {config.CONSUMER_LATENCY_WARNING_MS}ms)\n"
                 f"HikariCP pending 및 RDS CPU 함께 확인 권장",
             )
-            record_alert(key)
             logger.warning("P2 consumer latency WARNING=%.1fms", latency)
 
     else:
@@ -205,7 +199,7 @@ def _check_hikari_pending() -> None:
 
     if pending >= config.HIKARI_PENDING_THRESHOLD:
         key = "hikari_pending"
-        if can_alert(key, config.COOLDOWN_SECONDS):
+        if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
                 "P2",
                 "HikariCP pending 발생",
@@ -213,7 +207,6 @@ def _check_hikari_pending() -> None:
                 f"(임계값 {config.HIKARI_PENDING_THRESHOLD})\n"
                 f"RDS CPU 및 slow query 확인 필요",
             )
-            record_alert(key)
             logger.warning("P2 HikariCP pending=%d", pending)
     else:
         reset_alert("hikari_pending")
