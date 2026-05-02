@@ -33,6 +33,13 @@ async def lifespan(app: FastAPI):
 app = FastAPI(title="MCP Monitor Server", routes=mcp_routes, lifespan=lifespan, redirect_slashes=False)
 
 
+@app.middleware("http")
+async def normalize_mcp_messages_path(request, call_next):
+    if request.scope["path"] == "/mcp/messages":
+        request.scope["path"] = "/mcp/messages/"
+    return await call_next(request)
+
+
 @app.get("/health")
 def health() -> dict:
     return {"status": "ok"}
