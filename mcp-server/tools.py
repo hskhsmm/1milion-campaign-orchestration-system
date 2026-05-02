@@ -432,7 +432,7 @@ def _handle_trigger_consistency_check() -> list[TextContent]:
 # FastAPI 마운트용 SSE transport
 # ---------------------------------------------------------------------------
 
-sse = SseServerTransport("/mcp/messages/")
+sse = SseServerTransport("/mcp/messages")
 
 
 async def handle_sse(request):
@@ -443,5 +443,5 @@ async def handle_sse(request):
 
 mcp_routes = [
     Route("/mcp/sse", endpoint=handle_sse, methods=["GET"]),
-    Mount("/mcp/messages/", app=sse.handle_post_message),
+    Mount("/mcp/messages", app=sse.handle_post_message),
 ]
