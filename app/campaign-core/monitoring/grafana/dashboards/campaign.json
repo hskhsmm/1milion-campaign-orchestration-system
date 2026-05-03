@@ -289,7 +289,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "redis_queue_size",
+          "expr": "max by (campaignId) (redis_queue_size)",
           "legendFormat": "캠페인 {{campaignId}}"
         }
       ],
