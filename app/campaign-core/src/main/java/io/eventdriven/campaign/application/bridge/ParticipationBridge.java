@@ -26,7 +26,7 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ParticipationBridge {
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
-    private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
+    private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";
     private static final String IMMEDIATE_SEND_FAILED = "IMMEDIATE_SEND_FAILED";
     private static final String ASYNC_SEND_FAILED = "ASYNC_SEND_FAILED";
 
@@ -80,7 +80,7 @@ public class ParticipationBridge {
     }
 
     private void drainCampaignQueue(Long campaignId) {
-        String queueKey = QUEUE_KEY_PREFIX + campaignId;
+        String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
         Long queueSize = redisTemplate.opsForList().size(queueKey);
         int dynamicBatchSize = resolveBatchSize(queueSize);
 

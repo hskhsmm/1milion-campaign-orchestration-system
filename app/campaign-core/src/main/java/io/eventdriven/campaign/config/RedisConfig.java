@@ -16,19 +16,11 @@ import java.util.List;
 public class RedisConfig {
 
 
-    @Bean
-    public DefaultRedisScript<Long> pushQueueScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setLocation(new ClassPathResource("scripts/push-queue.lua"));
-        script.setResultType(Long.class);
-        return script;
-    }
-
     @SuppressWarnings("rawtypes")
     @Bean
-    public DefaultRedisScript<List> checkDecrTotalScript() {
+    public DefaultRedisScript<List> checkDecrEnqueueScript() {
         DefaultRedisScript<List> script = new DefaultRedisScript<>();
-        script.setLocation(new ClassPathResource("scripts/check-decr-total.lua"));
+        script.setLocation(new ClassPathResource("scripts/check-decr-enqueue.lua"));
         script.setResultType(List.class);
         return script;
     }

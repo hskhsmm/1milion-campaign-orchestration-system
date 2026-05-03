@@ -16,13 +16,16 @@ import java.util.List;
 public class RedisStockService {
 
     private final RedisTemplate<String, String> redisTemplate;
-    private final DefaultRedisScript<List> checkDecrTotalScript;
+    private final DefaultRedisScript<List> checkDecrEnqueueScript;
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";          // Bridge SMEMBERS 순회용 전역 Set (Lua 밖에서만 사용)
     private static final String ACTIVE_FLAG_KEY_PREFIX = "active:campaign:{";        // Lua용 캠페인별 플래그 (해시태그로 stock/total과 동일 슬롯)
     private static final String STOCK_KEY_PREFIX = "stock:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     private static final String TOTAL_KEY_PREFIX = "total:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
+    private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";               // 해시태그 포함 — Lua 원자화 필수 조건
+    private static final long MAX_QUEUE_SIZE = 1_000_000;
     public static final Long INACTIVE_CAMPAIGN = -999L;
+    public static final Long QUEUE_FULL = -998L;
 
 
     /**
@@ -66,18 +69,23 @@ public class RedisStockService {
     }
 
     /**
-     * EXISTS + DECR + DEL(remaining==0) + GET total 원자 실행 (Lua)
+     * EXISTS + 큐 만원 체크 + DECR + LPUSH + GET total 원자 실행 (Lua)
      * returns long[]{remaining, total}
      * remaining == INACTIVE_CAMPAIGN(-999): 비활성 캠페인
+     * remaining == QUEUE_FULL(-998): 큐 만원 (재고 차감 안 됨)
+     * remaining < 0: 재고 소진 (초과 요청, 재고 차감 됨)
      */
     @SuppressWarnings("unchecked")
-    public long[] checkDecrTotal(Long campaignId) {
+    public long[] checkDecrEnqueue(Long campaignId, Long userId) {
         List<Long> result = (List<Long>) redisTemplate.execute(
-            checkDecrTotalScript,
-            List.of(getActiveFlagKey(campaignId), getStockKey(campaignId), getTotalKey(campaignId))
+            checkDecrEnqueueScript,
+            List.of(getActiveFlagKey(campaignId), getStockKey(campaignId), getTotalKey(campaignId), getQueueKey(campaignId)),
+            String.valueOf(MAX_QUEUE_SIZE),
+            String.valueOf(campaignId),
+            String.valueOf(userId)
         );
         if (result == null || result.size() < 2) {
-            throw new IllegalStateException("checkDecrTotal 스크립트 오류. campaignId=" + campaignId);
+            throw new IllegalStateException("checkDecrEnqueue 스크립트 오류. campaignId=" + campaignId);
         }
         return new long[]{result.get(0), result.get(1)};
     }
@@ -110,6 +118,10 @@ public class RedisStockService {
         deleteStock(campaignId);
         deleteTotal(campaignId);
         deactivateCampaign(campaignId);
+    }
+
+    private String getQueueKey(Long campaignId) {
+        return QUEUE_KEY_PREFIX + campaignId + "}";
     }
 
     private String getTotalKey(Long campaignId) {
