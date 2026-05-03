@@ -45,4 +45,11 @@ public class RateLimitService {
         // true 통과 / false는 차단
         return Boolean.TRUE.equals(result);   // null일 경우 false 반환
     }
+
+    // QUEUE_FULL 등 재시도 가능한 일시적 오류 시 rate limit 키 반환
+    // 사용자가 10초 대기 없이 즉시 재시도할 수 있도록 허용
+    public void release(Long campaignId, Long userId) {
+        String key = KEY_PREFIX + campaignId + ":user:" + userId;
+        redisTemplate.delete(key);
+    }
 }

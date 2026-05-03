@@ -26,7 +26,8 @@ import java.util.concurrent.ConcurrentHashMap;
 public class ParticipationBridge {
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
-    private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
+    private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";
+    private static final String LEGACY_QUEUE_KEY_PREFIX = "queue:campaign:"; // 롤링 배포 전환 기간 fallback
     private static final String IMMEDIATE_SEND_FAILED = "IMMEDIATE_SEND_FAILED";
     private static final String ASYNC_SEND_FAILED = "ASYNC_SEND_FAILED";
 
@@ -80,7 +81,7 @@ public class ParticipationBridge {
     }
 
     private void drainCampaignQueue(Long campaignId) {
-        String queueKey = QUEUE_KEY_PREFIX + campaignId;
+        String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
         Long queueSize = redisTemplate.opsForList().size(queueKey);
         int dynamicBatchSize = resolveBatchSize(queueSize);
 
@@ -94,6 +95,14 @@ public class ParticipationBridge {
                 break;
             }
             publishAsync(campaignId, message);
+        }
+
+        // 롤링 배포 전환 기간: 구 키(해시태그 없음)에 고립된 메시지 드레인
+        String legacyKey = LEGACY_QUEUE_KEY_PREFIX + campaignId;
+        String legacyMessage;
+        while ((legacyMessage = redisTemplate.opsForList().rightPop(legacyKey)) != null) {
+            log.info("Legacy queue key drained. campaignId={}", campaignId);
+            publishAsync(campaignId, legacyMessage);
         }
     }
 
