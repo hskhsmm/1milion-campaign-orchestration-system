@@ -31,6 +31,7 @@ public class ParticipationService {
             throw new StockExhaustedException(campaignId);
         }
         if (remaining == RedisStockService.QUEUE_FULL) {
+            rateLimitService.release(campaignId, userId);
             throw new QueueFullException(campaignId);
         }
         if (remaining < 0) {
