@@ -34,7 +34,7 @@ public class QueueMetricsScheduler {
     private final MeterRegistry meterRegistry;
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
-    private static final String QUEUE_KEY_PREFIX = "queue:campaign:";
+    private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";
 
     // campaignId별 현재 Queue 크기 저장소
     // Gauge는 이 Map의 값을 주기적으로 읽어서 Prometheus에 노출
@@ -57,7 +57,7 @@ public class QueueMetricsScheduler {
         for (String campaignIdStr : campaignIds) {
             try {
                 Long campaignId = Long.parseLong(campaignIdStr);
-                String queueKey = QUEUE_KEY_PREFIX + campaignId;
+                String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
 
                 Long size = redisTemplate.opsForList().size(queueKey);
                 long queueSize = size != null ? size : 0L;
