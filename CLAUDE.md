@@ -31,12 +31,12 @@ stress-test/           ← k6 부하 테스트 스크립트
 ```
 POST /api/campaigns/{id}/participation
   1. RateLimitService     SET NX EX 10
-  2. Redis Lua            SISMEMBER + DECR + GET total (check-decr-total.lua)
-     remaining < 0  → 보상 INCR + 400
-     remaining == 0 → DB CLOSED + active flag DEL
-  3. sequence = total - remaining (선착순 확정)
-  4. RedisQueueService    LPUSH queue:campaign:{id}  (MAX_QUEUE_SIZE=1M)
-  5. 202 반환 (DB 미접촉)
+  2. Redis Lua            큐 만원 체크 + DECR + LPUSH + GET total (check-decr-enqueue.lua) — 단일 원자 실행
+     queue full(-998) → 재고 차감 없이 429 반환
+     remaining < 0   → 400 반환
+     remaining == 0  → DB CLOSED + active flag DEL
+  3. sequence = total - remaining (Lua 내부에서 계산 후 message에 포함)
+  4. 202 반환 (DB 미접촉)
 
 ParticipationBridge (@Scheduled 100ms)
   → SMEMBERS active:campaigns → RPOP → Kafka publish (userId 파티션 키)
@@ -65,6 +65,7 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | 9차 | **ASG 2대**, 50만 | ~2,014/s | 앱 CPU 80% (인스턴스당) |
 | 10차 | **writeResultCache 제거 + 배치 INSERT**, 100만 | ~2,613/s | Queue 500K 상한 도달 → 데이터 유실 |
 | **11차** | **MAX_QUEUE_SIZE 1M**, 100만 | **~2,442/s** | **정합성 1,000,000 완벽 ✅** |
+| **12차** | **ASG 3대 사전 스케일아웃**, 재고 130만/요청 150만 | **~2,507/s** | Queue 1M 초과 → **141,062건 유실** 🔴 |
 
 ### 11차 테스트 상세 (100만, 최종 성공) ✅
 - 조건: TOTAL_REQUESTS=1,200,000, 재고=1,000,000, MAX_VUS=2,000
@@ -75,9 +76,23 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 - Kafka lag 거의 0 (rebalancing 순간 700 스파이크 → 즉시 해소) ✅
 - HikariCP pending 거의 0 ✅ / RDS CPU 최대 47% ✅
 
+### 12차 테스트 상세 (130만 재고, 구조적 결함 발견) 🔴
+- 조건: TOTAL_REQUESTS=1,500,000, 재고=1,300,000, MAX_VUS=2,000, ASG 3대
+- TPS ~2,507/s / avg 1.19s / p95 4.13s / 5xx: 0 ✅
+- DB COUNT = **1,158,938** (141,062건 유실) 🔴
+- Redis Queue 1M 상한 도달 → LPUSH 실패해도 202 반환 → 유실 (복구 불가)
+- 근본 원인: 재고 차감(DECR)과 큐 적재(LPUSH)가 비원자적 → partial failure
+- MCP 서버 실시간 GC 이상/Kafka lag 탐지 검증 ✅
+
 ### 10차 → 11차 개선 포인트
 - 10차: writeResultCache(CME pipeline) 제거 → Kafka lag 9K→거의 0, TPS 2,613/s 달성했으나 Queue 500K 상한으로 **데이터 425K 유실**
 - 11차: MAX_QUEUE_SIZE 1M으로 상향 → Queue 700K까지만 차서 유실 0건
+
+### 12차 발견 이슈 → fix/redis-queue-atomic-enqueue 브랜치 ✅ 구현 완료
+- check-decr-total.lua + push-queue.lua → check-decr-enqueue.lua 단일 원자 스크립트로 통합
+- 큐 만원 시 DECR 자체를 수행하지 않음 → partial failure 원천 차단
+- queue key 해시태그 추가 (`queue:campaign:{id}`) → ElastiCache CME 슬롯 제약 해결
+- Redis 왕복 2회 → 1회로 감소 (성능 개선 부수효과)
 
 ---
 
@@ -93,7 +108,8 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | #7 ASG 수평 확장 | ✅ 완료 (2026-04-27, ASG 2대 운영 중) |
 | Spring Batch PENDING 재처리 | 미작성 |
 | 모니터링 #22~#25 | ✅ 완료 (Grafana 13패널, 커스텀 메트릭 4종) |
-| Phase E MCP 서버 (#62~#66) | ✅ 코드 완료 — terraform-mcp 수동 배포 필요 |
+| Phase E MCP 서버 (#62~#66) | ✅ 배포 완료 — 12차 테스트 실시간 운영 검증 ✅ |
+| Redis Queue 원자화 (#XX) | ✅ 완료 (fix/redis-queue-atomic-enqueue, 빌드 검증 완료) |
 
 ---
 
@@ -110,11 +126,15 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
        - terraform-mcp t3.large (k6 OOM 방지)
 [예정] Phase C — API 엔드포인트 v3 정리
 [예정] Phase D — Spring Batch 안전망
-[진행중] Phase E — MCP 서버 (AI 자율 운영)
-       - 코드 완료 (feat/mcp-server 브랜치)
-       - terraform apply -target=aws_iam_role_policy.terraform_mcp_cloudwatch_read 필요
-       - terraform-mcp EC2에서 수동 docker build & run으로 배포
-       - CI/CD 파이프라인 미구성 (mcp-server/** 트리거 없음, 수동 배포)
+[완료] Phase E — MCP 서버 (AI 자율 운영)
+       - terraform-mcp 배포 완료, Claude Desktop MCP 연결 (mcp-remote@latest)
+       - 12차 테스트 중 실시간 GC 이상/Kafka lag 탐지 검증 ✅
+       - CI/CD 파이프라인 미구성 (mcp-server/** 트리거 없음, 수동 배포 유지)
+[완료] fix/redis-queue-atomic-enqueue
+       - check-decr-enqueue.lua 단일 Lua 원자화 (DECR + LPUSH)
+       - 큐 만원 시 DECR 수행 안 함 → partial failure 원천 차단
+       - queue key 해시태그 통일 → ElastiCache CME 슬롯 제약 해결
+       - Redis 왕복 2회 → 1회 (성능 개선 부수효과)
 ```
 
 ---
@@ -281,6 +301,8 @@ MCP 도구 7개 (Claude에서 호출 가능):
 **Consumer 병목 개선**: "Kafka batch listener로 받아도 DB INSERT가 1건씩이면 소용없다는 걸 로그로 확인 후, JdbcTemplate.batchUpdate + rewriteBatchedStatements=true로 DB 왕복 N→1로 줄임. Consumer 지연 200ms → 7.5ms"
 
 **데이터 유실 발견 및 해결**: "10차 테스트에서 DB 정합성 검증 중 574,888건만 INSERT된 것 발견. Redis Queue 500K 상한 초과 시 LPUSH 실패해도 202 반환하는 구조적 문제. MAX_QUEUE_SIZE 1M으로 상향해 11차에서 정합성 완벽 달성"
+
+**구조적 결함 발견 및 해결 (12차)**: "재고 차감(DECR)과 큐 적재(LPUSH)가 비원자적이라 큐 만원 시 partial failure 발생. 재고는 차감됐는데 큐 적재 실패 → 사용자는 202 받았지만 DB에 없음 → PENDING/DLQ 기록도 없어 복구 불가. check-decr-enqueue.lua 단일 Lua로 통합해 원자화. 큐 만원 시 DECR 자체를 수행하지 않아 재고 보전 + Redis 왕복 2회 → 1회 감소"
 
 **모니터링**: "Prometheus + Grafana 커스텀 메트릭 4종(Bridge 드레인 속도/사이클, Consumer 지연, Redis Queue 적재량). Docker monitoring 네트워크로 컨테이너 이름 기반 DNS — IP 관리 불필요"
 
