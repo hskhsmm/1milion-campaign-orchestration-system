@@ -62,7 +62,7 @@ def _check_5xx() -> None:
 # ---------------------------------------------------------------------------
 
 def _check_redis_queue() -> None:
-    promql = "sum(redis_queue_size)"
+    promql = "max by (campaignId) (redis_queue_size)"
     value = _query_prometheus(promql)
     if value is None:
         return

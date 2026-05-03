@@ -32,7 +32,7 @@ stress-test/           ← k6 부하 테스트 스크립트
 POST /api/campaigns/{id}/participation
   1. RateLimitService     SET NX EX 10
   2. Redis Lua            큐 만원 체크 + DECR + LPUSH + GET total (check-decr-enqueue.lua) — 단일 원자 실행
-     queue full(-998) → 재고 차감 없이 429 반환
+     queue full(-998) → 재고 차감 없이 429 반환  (MAX_QUEUE_SIZE=1,500,000)
      remaining < 0   → 400 반환
      remaining == 0  → DB CLOSED + active flag DEL
   3. sequence = total - remaining (Lua 내부에서 계산 후 message에 포함)
@@ -66,6 +66,7 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | 10차 | **writeResultCache 제거 + 배치 INSERT**, 100만 | ~2,613/s | Queue 500K 상한 도달 → 데이터 유실 |
 | **11차** | **MAX_QUEUE_SIZE 1M**, 100만 | **~2,442/s** | **정합성 1,000,000 완벽 ✅** |
 | **12차** | **ASG 3대 사전 스케일아웃**, 재고 130만/요청 150만 | **~2,507/s** | Queue 1M 초과 → **141,062건 유실** 🔴 |
+| **13차** | **Lua 원자화 + MAX_QUEUE_SIZE 1.5M**, 재고 150만/요청 160만 | **~3,747/s** | **정합성 1,500,000 완벽 ✅** |
 
 ### 11차 테스트 상세 (100만, 최종 성공) ✅
 - 조건: TOTAL_REQUESTS=1,200,000, 재고=1,000,000, MAX_VUS=2,000
@@ -93,6 +94,13 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 - 큐 만원 시 DECR 자체를 수행하지 않음 → partial failure 원천 차단
 - queue key 해시태그 추가 (`queue:campaign:{id}`) → ElastiCache CME 슬롯 제약 해결
 - Redis 왕복 2회 → 1회로 감소 (성능 개선 부수효과)
+
+### 13차 테스트 상세 (150만 재고, 원자화 검증) ✅
+- 조건: TOTAL_REQUESTS=1,600,000, 재고=1,500,000, MAX_VUS=3,000, ASG 3대
+- TPS ~3,747/s / avg 795ms / p95 2.84s / 5xx: 0 ✅
+- DB COUNT = **1,500,000** (정합성 완벽) ✅
+- 실패 100,000건 = 재고 소진 후 400 (정상)
+- 유실 0건 — Lua 원자화 효과 검증 완료 ✅
 
 ---
 
@@ -302,7 +310,7 @@ MCP 도구 7개 (Claude에서 호출 가능):
 
 **데이터 유실 발견 및 해결**: "10차 테스트에서 DB 정합성 검증 중 574,888건만 INSERT된 것 발견. Redis Queue 500K 상한 초과 시 LPUSH 실패해도 202 반환하는 구조적 문제. MAX_QUEUE_SIZE 1M으로 상향해 11차에서 정합성 완벽 달성"
 
-**구조적 결함 발견 및 해결 (12차)**: "재고 차감(DECR)과 큐 적재(LPUSH)가 비원자적이라 큐 만원 시 partial failure 발생. 재고는 차감됐는데 큐 적재 실패 → 사용자는 202 받았지만 DB에 없음 → PENDING/DLQ 기록도 없어 복구 불가. check-decr-enqueue.lua 단일 Lua로 통합해 원자화. 큐 만원 시 DECR 자체를 수행하지 않아 재고 보전 + Redis 왕복 2회 → 1회 감소"
+**구조적 결함 발견 및 해결 (12차→13차)**: "12차에서 재고 차감(DECR)과 큐 적재(LPUSH)가 비원자적이라 141K 유실 발생. 재고는 차감됐는데 큐 적재 실패 → 사용자는 202 받았지만 DB에 없음 → PENDING/DLQ 기록도 없어 복구 불가. check-decr-enqueue.lua 단일 Lua로 원자화 후 13차 재고 150만 테스트에서 DB COUNT 1,500,000 정합성 완벽 달성. Redis 왕복 2회 → 1회 성능 개선 부수효과"
 
 **모니터링**: "Prometheus + Grafana 커스텀 메트릭 4종(Bridge 드레인 속도/사이클, Consumer 지연, Redis Queue 적재량). Docker monitoring 네트워크로 컨테이너 이름 기반 DNS — IP 관리 불필요"
 
