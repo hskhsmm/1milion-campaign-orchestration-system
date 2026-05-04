@@ -85,7 +85,7 @@ def _check_redis_queue() -> None:
         key = "redis_queue_warning"
         if check_and_record(key, config.COOLDOWN_SECONDS):
             send_alert(
-                "P2",
+                "P1",
                 "Redis Queue WARNING",
                 f"Queue 적재량 *{queue_size:,}* (임계값 {config.REDIS_QUEUE_WARNING:,} / 70%)\n"
                 f"Consumer 처리 속도 확인 권장",

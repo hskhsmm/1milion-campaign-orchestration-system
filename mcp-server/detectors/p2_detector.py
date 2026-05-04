@@ -103,7 +103,7 @@ def _check_cpu() -> None:
 # ---------------------------------------------------------------------------
 
 def _check_kafka_lag() -> None:
-    promql = "sum(kafka_consumergroup_lag_sum)"
+    promql = "sum(kafka_consumergroup_lag_sum{topic='participation-events'})"
     lag = _query_prometheus(promql)
     if lag is None:
         return
