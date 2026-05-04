@@ -339,19 +339,19 @@ _REPORT_METRICS = [
         "건",
     ),
     (
-        "campaign_redis_queue_size",
+        "max by (campaignId) (redis_queue_size)",
         "Redis Queue 적재량",
         config.REDIS_QUEUE_CRITICAL,
         "건",
     ),
     (
-        "sum(kafka_consumergroup_lag_sum)",
+        "sum(kafka_consumergroup_lag_sum{topic='participation-events'})",
         "Kafka consumer lag",
         config.KAFKA_LAG_CRITICAL,
         "",
     ),
     (
-        "campaign_consumer_latency_ms",
+        "consumer_pending_to_success_latency_seconds_max * 1000",
         "Consumer 처리 지연",
         config.CONSUMER_LATENCY_CRITICAL_MS,
         "ms",
@@ -363,7 +363,7 @@ _REPORT_METRICS = [
         "개",
     ),
     (
-        "campaign_bridge_cycle_seconds",
+        "bridge_drain_duration_seconds_max",
         "Bridge 드레인 사이클",
         config.BRIDGE_CYCLE_WARNING_SECONDS,
         "초",

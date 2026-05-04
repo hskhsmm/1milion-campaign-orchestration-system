@@ -90,7 +90,7 @@ def _check_rds_cpu() -> None:
 
 def _check_bridge_cycle() -> None:
     """Bridge 사이클 시간이 임계값 초과 시 Queue 드레인 지연 의심."""
-    promql = "campaign_bridge_cycle_seconds"
+    promql = "bridge_drain_duration_seconds_max"
     cycle_sec = _query_prometheus(promql)
     if cycle_sec is None:
         return
