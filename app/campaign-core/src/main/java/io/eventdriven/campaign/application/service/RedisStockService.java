@@ -23,9 +23,11 @@ public class RedisStockService {
     private static final String STOCK_KEY_PREFIX = "stock:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     private static final String TOTAL_KEY_PREFIX = "total:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";               // 해시태그 포함 — Lua 원자화 필수 조건
+    private static final String PARTICIPATED_KEY_PREFIX = "participated:campaign:{"; // 해시태그 포함 — 중복 참여 방지
     private static final long MAX_QUEUE_SIZE = 1_500_000;
     public static final Long INACTIVE_CAMPAIGN = -999L;
     public static final Long QUEUE_FULL = -998L;
+    public static final Long ALREADY_PARTICIPATED = -997L;
 
 
     /**
@@ -79,7 +81,7 @@ public class RedisStockService {
     public long[] checkDecrEnqueue(Long campaignId, Long userId) {
         List<Long> result = (List<Long>) redisTemplate.execute(
             checkDecrEnqueueScript,
-            List.of(getActiveFlagKey(campaignId), getStockKey(campaignId), getTotalKey(campaignId), getQueueKey(campaignId)),
+            List.of(getActiveFlagKey(campaignId), getStockKey(campaignId), getTotalKey(campaignId), getQueueKey(campaignId), getParticipatedKey(campaignId, userId)),
             String.valueOf(MAX_QUEUE_SIZE),
             String.valueOf(campaignId),
             String.valueOf(userId)
@@ -122,6 +124,10 @@ public class RedisStockService {
 
     private String getQueueKey(Long campaignId) {
         return QUEUE_KEY_PREFIX + campaignId + "}";
+    }
+
+    private String getParticipatedKey(Long campaignId, Long userId) {
+        return PARTICIPATED_KEY_PREFIX + campaignId + "}:user:" + userId;
     }
 
     private String getTotalKey(Long campaignId) {

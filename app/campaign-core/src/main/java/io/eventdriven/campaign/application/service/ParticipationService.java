@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.application.service;
 
+import io.eventdriven.campaign.api.exception.business.DuplicateParticipationException;
 import io.eventdriven.campaign.api.exception.business.QueueFullException;
 import io.eventdriven.campaign.api.exception.business.RateLimitExceededException;
 import io.eventdriven.campaign.api.exception.business.StockExhaustedException;
@@ -29,6 +30,9 @@ public class ParticipationService {
 
         if (remaining == RedisStockService.INACTIVE_CAMPAIGN) {
             throw new StockExhaustedException(campaignId);
+        }
+        if (remaining == RedisStockService.ALREADY_PARTICIPATED) {
+            throw new DuplicateParticipationException(campaignId, userId);
         }
         if (remaining == RedisStockService.QUEUE_FULL) {
             rateLimitService.release(campaignId, userId);
