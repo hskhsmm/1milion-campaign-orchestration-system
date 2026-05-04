@@ -89,6 +89,53 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 - **앱 CPU 최대 97.3%** — t3.small 3대 한계치 도달 (ASG 추가 스케일아웃 필요 지점)
 - Bridge 사이클 초반 1.33분 스파이크 → 이후 안정화 (Queue 적재 > drain 구간)
 
+### VUS 최적화 인사이트
+TPS = VUS / 응답시간 (Little's Law) — VUS가 높다고 무조건 TPS가 높아지지 않음.
+
+| VUS | 응답시간 | TPS | CPU | 용도 |
+|-----|---------|-----|-----|------|
+| 500 | ~15ms | ~1,300 | ~30% | 장애 테스트 부하 유지 |
+| 1,500 | ~300ms | ~2,500 | ~50% | 안정 운영 시뮬레이션 |
+| 3,000 | ~746ms | ~3,737 | ~97% | 최대 한계 측정 |
+
+- VUS=3,000은 t3.small 3대를 CPU 97%까지 포화시키는 숫자 (서버 스펙이 커지면 더 높은 VUS 필요)
+- 장애 테스트용 적정 VUS: 500 (Kafka lag, 5xx 관찰에 충분)
+- 안정 운영 조건 탐색: VUS 500→1000→1500→2000 단계적 올리며 CPU 70% 이하 구간 확인
+
+---
+
+## 장애 시나리오 테스트 결과
+
+| # | 테스트 | 결과 | 비고 |
+|---|--------|------|------|
+| T01 | 중복 요청 차단 (RateLimitService) | ✅ 통과 | 202→429→409 확인 |
+| T02 | 재고 소진 400 | ✅ 통과 | diff=0, DB COUNT=2 정합성 완벽 |
+| T03 | Queue 만원 429 | ✅ DB 증거로 대체 | campaign 24 vs 27 비교 |
+| T04 | ConsistencyJob MISSING_REDIS_STOCK | ✅ 통과 | restoreStock=20 복구 확인 |
+| T05 | Kafka 브로커 1대 장애 | ✅ 통과 | lag 스파이크→즉시 해소, 5xx 없음 |
+| T06 | RDS 다운 → DLQ → 재처리 | 미완료 | |
+| T07 | ASG 인스턴스 1대 종료 | 미완료 | |
+
+### T03 DB 증거 (코드 수정 없이 대체)
+```sql
+SELECT c.id, c.total_stock, c.status, COUNT(ph.id) AS success_count,
+       c.total_stock - COUNT(ph.id) AS lost_count
+FROM campaign c LEFT JOIN participation_history ph
+  ON ph.campaign_id = c.id AND ph.status = 'SUCCESS'
+WHERE c.id IN (24, 27) GROUP BY c.id, c.total_stock, c.status;
+```
+| id | total_stock | status | success_count | lost_count |
+|----|-------------|--------|---------------|------------|
+| 24 | 1,300,000 | CLOSED | 1,158,938 | **141,062** ← 12차 유실 |
+| 27 | 1,500,000 | CLOSED | 1,500,000 | **0** ← 13차 완벽 ✅ |
+
+### T01 추가 수정 — 영구 중복 참여 차단
+RateLimitService TTL(10초) 만료 후 동일 userId 재요청 시 Redis stock 추가 차감 버그 발견 및 수정.
+- `check-decr-enqueue.lua`: KEYS[5](participated 키) EXISTS 체크 → -997 반환, LPUSH 성공 시 SET '1'
+- `RedisStockService`: ALREADY_PARTICIPATED(-997L), getParticipatedKey() 추가
+- `ParticipationService`: ALREADY_PARTICIPATED → DuplicateParticipationException(409)
+- 브랜치: `fix/prevent-duplicate-participation-after-ratelimit-ttl` (머지 완료)
+
 ---
 
 ## 구현 이슈 현황
@@ -102,7 +149,8 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 | 모니터링 (Grafana 13패널, 커스텀 메트릭 4종) | ✅ 완료 |
 | Phase E MCP 서버 (#62~#66) | ✅ 배포 완료 — 12차 실시간 운영 검증 ✅ |
 | Redis Queue 원자화 (check-decr-enqueue.lua) | ✅ 완료 |
-| Spring Batch PENDING 재처리 | 미작성 |
+| Spring Batch PENDING 재처리 | ✅ 완료 (PendingRecoveryJobConfig) |
+| 영구 중복 참여 차단 (participated 키) | ✅ 완료 (fix/prevent-duplicate-participation-after-ratelimit-ttl) |
 
 ---
 
@@ -112,8 +160,10 @@ Kafka Consumer (concurrency=10, 파티션 10개, RF=3, min.ISR=2)
 [완료] v3 Redis-first → ASG 수평 확장 → 14차 테스트 (150만 정합성 완벽, TPS ~3,737/s)
 [완료] Phase E — MCP 서버 (AI 자율 운영, 30초 폴링, P1/P2/P3, Slack 알림)
 [완료] fix/redis-queue-atomic-enqueue (Lua 원자화, partial failure 차단)
-[예정] Phase C — API 엔드포인트 v3 정리 (chore/remove-unused-endpoints 브랜치 진행 중)
-[예정] Phase D — Spring Batch 안전망
+[완료] fix/prevent-duplicate-participation-after-ratelimit-ttl (영구 중복 참여 차단)
+[완료] 장애 테스트 T01~T05 통과
+[예정] 장애 테스트 T06 (RDS 다운 → DLQ → 재처리), T07 (ASG 인스턴스 종료)
+[예정] VUS 단계별 부하 테스트 (안정 운영 조건 탐색: VUS 500→1500→2000)
 ```
 
 ---
@@ -260,3 +310,7 @@ MCP 도구 7개: `get_monitor_status` / `run_check` / `query_prometheus` / `quer
 **모니터링**: "Prometheus + Grafana 커스텀 메트릭 4종(Bridge 드레인 속도/사이클, Consumer 지연, Redis Queue 적재량). Docker monitoring 네트워크로 컨테이너 이름 기반 DNS — IP 관리 불필요"
 
 **MCP 서버 (Phase E)**: "Grafana 대시보드를 사람이 직접 보던 수동 감시를 자동화. Prometheus/CloudWatch 30초 폴링 → P1/P2/P3 임계값 비교 → Slack 알림. Claude MCP 도구 7개로 운영 중 즉시 쿼리 가능. AI는 탐지와 설명만, 실행은 사람이 판단하는 구조로 설계"
+
+**장애 테스트 (T01~T05)**: "7개 시나리오 중 T01~T05 실제 AWS 환경에서 검증 완료. T03은 campaign 24(유실 141,062) vs campaign 27(유실 0) DB 쿼리로 대체 증명. T05에서 VUS=500으로도 Kafka lag 스파이크 → 즉시 해소 확인. 5xx 0건"
+
+**중복 참여 버그 발견 및 수정**: "장애 테스트 T01 중 RateLimitService TTL 만료 후 동일 userId 재참여 시 Redis stock 이중 차감 비즈니스 결함 발견. Lua 스크립트에 participated 영구 이력 키 추가로 원천 차단. DB UNIQUE 제약은 있었지만 재고 차감은 막지 못했던 구조적 허점"
