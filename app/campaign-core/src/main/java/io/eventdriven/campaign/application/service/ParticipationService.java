@@ -43,8 +43,12 @@ public class ParticipationService {
         }
 
         if (remaining == 0) {
-            campaignRepository.closeAndResetStock(campaignId, CampaignStatus.CLOSED);
-            log.info("캠페인 자동 종료. campaignId={}", campaignId);
+            try {
+                campaignRepository.closeAndResetStock(campaignId, CampaignStatus.CLOSED);
+                log.info("캠페인 자동 종료. campaignId={}", campaignId);
+            } catch (Exception e) {
+                log.error("캠페인 DB 종료 실패. Redis는 이미 비활성화됨. ConsistencyJob이 복구 예정. campaignId={}", campaignId, e);
+            }
         }
 
         long sequence = total - remaining;
