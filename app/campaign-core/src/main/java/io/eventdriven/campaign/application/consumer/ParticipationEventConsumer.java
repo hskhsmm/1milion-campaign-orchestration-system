@@ -49,6 +49,7 @@ public class ParticipationEventConsumer {
 
         LocalDateTime batchStart = LocalDateTime.now();
         List<ParticipationEvent> successEvents = new ArrayList<>();
+        boolean hasTransientFailure = false;
 
         try {
             List<Object[]> batchArgs = new ArrayList<>(events.size());
@@ -77,8 +78,9 @@ public class ParticipationEventConsumer {
                             event.getCampaignId(), event.getUserId(), event.getSequence());
                     successEvents.add(event);
                 } catch (Exception e) {
-                    log.error("Insert failed. campaignId={}, userId={}, sequence={}",
+                    log.error("Insert failed (transient). campaignId={}, userId={}, sequence={}",
                             event.getCampaignId(), event.getUserId(), event.getSequence(), e);
+                    hasTransientFailure = true;
                     sendToDlqWithSlack(
                             String.valueOf(event.getUserId()),
                             serializeEvent(event),
@@ -96,12 +98,16 @@ public class ParticipationEventConsumer {
                 .register(meterRegistry)
                 .record(latencyMs, TimeUnit.MILLISECONDS);
 
-        log.info("Consumer batch processed. polled={}, parsed={}, success={}, latencyMs={}",
-                records.size(), events.size(), successEvents.size(), latencyMs);
+        log.info("Consumer batch processed. polled={}, parsed={}, success={}, transientFailure={}, latencyMs={}",
+                records.size(), events.size(), successEvents.size(), hasTransientFailure, latencyMs);
 
-
-        // ⑤ Kafka 오프셋 커밋
-        acknowledgment.acknowledge();
+        // ⑤ Kafka 오프셋 커밋 — transient failure(RDS 다운 등) 시 ack 보류 → Kafka 자동 재전달
+        if (!hasTransientFailure) {
+            acknowledgment.acknowledge();
+        } else {
+            log.warn("Skipping ack due to transient DB failure. Kafka will redeliver after recovery. count={}",
+                    events.size() - successEvents.size());
+        }
     }
 
     private List<ParticipationEvent> parseRecords(List<ConsumerRecord<String, String>> records) {
