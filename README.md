@@ -84,6 +84,8 @@ v3는 한 가지 질문으로 시작했습니다.
 ---
 
 ## 전체 아키텍처
+<img width="923" height="775" alt="image" src="https://github.com/user-attachments/assets/0062b1a8-ca04-4304-84dc-07a384196dd9" />
+
 
 ```
 [클라이언트 160만 요청]
@@ -413,6 +415,8 @@ RDS Security Group 3306 포트 삭제로 장애 주입 → 5xx 발생 → 복구
 ## 인프라 구성
 
 ### AWS 아키텍처
+<img width="2185" height="1158" alt="v3 아키텍쳐" src="https://github.com/user-attachments/assets/6ac6831e-eb21-421e-a431-b27b1e278cb2" />
+
 
 ```
 VPC (172.31.0.0/16)
