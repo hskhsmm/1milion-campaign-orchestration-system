@@ -43,7 +43,7 @@
 
 | 분류 | 기술 |
 |------|------|
-| 언어/프레임워크 | Java 21, Spring Boot 3 (Virtual Thread) |
+| 언어/프레임워크 | Java 25, Spring Boot 4.0.4 (Virtual Thread) |
 | 메시지 큐 | Apache Kafka (KRaft, 3-broker, 파티션 10개) |
 | 캐시/큐 | Redis (ElastiCache CME 3샤드, Valkey 7.2) |
 | DB | MySQL 8.0.44 (AWS RDS db.t3.micro) |
