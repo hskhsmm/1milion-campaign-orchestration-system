@@ -9,6 +9,8 @@ management:
     prometheus:
       enabled: true
   health:
+    db:
+      enabled: false
     kafka:
       enabled: false
   metrics:
