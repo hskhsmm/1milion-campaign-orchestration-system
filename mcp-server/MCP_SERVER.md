@@ -223,7 +223,7 @@ Statistics=["Average"]
 #### Kafka lag
 
 ```python
-promql = "sum(kafka_consumergroup_lag_sum)"
+promql = 'sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})'
 ```
 
 파티션 10개 × Consumer group 전체 합산.
@@ -241,7 +241,7 @@ promql = "campaign_consumer_latency_ms"
 #### HikariCP pending
 
 ```python
-promql = "max(hikaricp_pending_threads)"
+promql = "max(hikaricp_connections_pending)"
 ```
 
 `avg()`가 아닌 `max()` — ASG 2대 중 **한 대라도** pending 있으면 알림.
@@ -531,7 +531,7 @@ Claude: query_prometheus 도구를 사용해서 확인할게요.
 
 사용자: Kafka lag은?
 
-Claude: [도구 호출: query_prometheus("sum(kafka_consumergroup_lag_sum)")]
+Claude: [도구 호출: query_prometheus("sum(kafka_consumergroup_lag{consumergroup=\"campaign-participation-group\"})")]
         → 현재 lag은 12입니다. 정상 범위입니다 (CRITICAL 임계값: 1,000).
 
 사용자: 아까 cpu_critical 알림 왔는데 지금은 어때?
