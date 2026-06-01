@@ -103,7 +103,7 @@ def _check_cpu() -> None:
 # ---------------------------------------------------------------------------
 
 def _check_kafka_lag() -> None:
-    promql = "sum(kafka_consumergroup_lag_sum{topic='participation-events'})"
+    promql = 'sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})'
     lag = _query_prometheus(promql)
     if lag is None:
         return
@@ -189,7 +189,7 @@ def _check_consumer_latency() -> None:
 
 def _check_hikari_pending() -> None:
     # 전체 인스턴스 중 최대값 기준
-    promql = "max(hikaricp_pending_threads)"
+    promql = "max(hikaricp_connections_pending)"
     pending = _query_prometheus(promql)
     if pending is None:
         return
