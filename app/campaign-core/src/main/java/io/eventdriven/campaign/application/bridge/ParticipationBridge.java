@@ -113,7 +113,7 @@ public class ParticipationBridge {
         if (queueSize < 100_000) {
             return 1_000;
         }
-        return 3_000;
+        return 2_000;
     }
 
     private void publishAsync(Long campaignId, String message) {
