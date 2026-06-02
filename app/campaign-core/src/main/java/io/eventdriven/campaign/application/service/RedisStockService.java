@@ -24,7 +24,7 @@ public class RedisStockService {
     private static final String TOTAL_KEY_PREFIX = "total:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";               // 해시태그 포함 — Lua 원자화 필수 조건
     private static final String PARTICIPATED_KEY_PREFIX = "participated:campaign:{"; // 해시태그 포함 — 중복 참여 방지
-    private static final long MAX_QUEUE_SIZE = 2_000_000;
+    private static final long MAX_QUEUE_SIZE = 2_500_000;
     public static final Long INACTIVE_CAMPAIGN = -999L;
     public static final Long QUEUE_FULL = -998L;
     public static final Long ALREADY_PARTICIPATED = -997L;
