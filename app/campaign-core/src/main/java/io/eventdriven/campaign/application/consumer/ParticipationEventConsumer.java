@@ -5,6 +5,8 @@ import io.eventdriven.campaign.application.event.ParticipationEvent;
 import io.eventdriven.campaign.application.service.DlqMessageService;
 import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
+import io.micrometer.core.instrument.Counter;
+import io.micrometer.core.instrument.DistributionSummary;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
@@ -35,6 +37,12 @@ public class ParticipationEventConsumer {
     private final DlqMessageService dlqMessageService;
     private final MeterRegistry meterRegistry;
 
+    private static final String METRIC_CONSUMER_POLLED = "consumer.kafka.records.polled";
+    private static final String METRIC_CONSUMER_PARSED = "consumer.events.parsed";
+    private static final String METRIC_DB_COMMITTED = "consumer.db.committed";
+    private static final String METRIC_DB_COMMIT_BATCH_SIZE = "consumer.db.commit.batch.size";
+    private static final String METRIC_DB_TRANSIENT_FAILURE = "consumer.db.transient.failures";
+
     @KafkaListener(
             topics = "campaign-participation-topic",
             groupId = "campaign-participation-group",
@@ -43,6 +51,7 @@ public class ParticipationEventConsumer {
     public void consumeParticipationEvent(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
         List<ParticipationEvent> events = parseRecords(records);
         if (events.isEmpty()) {
+            recordBackendThroughput(records.size(), 0, 0, false, 0);
             acknowledgment.acknowledge();
             return;
         }
@@ -91,23 +100,54 @@ public class ParticipationEventConsumer {
             }
         }
 
-        // ③ 지연시간 측정 (API LPUSH ~ Consumer INSERT 완료)
         long latencyMs = Duration.between(batchStart, LocalDateTime.now()).toMillis();
-        Timer.builder("consumer.pending_to_success.latency")
-                .description("Time from consumer batch start to DB success insert")
-                .register(meterRegistry)
-                .record(latencyMs, TimeUnit.MILLISECONDS);
+        recordBackendThroughput(records.size(), events.size(), successEvents.size(), hasTransientFailure, latencyMs);
 
         log.info("Consumer batch processed. polled={}, parsed={}, success={}, transientFailure={}, latencyMs={}",
                 records.size(), events.size(), successEvents.size(), hasTransientFailure, latencyMs);
-
-        // ⑤ Kafka 오프셋 커밋 — transient failure(RDS 다운 등) 시 ack 보류 → Kafka 자동 재전달
+        // On transient DB failure, keep the Kafka offset uncommitted so it can be redelivered after recovery.
         if (!hasTransientFailure) {
             acknowledgment.acknowledge();
         } else {
             log.warn("Skipping ack due to transient DB failure. Kafka will redeliver after recovery. count={}",
                     events.size() - successEvents.size());
         }
+    }
+
+    private void recordBackendThroughput(
+            int polledCount,
+            int parsedCount,
+            int committedCount,
+            boolean hasTransientFailure,
+            long latencyMs
+    ) {
+        incrementCounter(METRIC_CONSUMER_POLLED, "Kafka records polled by participation consumer", polledCount);
+        incrementCounter(METRIC_CONSUMER_PARSED, "Participation events parsed by consumer", parsedCount);
+        incrementCounter(METRIC_DB_COMMITTED, "Participation events committed to DB", committedCount);
+
+        DistributionSummary.builder(METRIC_DB_COMMIT_BATCH_SIZE)
+                .description("DB commit batch size per consumer poll")
+                .register(meterRegistry)
+                .record(committedCount);
+
+        Timer.builder("consumer.pending_to_success.latency")
+                .description("Time from consumer batch start to DB success insert")
+                .register(meterRegistry)
+                .record(latencyMs, TimeUnit.MILLISECONDS);
+
+        if (hasTransientFailure) {
+            incrementCounter(METRIC_DB_TRANSIENT_FAILURE, "Transient DB failures detected by consumer", 1);
+        }
+    }
+
+    private void incrementCounter(String name, String description, double amount) {
+        if (amount <= 0) {
+            return;
+        }
+        Counter.builder(name)
+                .description(description)
+                .register(meterRegistry)
+                .increment(amount);
     }
 
     private List<ParticipationEvent> parseRecords(List<ConsumerRecord<String, String>> records) {

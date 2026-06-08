@@ -345,7 +345,7 @@ _REPORT_METRICS = [
         "건",
     ),
     (
-        "sum(kafka_consumergroup_lag_sum{topic='participation-events'})",
+        'sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})',
         "Kafka consumer lag",
         config.KAFKA_LAG_CRITICAL,
         "",
@@ -357,7 +357,7 @@ _REPORT_METRICS = [
         "ms",
     ),
     (
-        "max(hikaricp_pending_threads)",
+        "max(hikaricp_connections_pending)",
         "HikariCP pending",
         config.HIKARI_PENDING_THRESHOLD,
         "개",
