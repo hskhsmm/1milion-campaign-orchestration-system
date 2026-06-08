@@ -17,11 +17,6 @@ import org.springframework.stereotype.Component;
 
 import java.time.LocalDate;
 
-/**
- * 배치 작업 스케줄러
- * - 매일 자동으로 전일 집계 실행
- * - 매주 메타데이터 정리 실행
- */
 @Slf4j
 @Component
 @RequiredArgsConstructor
@@ -33,12 +28,7 @@ public class BatchScheduler {
 
     private final Job aggregateParticipationJob;
     private final Job batchMetadataCleanupJob;
-    private final Job pendingRecoveryJob;
 
-    /**
-     * 매일 새벽 2시에 전일 데이터 집계
-     * - 전일(어제) 참여 이력을 campaign_stats에 집계
-     */
     @Scheduled(cron = "0 0 2 * * *")
     public void scheduleDailyAggregation() {
         try {
@@ -50,51 +40,21 @@ public class BatchScheduler {
                     .toJobParameters();
 
             JobExecution execution = asyncJobLauncher.run(aggregateParticipationJob, params);
-
-            log.info(" 일일 집계 배치 실행 완료 - jobExecutionId: {}, date: {}",
+            log.info("Daily aggregation batch completed. jobExecutionId={}, date={}",
                     execution.getId(), yesterday);
-
         } catch (JobExecutionAlreadyRunningException e) {
-            log.warn(" 일일 집계 배치가 이미 실행 중입니다.", e);
-
+            log.warn("Daily aggregation batch is already running.", e);
         } catch (JobRestartException e) {
-            log.error(" 일일 집계 배치 재시작 실패", e);
-
+            log.error("Failed to restart daily aggregation batch.", e);
         } catch (JobInstanceAlreadyCompleteException e) {
-            log.warn(" 일일 집계가 이미 완료되었습니다.", e);
-
+            log.warn("Daily aggregation batch is already complete.", e);
         } catch (InvalidJobParametersException e) {
-            log.error(" 잘못된 배치 파라미터", e);
-
+            log.error("Invalid daily aggregation batch parameters.", e);
         } catch (Exception e) {
-            log.error(" 일일 집계 배치 실행 중 예상치 못한 오류 발생", e);
-            // TODO: 알림 전송 (Slack, Email 등)
+            log.error("Unexpected daily aggregation batch error.", e);
         }
     }
 
-    // 5분 초과 PENDING 재처리 — Bridge 장애, LPUSH 실패 등으로 방치된 레코드 복구
-    @Scheduled(cron = "0 */5 * * * *")
-    public void schedulePendingRecovery() {
-        try {
-            JobParameters params = new JobParametersBuilder()
-                    .addLong("ts", System.currentTimeMillis())
-                    .toJobParameters();
-
-            asyncJobLauncher.run(pendingRecoveryJob, params);
-
-        } catch (JobInstanceAlreadyCompleteException e) {
-            log.debug("PENDING 재처리 이미 완료.");
-        } catch (JobExecutionAlreadyRunningException e) {
-            log.warn("PENDING 재처리 배치가 이미 실행 중입니다.");
-        } catch (Exception e) {
-            log.error("PENDING 재처리 배치 실행 오류", e);
-        }
-    }
-
-    /**
-     * 매주 일요일 새벽 3시에 배치 메타데이터 정리
-     * - 90일 이상 오래된 배치 실행 이력 삭제
-     */
     @Scheduled(cron = "0 0 3 * * SUN")
     public void scheduleMetadataCleanup() {
         try {
@@ -103,25 +63,17 @@ public class BatchScheduler {
                     .toJobParameters();
 
             JobExecution execution = asyncJobLauncher.run(batchMetadataCleanupJob, params);
-
-            log.info(" 메타데이터 정리 배치 실행 완료 - jobExecutionId: {}",
-                    execution.getId());
-
+            log.info("Batch metadata cleanup completed. jobExecutionId={}", execution.getId());
         } catch (JobExecutionAlreadyRunningException e) {
-            log.warn(" 메타데이터 정리 배치가 이미 실행 중입니다.", e);
-
+            log.warn("Batch metadata cleanup is already running.", e);
         } catch (JobRestartException e) {
-            log.error(" 메타데이터 정리 배치 재시작 실패", e);
-
+            log.error("Failed to restart batch metadata cleanup.", e);
         } catch (JobInstanceAlreadyCompleteException e) {
-            log.warn(" 메타데이터 정리가 이미 완료되었습니다.", e);
-
+            log.warn("Batch metadata cleanup is already complete.", e);
         } catch (InvalidJobParametersException e) {
-            log.error(" 잘못된 배치 파라미터", e);
-
+            log.error("Invalid batch metadata cleanup parameters.", e);
         } catch (Exception e) {
-            log.error(" 메타데이터 정리 배치 실행 중 예상치 못한 오류 발생", e);
-            // TODO: 알림 전송 (Slack, Email 등)
+            log.error("Unexpected batch metadata cleanup error.", e);
         }
     }
 }
