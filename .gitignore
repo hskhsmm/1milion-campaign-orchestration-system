@@ -22,3 +22,4 @@ __pycache__/
 # 환경변수 (민감정보)
 .env
 app/campaign-core/.env
+/3-broker clustering 이후- 테스트 사진/
