@@ -37,6 +37,11 @@ spring:
 
 # 모니터링 공통 설정
 management:
+  health:
+    db:
+      enabled: false
+    kafka:
+      enabled: false
   metrics:
     tags:
       application: ${spring.application.name}
