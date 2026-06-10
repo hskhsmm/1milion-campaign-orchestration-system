@@ -78,7 +78,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | 앱 서버 | 단일 EC2 | **ASG (min=2, max=3)** |
 | 인프라 관리 | 수동 콘솔 | **Terraform IaC** |
 | 배포 | GitHub Actions + CodeDeploy | **OIDC + ECR + CodeDeploy** |
-| 모니터링 | 웹 대시보드 (자체 구현) | **Prometheus + Grafana 13패널 + MCP 서버** |
+| 모니터링 | 웹 대시보드 (자체 구현) | **Prometheus + Grafana 16패널 + MCP 서버** |
 | 장애 테스트 | 없음 | **T01~T07 전체 통과** |
 
 ---
@@ -298,6 +298,40 @@ TPS 3,737/s는 t3.small 3대를 CPU 97%까지 포화시키는 수치입니다.
 - 장애 테스트 적정 VUS: **500** (CPU 30% 수준으로 서버 여유 확보, Kafka lag/5xx 효과 명확히 관찰 가능)
 - 안정 운영 조건 탐색: VUS 500→1,000→1,500→2,000 단계적으로 올리며 CPU 70% 이하 구간 확인
 
+### 후단 처리량 관측 개선 및 150만 재검증
+
+기존 TPS는 API가 `202 Accepted`를 반환하는 속도만 의미했습니다. 이 지표만으로는 Redis Queue 이후 Bridge, Kafka, Consumer, MySQL 저장 구간의 실제 처리량을 분리해서 보기 어려웠습니다.
+
+이를 보완하기 위해 Consumer 단계에 Kafka poll, event parse, DB commit 지표를 추가했고, Grafana에서 API TPS와 후단 DB 반영 TPS를 함께 확인할 수 있도록 개선했습니다.
+
+```text
+API TPS
+-> Bridge drain TPS
+-> Kafka Consumer poll TPS
+-> Consumer parsed event TPS
+-> DB committed TPS
+```
+
+| 재검증 항목 | 결과 |
+| --- | --- |
+| 총 요청 | 1,500,000건 |
+| API 평균 TPS | 약 4,500/s |
+| 202 성공 | 1,500,000 / 1,500,000 |
+| 5xx 실패 | 0건 |
+| Bridge/Consumer 후단 peak | 약 5,500~6,000/s |
+| Redis Queue 최대 적재 | 약 120만 건 |
+| DB 일시 실패 | 0건 |
+
+![150만 k6 결과](docs/images/150m-k6-result.png)
+
+![150만 API TPS 및 응답시간](docs/images/150m-api-tps-latency.png)
+
+![150만 Bridge drain 및 Redis Queue](docs/images/150m-bridge-redis-queue.png)
+
+![150만 Consumer 후단 처리량](docs/images/150m-consumer-backend-tps.png)
+
+> 이번 재검증을 통해 API 접수 속도와 실제 DB 반영 속도를 분리해서 볼 수 있게 되었고, Redis Queue 적체가 유입량과 후단 처리량의 불균형에서 발생한다는 점을 수치로 확인했습니다.
+
 ### 병목 분석: HikariCP pending 해소
 
 v3 전환(4차)의 핵심 효과는 API 응답 경로에서 DB를 완전히 제거한 것입니다.
@@ -505,14 +539,14 @@ resource "aws_ssm_parameter" "redis_cluster_nodes" {
 
 ## 모니터링
 
-### Grafana 대시보드 (13패널)
+### Grafana 대시보드 (16패널)
 
 ```
 terraform-mcp EC2
 ├── Prometheus :9090     ← Spring Boot :8080/actuator/prometheus
 │                        ← kafka-exporter :9308
 │                        ← redis-exporter :9121
-├── Grafana :3000        ← 13패널 대시보드
+├── Grafana :3000        ← 16패널 대시보드
 └── mcp-server :8000     ← AI 운영 서버
 ```
 
@@ -527,12 +561,20 @@ terraform-mcp EC2
 | Kafka Consumer Lag | `kafka_consumergroup_lag` |
 | HikariCP 커넥션 풀 | `hikaricp_connections` |
 | 앱 CPU 사용률 | `process_cpu_usage` |
+| Consumer 후단 처리량 | `consumer_kafka_records_polled_total`, `consumer_events_parsed_total`, `consumer_db_committed_total` |
+| Consumer DB 일시 실패율 | `consumer_db_transient_failures_total` |
+| Consumer DB commit batch size | `consumer_db_commit_batch_size` |
 
-**커스텀 메트릭 4종** (Micrometer 기반)
+**커스텀 메트릭 9종** (Micrometer 기반)
 - `bridge.drain.duration` — Bridge drainQueues() 소요시간
 - `bridge.messages.published` — Kafka 발행 성공 건수
 - `consumer.pending_to_success.latency` — API → DB INSERT 지연
 - `redis.queue.size` — Redis Queue 현재 적재량 (Gauge)
+- `consumer.kafka.records.polled` — Kafka Consumer poll 건수
+- `consumer.events.parsed` — 정상 payload 파싱 건수
+- `consumer.db.committed` — DB 성공 처리 경로까지 반영한 이벤트 수
+- `consumer.db.transient.failures` — DB 장애 등으로 ack 보류가 필요한 일시 실패 수
+- `consumer.db.commit.batch.size` — Consumer DB commit batch 크기
 
 ### MCP 서버 — AI 자율 운영
 
@@ -605,7 +647,7 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
 | **Container** | Docker, Amazon ECR | 이미지 버전 관리, 배포 표준화 |
 | **CI/CD** | GitHub Actions + CodeDeploy | OIDC 인증, ASG 순차 무중단 배포 |
 | **Load Test** | k6 (shared-iterations) | 유니크 userId 보장, 정합성 검증 |
-| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 4종, 13패널 대시보드 |
+| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
 | **AI 운영** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림 |
 | **Cloud** | AWS (EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy, SSM) | 실제 운영 환경 |
 
