@@ -86,6 +86,40 @@ Grafana 대시보드에는 다음 패널을 추가했다.
 
 > API TPS는 사용자 응답 기준이고, DB까지 완전히 반영된 End-to-End 처리량은 별도로 봐야 한다고 판단했습니다. 그래서 Bridge publish, Consumer poll, DB commit 경로를 분리해서 관측할 수 있도록 Counter를 추가했고, Redis Queue size와 Kafka lag를 함께 보면서 어느 구간이 병목인지 확인할 수 있게 했습니다.
 
+### 2.1 100만/150만 재검증 결과
+
+후단 처리량 지표를 추가한 뒤 같은 shared-iterations 방식으로 100만 건과 150만 건 테스트를 다시 수행했다.
+
+100만 건 테스트에서는 API 평균 처리량이 약 3,154 TPS였고, 후단 DB commit 처리량은 약 2,000 TPS 수준으로 관측됐다. 이 결과를 통해 API가 `202 Accepted`를 반환하는 속도와 실제 DB 저장 완료 속도가 다르다는 점을 확인했다.
+
+150만 건 테스트에서는 후단이 충분히 가속되면서 Bridge/Consumer 후단 처리량이 약 5,500~6,000 TPS까지 상승했다.
+
+| 항목 | 100만 재검증 | 150만 재검증 |
+| --- | --- | --- |
+| 총 요청 | 1,000,000건 | 1,500,000건 |
+| API 평균 TPS | 약 3,154/s | 약 4,500/s |
+| 202 성공 | 1,000,000 / 1,000,000 | 1,500,000 / 1,500,000 |
+| 5xx 실패 | 0건 | 0건 |
+| Redis Queue 최대 적재 | 약 80만 건 | 약 120만 건 |
+| 후단 처리량 | 약 2,000/s 수준 | peak 약 5,500~6,000/s |
+| 최종 정합성 | successCount 1,000,000 / failCount 0 | successCount 1,500,000 / failCount 0 |
+
+![150만 k6 결과](../images/150m-k6-result.png)
+
+![150만 Bridge drain 및 Redis Queue](../images/150m-bridge-redis-queue.png)
+
+![150만 Consumer 후단 처리량](../images/150m-consumer-backend-tps.png)
+
+해석은 다음과 같다.
+
+- API TPS는 사용자가 빠르게 접수되는 속도다.
+- DB committed TPS는 최종 저장 처리량에 가깝다.
+- Redis Queue 적체는 API 유입 속도와 Bridge/Consumer/DB 처리량의 차이로 발생한다.
+- shared-iterations 테스트는 대량 spike와 정합성 검증에 적합하다.
+- 지속 가능한 처리량은 arrival-rate 테스트와 DB commit TPS를 함께 봐야 한다.
+
+따라서 이번 개선의 핵심은 TPS 숫자를 단순히 높인 것이 아니라, 시스템을 구간별로 나누어 병목을 설명할 수 있게 만든 것이다.
+
 ## 3. v1/v2 레거시 실행 코드 정리
 
 현재 v3 구조에서는 API 응답 경로에서 DB를 사용하지 않는다.
