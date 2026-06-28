@@ -162,6 +162,28 @@ $env:AWS_PROFILE = "your-profile"
 ansible-playbook -i localhost, playbooks/env-status.yml
 ```
 
+## Redis exporter 재기동
+
+`restart-redis-exporter.yml`은 `terraform-mcp` EC2에 SSM SendCommand를 보내서 `redis-exporter` 컨테이너를 재기동한다. 이 playbook은 Docker 컨테이너 상태를 실제로 바꾼다.
+
+```bash
+cd ops
+ansible-playbook -i localhost, playbooks/restart-redis-exporter.yml
+```
+
+PowerShell에서 profile을 지정하려면 다음처럼 실행한다.
+
+```powershell
+$env:AWS_PROFILE = "your-profile"
+ansible-playbook -i localhost, playbooks/restart-redis-exporter.yml
+```
+
+이 playbook은 로컬에서 `/batch-kafka/prod/REDIS_EXPORTER_ADDR` 값을 읽고, SSM SendCommand로 `terraform-mcp`에서 다음 흐름을 실행한다.
+
+1. 기존 `redis-exporter` 컨테이너 제거
+2. 새 Redis endpoint를 `REDIS_ADDR`로 주입
+3. `oliver006/redis_exporter` 컨테이너를 `monitoring` Docker network에 하나만 실행
+
 ## 안전 원칙
 
 - destructive 작업은 `env-down`에만 둔다.
