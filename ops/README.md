@@ -184,9 +184,34 @@ ansible-playbook -i localhost, playbooks/restart-redis-exporter.yml
 2. 새 Redis endpoint를 `REDIS_ADDR`로 주입
 3. `oliver006/redis_exporter` 컨테이너를 `monitoring` Docker network에 하나만 실행
 
+## 환경 종료 실행
+
+`env-down.yml`은 비용 절감을 위해 테스트 환경을 종료한다. ASG/EC2/RDS 상태를 바꾸고 Redis는 Terraform targeted destroy를 실행하므로 확인 변수를 반드시 넘겨야 한다.
+
+```bash
+cd ops
+ansible-playbook -i localhost, playbooks/env-down.yml -e confirm_env_down=true
+```
+
+PowerShell에서 profile을 지정하려면 다음처럼 실행한다.
+
+```powershell
+$env:AWS_PROFILE = "your-profile"
+ansible-playbook -i localhost, playbooks/env-down.yml -e confirm_env_down=true
+```
+
+종료 순서는 기존 수동 runbook과 동일하다.
+
+1. App ASG를 `min=0`, `max=0`, `desired=0`으로 변경
+2. Kafka broker EC2 3대 중지
+3. `terraform-mcp` EC2 중지
+4. RDS 중지
+5. Redis/Valkey와 Redis 관련 SSM parameter를 Terraform targeted destroy로 제거
+
 ## 안전 원칙
 
 - destructive 작업은 `env-down`에만 둔다.
+- `env-down.yml`은 `confirm_env_down=true`가 없으면 실행을 중단한다.
 - Redis targeted destroy/apply는 Terraform state를 사용하는 로컬 명령으로 유지한다.
 - 시작 절차는 각 리소스가 준비 상태가 된 뒤 다음 단계로 넘어간다.
 - redis-exporter는 항상 기존 컨테이너를 제거한 뒤 하나만 실행한다.
