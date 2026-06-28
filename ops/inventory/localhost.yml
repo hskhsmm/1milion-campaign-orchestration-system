@@ -1,0 +1,7 @@
+---
+# Local playbooks run on the WSL control node and call AWS/Terraform from there.
+# This inventory avoids inline-inventory parsing warnings from `-i localhost,`.
+all:
+  hosts:
+    localhost:
+      ansible_connection: local
