@@ -1,0 +1,34 @@
+---
+plugin: amazon.aws.aws_ec2
+
+# AWS API 호출 리전. group_vars/all.yml의 aws_region과 같은 값으로 유지한다.
+regions:
+  - ap-northeast-2
+
+# 중지된 인스턴스도 lifecycle 상태 점검 대상이므로 inventory에 포함한다.
+filters:
+  instance-state-name:
+    - running
+    - stopped
+
+# tag:Name을 host 이름으로 쓰면 playbook 출력에서 리소스가 바로 보인다.
+hostnames:
+  - tag:Name
+  - private-ip-address
+
+# 운영 명령은 SSM/AWS API를 주로 쓰지만, hostvars에는 private IP를 남긴다.
+compose:
+  ansible_host: private_ip_address
+
+keyed_groups:
+  - key: tags.Name
+    prefix: tag_Name
+    separator: "_"
+
+groups:
+  app: tags.Name == 'batch-kafka-app'
+  kafka: tags.Name in ['kafka-1', 'kafka-2', 'kafka-3']
+  monitoring: tags.Name == 'terraform-mcp'
+  mcp: tags.Name == 'terraform-mcp'
+
+strict: false
