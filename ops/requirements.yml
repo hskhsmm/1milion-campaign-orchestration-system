@@ -1,0 +1,6 @@
+---
+# amazon.aws 컬렉션은 EC2 dynamic inventory와 AWS 모듈을 제공한다.
+# 설치: ansible-galaxy collection install -r ops/requirements.yml
+collections:
+  - name: amazon.aws
+    version: ">=8.0.0"

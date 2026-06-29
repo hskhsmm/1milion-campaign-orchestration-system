@@ -1,0 +1,55 @@
+---
+aws_region: ap-northeast-2
+
+# AWS 인증은 로컬 AWS CLI 설정을 그대로 사용한다.
+# AWS_PROFILE을 바꾸면 같은 playbook을 다른 profile로 실행할 수 있다.
+aws_profile: "{{ lookup('env', 'AWS_PROFILE') | default('', true) }}"
+
+# playbook_dir 기준으로 ops/playbooks/*에서 infra 디렉터리를 찾는다.
+terraform_dir: "{{ playbook_dir }}/../../infra"
+
+app_asg:
+  name: batch-kafka-app-asg
+  down:
+    min_size: 0
+    max_size: 0
+    desired_capacity: 0
+  up:
+    min_size: 2
+    max_size: 3
+    desired_capacity: 2
+
+ec2_instances:
+  kafka:
+    - kafka-1
+    - kafka-2
+    - kafka-3
+  monitoring:
+    - terraform-mcp
+
+rds:
+  db_instance_identifier: batch-kafka-db
+
+redis:
+  replication_group_id: batch-kafka-redis
+  terraform_targets:
+    - aws_elasticache_replication_group.redis
+    - aws_ssm_parameter.redis_cluster_nodes
+    - aws_ssm_parameter.redis_exporter_addr
+  ssm_parameters:
+    cluster_nodes: /batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES
+    exporter_addr: /batch-kafka/prod/REDIS_EXPORTER_ADDR
+
+redis_exporter:
+  host_name: terraform-mcp
+  container_name: redis-exporter
+  image: oliver006/redis_exporter
+  docker_network: monitoring
+  published_port: "9121:9121"
+  is_cluster: "true"
+
+wait_timeouts:
+  ec2_running_seconds: 300
+  rds_available_seconds: 900
+  redis_available_seconds: 1200
+  ssm_online_seconds: 300
