@@ -40,6 +40,31 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
+    # RDS와 Redis 생성은 서로 의존하지 않는다.
+    # RDS start 요청을 먼저 보내고 Redis Terraform apply를 진행해서 두 장기 작업이 겹치게 만든다.
+    - name: Read RDS status before start
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
+      register: rds_status_before_start_cmd
+      changed_when: false
+
+    - name: Save RDS status before start
+      ansible.builtin.set_fact:
+        rds_status_before_start: "{{ rds_status_before_start_cmd.stdout | trim }}"
+
+    - name: Ensure RDS is in a startable or already available state
+      ansible.builtin.assert:
+        that:
+          - rds_status_before_start in ['stopped', 'starting', 'configuring-enhanced-monitoring', 'backing-up', 'available']
+        fail_msg: "RDS가 start 가능한 상태가 아닙니다. 현재 상태: {{ rds_status_before_start }}"
+
+    - name: Start RDS instance
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'start-db-instance', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier] }}"
+      register: start_rds_cmd
+      changed_when: true
+      when: rds_status_before_start == 'stopped'
+
     # Redis/Valkey는 stop/start가 없으므로 Terraform targeted apply로 다시 만든다.
     # 관련 SSM parameter도 같은 apply 흐름에서 endpoint에 맞게 재생성된다.
     - name: Initialize Terraform before Redis apply
@@ -84,31 +109,8 @@
           - (redis_ssm_params.Parameters | length) == (redis_ssm_parameter_names | length)
         fail_msg: "Redis SSM parameter가 기대대로 재생성되지 않았습니다. 현재 결과: {{ redis_ssm_params }}"
 
-    # RDS는 삭제하지 않고 stop/start로 운영한다.
-    # 앱을 올리기 전에 DB가 available 상태가 될 때까지 기다린다.
-    - name: Read RDS status before start
-      ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
-      register: rds_status_before_start_cmd
-      changed_when: false
-
-    - name: Save RDS status before start
-      ansible.builtin.set_fact:
-        rds_status_before_start: "{{ rds_status_before_start_cmd.stdout | trim }}"
-
-    - name: Ensure RDS is in a startable or already available state
-      ansible.builtin.assert:
-        that:
-          - rds_status_before_start in ['stopped', 'starting', 'available']
-        fail_msg: "RDS가 start 가능한 상태가 아닙니다. 현재 상태: {{ rds_status_before_start }}"
-
-    - name: Start RDS instance
-      ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'start-db-instance', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier] }}"
-      register: start_rds_cmd
-      changed_when: true
-      when: rds_status_before_start == 'stopped'
-
+    # Redis apply가 진행되는 동안 RDS start도 함께 진행된다.
+    # 앱을 올리기 전에 DB가 available 상태가 되었는지만 여기서 확인한다.
     - name: Wait until RDS instance is available
       ansible.builtin.command:
         argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
