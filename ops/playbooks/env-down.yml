@@ -175,6 +175,21 @@
       changed_when: true
       when: rds_status_before_stop == 'available'
 
+    # RDS stop과 Redis destroy는 서로 의존하지 않는 장기 작업이다.
+    # RDS stop 요청을 먼저 보낸 뒤 Redis destroy를 진행해서 종료 시간을 줄인다.
+    - name: Initialize Terraform before Redis destroy
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'init', '-input=false'] }}"
+      changed_when: false
+
+    - name: Destroy Redis and Redis related SSM parameters
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'destroy', '-auto-approve'] + redis_terraform_target_args }}"
+      register: terraform_destroy_redis_cmd
+      changed_when: true
+
+    # Redis destroy가 진행되는 동안 RDS stop도 함께 진행된다.
+    # 비용 절감 종료가 완전히 끝났는지 여기서 최종 상태만 확인한다.
     - name: Wait until RDS instance is stopped
       ansible.builtin.command:
         argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
@@ -188,19 +203,6 @@
     - name: Save RDS stopped status
       ansible.builtin.set_fact:
         rds_stopped_status: "{{ rds_wait_status_cmd.stdout | trim }}"
-
-    # ElastiCache는 stop 개념이 없어서 비용 절감을 위해 Terraform targeted destroy로 제거한다.
-    # 관련 SSM parameter도 target에 명시해서 Redis endpoint 재생성 흐름을 명확하게 유지한다.
-    - name: Initialize Terraform before Redis destroy
-      ansible.builtin.command:
-        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'init', '-input=false'] }}"
-      changed_when: false
-
-    - name: Destroy Redis and Redis related SSM parameters
-      ansible.builtin.command:
-        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'destroy', '-auto-approve'] + redis_terraform_target_args }}"
-      register: terraform_destroy_redis_cmd
-      changed_when: true
 
     - name: Print env-down summary
       ansible.builtin.debug:

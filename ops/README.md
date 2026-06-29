@@ -54,8 +54,8 @@ make redis-exporter
 | 명령 | 설명 | 실제 변경 |
 | --- | --- | --- |
 | `make env-status` | ASG, EC2, RDS, Redis, SSM 상태를 읽기 전용으로 조회 | 없음 |
-| `make env-down` | 비용 절감을 위해 테스트 환경 종료 | ASG 축소, EC2 stop, RDS stop, Redis targeted destroy |
-| `make env-up` | 테스트 환경 기동 | Redis targeted apply, RDS/EC2 start, redis-exporter 재기동, ASG 복구 |
+| `make env-down` | 비용 절감을 위해 테스트 환경 종료 | ASG 축소, EC2 stop, RDS stop과 Redis targeted destroy 병렬 진행 |
+| `make env-up` | 테스트 환경 기동 | RDS start와 Redis targeted apply 병렬 진행, EC2 start, redis-exporter 재기동, ASG 복구 |
 | `make redis-exporter` | `terraform-mcp`에서 redis-exporter 컨테이너 재기동 | Docker 컨테이너 교체 |
 
 ## 관리 대상 리소스
@@ -79,8 +79,11 @@ make redis-exporter
 1. App ASG를 `min=0`, `max=0`, `desired=0`으로 축소한다.
 2. `kafka-1`, `kafka-2`, `kafka-3` EC2를 중지한다.
 3. `terraform-mcp` EC2를 중지한다.
-4. `batch-kafka-db` RDS를 중지한다.
+4. `batch-kafka-db` RDS stop 요청을 보낸다.
 5. Redis/Valkey와 Redis 관련 SSM Parameter를 Terraform targeted destroy로 제거한다.
+6. RDS가 `stopped`가 될 때까지 확인한다.
+
+RDS stop과 Redis targeted destroy는 서로 의존하지 않는 장기 작업이므로 같은 구간에서 진행되게 구성했다. App ASG는 가장 먼저 내리고, Kafka와 `terraform-mcp`는 기존 순서를 유지한다.
 
 내부적으로 destructive 작업 방지를 위해 `confirm_env_down=true`가 필요하며, Makefile이 이 값을 명시해서 전달한다.
 
@@ -94,13 +97,16 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 
 `make env-up`은 기존 수동 기동 절차를 자동화한다.
 
-1. Redis/Valkey와 Redis 관련 SSM Parameter를 Terraform targeted apply로 재생성한다.
-2. Redis replication group이 `available`이 될 때까지 기다린다.
-3. RDS를 시작하고 `available`이 될 때까지 기다린다.
-4. Kafka broker EC2 3대를 시작하고 `running`이 될 때까지 기다린다.
-5. `terraform-mcp`를 시작하고 SSM Agent가 `Online`이 될 때까지 기다린다.
-6. `terraform-mcp`에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
-7. App ASG를 `min=2`, `max=3`, `desired=2`로 복구하고 인스턴스가 `InService`가 될 때까지 기다린다.
+1. RDS start 요청을 보낸다.
+2. Redis/Valkey와 Redis 관련 SSM Parameter를 Terraform targeted apply로 재생성한다.
+3. Redis replication group이 `available`이 될 때까지 기다린다.
+4. RDS가 `available`이 될 때까지 기다린다.
+5. Kafka broker EC2 3대를 시작하고 `running`이 될 때까지 기다린다.
+6. `terraform-mcp`를 시작하고 SSM Agent가 `Online`이 될 때까지 기다린다.
+7. `terraform-mcp`에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
+8. App ASG를 `min=2`, `max=3`, `desired=2`로 복구하고 인스턴스가 `InService`가 될 때까지 기다린다.
+
+RDS start와 Redis targeted apply는 서로 의존하지 않는 장기 작업이므로 같은 구간에서 진행되게 구성했다. Kafka와 `terraform-mcp`는 기존 순서를 유지하고, App ASG는 모든 의존 리소스와 redis-exporter가 준비된 뒤 마지막에 복구한다.
 
 내부적으로 비용 발생 작업 방지를 위해 `confirm_env_up=true`가 필요하며, Makefile이 이 값을 명시해서 전달한다.
 
