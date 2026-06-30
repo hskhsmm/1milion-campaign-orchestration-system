@@ -346,6 +346,8 @@
           - docker-compose
           - -f
           - "{{ deploy_compose_file }}"
+          - --env-file
+          - "{{ deploy_env_file }}"
           - ps
       register: deploy_compose_ps_cmd
       changed_when: false
