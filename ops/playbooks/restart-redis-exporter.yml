@@ -80,7 +80,7 @@
         that:
           - redis_exporter_addr | length > 0
           - redis_exporter_addr != "redis://pending:6379"
-          - redis_exporter_addr | regex_search('^redis://')
+          - redis_exporter_addr is match('^redis://')
         fail_msg: "REDIS_EXPORTER_ADDR 값이 유효하지 않습니다. 현재 값: {{ redis_exporter_addr }}"
 
     - name: Build redis-exporter restart commands
