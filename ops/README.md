@@ -9,8 +9,8 @@
 | 영역 | 책임 | 위치 |
 | --- | --- | --- |
 | Terraform | VPC, ALB, ASG, EC2, RDS, ElastiCache, SSM Parameter 같은 인프라 리소스 정의 | `infra/` |
-| CodeDeploy | Spring Boot 애플리케이션 배포 lifecycle 실행 | `app/campaign-core/appspec.yml`, `deploy/scripts/*.sh` |
-| Ansible | 기존 리소스의 상태 점검, 비용 절감 종료, 테스트 환경 기동, SSM 원격 명령 자동화 | `ops/` |
+| CodeDeploy | Spring Boot 애플리케이션 배포 트리거와 배포 번들 전달 | `app/campaign-core/appspec.yml` |
+| Ansible | 기존 리소스의 상태 점검, 비용 절감 종료, 테스트 환경 기동, SSM 원격 명령, 서버 내부 애플리케이션 배포 절차 자동화 | `ops/` |
 
 Terraform은 "무엇을 만들 것인가"를 관리하고, Ansible은 "언제 어떤 순서로 켜고 끌 것인가"를 관리한다.
 
@@ -57,6 +57,35 @@ make redis-exporter
 | `make env-down` | 비용 절감을 위해 테스트 환경 종료 | ASG 축소, EC2 stop, RDS stop과 Redis targeted destroy 병렬 진행 |
 | `make env-up` | 테스트 환경 기동 | RDS start와 Redis targeted apply 병렬 진행, EC2 start, redis-exporter 재기동, ASG 복구 |
 | `make redis-exporter` | `terraform-mcp`에서 redis-exporter 컨테이너 재기동 | Docker 컨테이너 교체 |
+
+## CodeDeploy 애플리케이션 배포 흐름
+
+CodeDeploy는 배포 lifecycle을 시작하고 S3 배포 번들을 앱 서버에 전달하는 역할에 집중한다. 서버 내부에서 수행되는 실제 배포 절차는 `ops/playbooks/deploy-app.yml`이 담당한다.
+
+현재 구조는 다음과 같다.
+
+```text
+app/campaign-core/appspec.yml
+  └─ deploy/scripts/run-ansible-deploy.sh
+       └─ ops/playbooks/deploy-app.yml
+```
+
+`appspec.yml`의 각 lifecycle hook은 같은 wrapper를 호출한다. wrapper는 CodeDeploy가 전달하는 `LIFECYCLE_EVENT` 값을 Ansible tag로 변환해서 필요한 task 묶음만 실행한다.
+
+| CodeDeploy lifecycle | Ansible tag | 주요 작업 |
+| --- | --- | --- |
+| `BeforeInstall` | `before_install` | ECR login, `/opt/campaign-core` 준비, SSM Parameter 기반 `.env.prod` 생성 |
+| `AfterInstall` | `after_install` | `.env.prod`에서 `ECR_IMAGE` 확인, Docker image pull |
+| `ApplicationStart` | `application_start` | compose 파일 배치, stress-test 스크립트 동기화, 기존 컨테이너 중지, 새 컨테이너 실행 |
+| `ValidateService` | `validate_service` | actuator health check, 실패 시 Ansible task 로그 출력 |
+
+배포 번들에는 `appspec.yml`, `deploy/`, `ops/`, `stress-test/`가 포함된다. 따라서 앱 서버에 별도의 playbook checkout이 없어도 CodeDeploy archive 안의 playbook을 그대로 실행한다.
+
+문법 확인은 `ops` 디렉터리에서 실행한다.
+
+```bash
+ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playbooks/deploy-app.yml --syntax-check
+```
 
 ## 관리 대상 리소스
 

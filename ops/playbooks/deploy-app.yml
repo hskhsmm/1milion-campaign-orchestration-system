@@ -1,0 +1,380 @@
+---
+# CodeDeploy가 전달한 배포 번들 안에서 실행되는 애플리케이션 배포 playbook이다.
+# lifecycle hook은 appspec.yml에 남기되, 실제 서버 내부 절차는 task 단위로 관리한다.
+- name: Deploy campaign-core application from CodeDeploy bundle
+  hosts: localhost
+  connection: local
+  gather_facts: false
+  become: true
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    deploy_bundle_root: "{{ playbook_dir }}/../.."
+    codedeploy_archive_dir: >-
+      /opt/codedeploy-agent/deployment-root/{{ lookup('env', 'DEPLOYMENT_GROUP_ID') }}/{{ lookup('env', 'DEPLOYMENT_ID') }}/deployment-archive
+    app_deploy_archive_dir: >-
+      {{ codedeploy_archive_dir if (lookup('env', 'DEPLOYMENT_GROUP_ID') | length > 0 and lookup('env', 'DEPLOYMENT_ID') | length > 0) else deploy_bundle_root }}
+    deploy_app_dir: "{{ campaign_core_deploy.app_dir }}"
+    deploy_env_file: "{{ campaign_core_deploy.env_file }}"
+    deploy_compose_file: "{{ campaign_core_deploy.compose_file }}"
+    deploy_log_dir: "{{ campaign_core_deploy.log_dir }}"
+    deploy_stress_dir: "{{ campaign_core_deploy.stress_dir }}"
+    deploy_compose_src: "{{ app_deploy_archive_dir }}/deploy/docker-compose.prod.yml"
+    deploy_stress_src: "{{ app_deploy_archive_dir }}/stress-test"
+    deploy_health_url: "{{ campaign_core_deploy.health_url }}"
+    deploy_ssm_parameters:
+      SPRING_PROFILES_ACTIVE: "/batch-kafka/prod/SPRING_PROFILES_ACTIVE"
+      SPRING_DATASOURCE_URL: "/batch-kafka/prod/SPRING_DATASOURCE_URL"
+      SPRING_DATASOURCE_USERNAME: "/batch-kafka/prod/SPRING_DATASOURCE_USERNAME"
+      SPRING_DATASOURCE_PASSWORD: "/batch-kafka/prod/SPRING_DATASOURCE_PASSWORD"
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: "/batch-kafka/prod/SPRING_KAFKA_BOOTSTRAP_SERVERS"
+      SPRING_DATA_REDIS_CLUSTER_NODES: "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
+      SLACK_WEBHOOK_URL: "/batch-kafka/prod/SLACK_WEBHOOK_URL"
+      ECR_IMAGE: "/batch-kafka/prod/ECR_IMAGE"
+
+  tasks:
+    # 배포에 필요한 런타임 명령이 서버에 있는지 먼저 확인해서 실패 원인을 빠르게 드러낸다.
+    - name: Check required deployment commands
+      ansible.builtin.shell: "command -v {{ item }}"
+      loop:
+        - aws
+        - docker
+        - docker-compose
+        - curl
+      register: deploy_required_command_checks
+      changed_when: false
+      tags:
+        - before_install
+        - after_install
+        - application_start
+        - validate_service
+
+    # AWS API 호출 계정과 region을 출력해 잘못된 instance role이나 region 설정을 빠르게 확인한다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv:
+          - aws
+          - sts
+          - get-caller-identity
+          - --query
+          - Account
+          - --output
+          - text
+      register: deploy_aws_account_cmd
+      changed_when: false
+      tags:
+        - before_install
+
+    - name: Set ECR registry URI
+      ansible.builtin.set_fact:
+        deploy_ecr_uri: "{{ deploy_aws_account_cmd.stdout }}.dkr.ecr.{{ aws_region }}.amazonaws.com"
+      tags:
+        - before_install
+
+    # ECR pull 권한을 가진 instance role로 Docker registry login을 수행한다.
+    - name: Read ECR login password
+      ansible.builtin.command:
+        argv:
+          - aws
+          - ecr
+          - get-login-password
+          - --region
+          - "{{ aws_region }}"
+      register: deploy_ecr_login_password_cmd
+      changed_when: false
+      no_log: true
+      tags:
+        - before_install
+
+    - name: Login Docker to ECR
+      ansible.builtin.command:
+        argv:
+          - docker
+          - login
+          - --username
+          - AWS
+          - --password-stdin
+          - "{{ deploy_ecr_uri }}"
+        stdin: "{{ deploy_ecr_login_password_cmd.stdout }}"
+      changed_when: "'Login Succeeded' in deploy_ecr_login_cmd.stdout"
+      register: deploy_ecr_login_cmd
+      no_log: true
+      tags:
+        - before_install
+
+    # 애플리케이션 배치 경로와 로그 경로를 명시적으로 보장한다.
+    - name: Ensure application and log directories exist
+      ansible.builtin.file:
+        path: "{{ item.path }}"
+        state: directory
+        owner: root
+        group: root
+        mode: "{{ item.mode }}"
+      loop:
+        - path: "{{ deploy_app_dir }}"
+          mode: "0755"
+        - path: "{{ deploy_log_dir }}"
+          mode: "0755"
+      tags:
+        - before_install
+        - application_start
+
+    # Parameter Store 값을 모아 .env.prod를 재생성한다. 없는 값은 경고를 남기고, 필수값 검증에서 배포를 중단한다.
+    - name: Fetch deployment parameters from SSM
+      ansible.builtin.command:
+        argv:
+          - aws
+          - ssm
+          - get-parameter
+          - --name
+          - "{{ item.value }}"
+          - --with-decryption
+          - --region
+          - "{{ aws_region }}"
+          - --query
+          - Parameter.Value
+          - --output
+          - text
+      loop: "{{ deploy_ssm_parameters | dict2items }}"
+      register: deploy_ssm_parameter_cmds
+      changed_when: false
+      failed_when: false
+      no_log: true
+      tags:
+        - before_install
+
+    - name: Build environment file content
+      ansible.builtin.set_fact:
+        deploy_env_lines: >-
+          {{
+            deploy_ssm_parameter_cmds.results
+            | selectattr('rc', 'equalto', 0)
+            | map(attribute='item.key')
+            | zip(deploy_ssm_parameter_cmds.results | selectattr('rc', 'equalto', 0) | map(attribute='stdout'))
+            | map('join', '=')
+            | list
+          }}
+        deploy_missing_parameters: >-
+          {{
+            deploy_ssm_parameter_cmds.results
+            | rejectattr('rc', 'equalto', 0)
+            | map(attribute='item.value')
+            | list
+          }}
+      no_log: true
+      tags:
+        - before_install
+
+    - name: Print missing optional deployment parameters
+      ansible.builtin.debug:
+        msg: "Missing SSM parameters: {{ deploy_missing_parameters }}"
+      when: deploy_missing_parameters | length > 0
+      tags:
+        - before_install
+
+    - name: Write deployment environment file
+      ansible.builtin.copy:
+        dest: "{{ deploy_env_file }}"
+        owner: root
+        group: root
+        mode: "0600"
+        content: "{{ deploy_env_lines | join('\n') }}\n"
+      no_log: true
+      tags:
+        - before_install
+
+    # 이미지 태그가 없으면 이후 단계의 실패 원인이 불명확해지므로 여기서 명확히 중단한다.
+    - name: Verify ECR_IMAGE parameter exists
+      ansible.builtin.assert:
+        that:
+          - "'ECR_IMAGE=' in (deploy_env_lines | join('\n'))"
+        fail_msg: "ECR_IMAGE is missing from {{ deploy_env_file }}"
+      tags:
+        - before_install
+
+    # AfterInstall 단계에서는 배포에 사용할 이미지를 미리 pull해서 start 실패 가능성을 줄인다.
+    - name: Read deployment environment file
+      ansible.builtin.slurp:
+        src: "{{ deploy_env_file }}"
+      register: deploy_env_file_slurp
+      tags:
+        - after_install
+        - application_start
+
+    - name: Parse ECR image from environment file
+      ansible.builtin.set_fact:
+        deploy_ecr_image: "{{ ((deploy_env_file_slurp.content | b64decode).splitlines() | select('match', '^ECR_IMAGE=') | list | first | default('')) | regex_replace('^ECR_IMAGE=', '') }}"
+      tags:
+        - after_install
+        - application_start
+
+    - name: Verify ECR image is configured
+      ansible.builtin.assert:
+        that:
+          - deploy_ecr_image | length > 0
+        fail_msg: "ECR_IMAGE is not configured in {{ deploy_env_file }}"
+      tags:
+        - after_install
+        - application_start
+
+    - name: Pull application image
+      ansible.builtin.command:
+        argv:
+          - docker
+          - pull
+          - "{{ deploy_ecr_image }}"
+      register: deploy_docker_pull_cmd
+      changed_when: "'Downloaded newer image' in deploy_docker_pull_cmd.stdout or 'Pull complete' in deploy_docker_pull_cmd.stdout"
+      tags:
+        - after_install
+
+    # CodeDeploy archive에서 docker-compose 파일을 운영 경로로 배치한다.
+    - name: Verify docker-compose file exists in deployment bundle
+      ansible.builtin.stat:
+        path: "{{ deploy_compose_src }}"
+      register: deploy_compose_src_stat
+      tags:
+        - application_start
+
+    - name: Fail when docker-compose file is missing
+      ansible.builtin.fail:
+        msg: "docker-compose.prod.yml not found in deployment bundle: {{ deploy_compose_src }}"
+      when: not deploy_compose_src_stat.stat.exists
+      tags:
+        - application_start
+
+    - name: Copy production docker-compose file
+      ansible.builtin.copy:
+        src: "{{ deploy_compose_src }}"
+        dest: "{{ deploy_compose_file }}"
+        owner: root
+        group: root
+        mode: "0644"
+        remote_src: true
+      tags:
+        - application_start
+
+    # 부하 테스트 스크립트가 번들에 포함된 경우 운영 경로에 같이 배치한다.
+    - name: Check stress-test scripts in deployment bundle
+      ansible.builtin.stat:
+        path: "{{ deploy_stress_src }}"
+      register: deploy_stress_src_stat
+      tags:
+        - application_start
+
+    - name: Remove old stress-test scripts
+      ansible.builtin.file:
+        path: "{{ deploy_stress_dir }}"
+        state: absent
+      when: deploy_stress_src_stat.stat.exists
+      tags:
+        - application_start
+
+    - name: Copy stress-test scripts
+      ansible.builtin.copy:
+        src: "{{ deploy_stress_src }}"
+        dest: "{{ deploy_app_dir }}"
+        owner: root
+        group: root
+        mode: preserve
+        remote_src: true
+      when: deploy_stress_src_stat.stat.exists
+      tags:
+        - application_start
+
+    - name: Ensure stress-test scripts are readable
+      ansible.builtin.file:
+        path: "{{ deploy_stress_dir }}"
+        state: directory
+        recurse: true
+        mode: "a+rX"
+      when: deploy_stress_src_stat.stat.exists
+      tags:
+        - application_start
+
+    # 기존 컨테이너를 먼저 내리고 남아 있는 컨테이너 이름 충돌까지 정리한다.
+    - name: Stop existing application containers
+      ansible.builtin.command:
+        argv:
+          - docker-compose
+          - -f
+          - "{{ deploy_compose_file }}"
+          - down
+          - --remove-orphans
+      register: deploy_compose_down_cmd
+      failed_when: false
+      changed_when: deploy_compose_down_cmd.rc == 0
+      tags:
+        - application_start
+
+    - name: Remove leftover application containers
+      ansible.builtin.command:
+        argv:
+          - docker
+          - rm
+          - -f
+          - campaign-core-app
+          - redis-exporter
+      register: deploy_container_remove_cmd
+      failed_when: false
+      changed_when: deploy_container_remove_cmd.rc == 0
+      tags:
+        - application_start
+
+    # 새 이미지와 env 파일로 컨테이너를 기동한다.
+    - name: Start application containers
+      ansible.builtin.command:
+        argv:
+          - docker-compose
+          - -f
+          - "{{ deploy_compose_file }}"
+          - --env-file
+          - "{{ deploy_env_file }}"
+          - up
+          - -d
+          - --remove-orphans
+      register: deploy_compose_up_cmd
+      changed_when: true
+      tags:
+        - application_start
+
+    - name: Print started container summary
+      ansible.builtin.command:
+        argv:
+          - docker-compose
+          - -f
+          - "{{ deploy_compose_file }}"
+          - ps
+      register: deploy_compose_ps_cmd
+      changed_when: false
+      tags:
+        - application_start
+
+    - name: Show started container summary
+      ansible.builtin.debug:
+        var: deploy_compose_ps_cmd.stdout_lines
+      tags:
+        - application_start
+
+    # ValidateService 단계에서 actuator health가 UP이 될 때까지 기다린다.
+    - name: Wait for application health endpoint
+      ansible.builtin.uri:
+        url: "{{ deploy_health_url }}"
+        method: GET
+        return_content: true
+        status_code: 200
+        timeout: 2
+      register: deploy_health_check
+      until: deploy_health_check.json.status | default('') == 'UP'
+      retries: "{{ campaign_core_deploy.health_retries }}"
+      delay: "{{ campaign_core_deploy.health_delay_seconds }}"
+      tags:
+        - validate_service
+
+    - name: Print application health result
+      ansible.builtin.debug:
+        msg: "Health OK: {{ deploy_health_check.json | default(deploy_health_check.content | default('')) }}"
+      tags:
+        - validate_service

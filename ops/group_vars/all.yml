@@ -53,3 +53,13 @@ wait_timeouts:
   rds_available_seconds: 900
   redis_available_seconds: 1200
   ssm_online_seconds: 300
+
+campaign_core_deploy:
+  app_dir: /opt/campaign-core
+  env_file: /opt/campaign-core/.env.prod
+  compose_file: /opt/campaign-core/docker-compose.prod.yml
+  log_dir: /opt/campaign-core/logs
+  stress_dir: /opt/campaign-core/stress-test
+  health_url: http://localhost:8080/actuator/health
+  health_retries: 30
+  health_delay_seconds: 2

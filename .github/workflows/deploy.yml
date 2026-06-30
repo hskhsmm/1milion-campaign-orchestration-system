@@ -6,6 +6,7 @@ on:
       - main
     paths:
       - 'app/campaign-core/**'
+      - 'ops/**'
       - 'stress-test/**'
       - '.github/workflows/**'
 
@@ -77,11 +78,13 @@ jobs:
           mkdir -p bundle
           cp appspec.yml bundle/
           cp -r deploy bundle/
+          cp -r ../../ops bundle/
           cp -r ../../stress-test bundle/
           cd bundle
           zip -r ../deploy.zip \
             appspec.yml \
             deploy/ \
+            ops/ \
             stress-test/
 
       # 7. S3 업로드
