@@ -1,0 +1,310 @@
+---
+# 비용 절감을 위해 내려둔 테스트 환경을 다시 기동하는 playbook이다.
+# Redis는 Terraform targeted apply로 재생성하고, 나머지 리소스는 AWS API로 start/scale 한다.
+- name: Start cost-aware test environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # 리소스 이름, ASG 목표 용량, Terraform target은 group_vars/all.yml 한 곳에서 관리한다.
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    # AWS_PROFILE이 지정되어 있으면 해당 profile로 AWS CLI를 실행하고, 비어 있으면 default credential chain을 사용한다.
+    aws_cli_profile_args: "{{ ['--profile', aws_profile] if (aws_profile | default('') | length) > 0 else [] }}"
+    kafka_name_values: "{{ ec2_instances.kafka | join(',') }}"
+    monitoring_name_values: "{{ ec2_instances.monitoring | join(',') }}"
+    redis_terraform_target_args: "{{ redis.terraform_targets | map('regex_replace', '^', '-target=') | list }}"
+    redis_ssm_parameter_names:
+      - "{{ redis.ssm_parameters.cluster_nodes }}"
+      - "{{ redis.ssm_parameters.exporter_addr }}"
+
+  tasks:
+    # env-up도 비용이 다시 발생하는 작업이므로 명시 확인값을 요구한다.
+    # 실행 예: ansible-playbook -i inventory/localhost.yml playbooks/env-up.yml -e confirm_env_up=true
+    - name: Require explicit env-up confirmation
+      ansible.builtin.assert:
+        that:
+          - confirm_env_up | default(false) | bool
+        fail_msg: "env-up은 실제 리소스를 시작/생성합니다. -e confirm_env_up=true 를 붙여 다시 실행하세요."
+
+    # 잘못된 AWS profile로 기동 작업을 수행하는 사고를 막기 위해 가장 먼저 실행 주체를 확인한다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
+      register: caller_identity_cmd
+      changed_when: false
+
+    - name: Parse AWS caller identity
+      ansible.builtin.set_fact:
+        caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    # RDS와 Redis 생성은 서로 의존하지 않는다.
+    # RDS start 요청을 먼저 보내고 Redis Terraform apply를 진행해서 두 장기 작업이 겹치게 만든다.
+    - name: Read RDS status before start
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
+      register: rds_status_before_start_cmd
+      changed_when: false
+
+    - name: Save RDS status before start
+      ansible.builtin.set_fact:
+        rds_status_before_start: "{{ rds_status_before_start_cmd.stdout | trim }}"
+
+    - name: Ensure RDS is in a startable or already available state
+      ansible.builtin.assert:
+        that:
+          - rds_status_before_start in ['stopped', 'starting', 'configuring-enhanced-monitoring', 'backing-up', 'available']
+        fail_msg: "RDS가 start 가능한 상태가 아닙니다. 현재 상태: {{ rds_status_before_start }}"
+
+    - name: Start RDS instance
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'start-db-instance', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier] }}"
+      register: start_rds_cmd
+      changed_when: true
+      when: rds_status_before_start == 'stopped'
+
+    # Redis/Valkey는 stop/start가 없으므로 Terraform targeted apply로 다시 만든다.
+    # 관련 SSM parameter도 같은 apply 흐름에서 endpoint에 맞게 재생성된다.
+    - name: Initialize Terraform before Redis apply
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'init', '-input=false'] }}"
+      changed_when: false
+
+    - name: Apply Redis and Redis related SSM parameters
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'apply', '-auto-approve'] + redis_terraform_target_args }}"
+      register: terraform_apply_redis_cmd
+      changed_when: true
+
+    - name: Wait until Redis replication group is available
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['elasticache', 'describe-replication-groups', '--replication-group-id', redis.replication_group_id, '--region', aws_region, '--query', 'ReplicationGroups[0].{Id:ReplicationGroupId,Status:Status,ClusterEnabled:ClusterEnabled,Endpoint:ConfigurationEndpoint.Address}', '--output', 'json'] }}"
+      register: redis_wait_status_cmd
+      changed_when: false
+      retries: 120
+      delay: 10
+      until:
+        - (redis_wait_status_cmd.stdout | from_json).Status == 'available'
+
+    - name: Save Redis available status
+      ansible.builtin.set_fact:
+        redis_available_status: "{{ redis_wait_status_cmd.stdout | from_json }}"
+
+    - name: Read Redis related SSM parameters after apply
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-parameters', '--names'] + redis_ssm_parameter_names + ['--with-decryption', '--region', aws_region, '--query', '{Parameters:Parameters[].{Name:Name,Type:Type,Value:Value},Invalid:InvalidParameters}', '--output', 'json'] }}"
+      register: redis_ssm_params_cmd
+      changed_when: false
+
+    - name: Parse Redis related SSM parameters after apply
+      ansible.builtin.set_fact:
+        redis_ssm_params: "{{ redis_ssm_params_cmd.stdout | from_json }}"
+
+    - name: Ensure Redis SSM parameters were recreated
+      ansible.builtin.assert:
+        that:
+          - (redis_ssm_params.Invalid | length) == 0
+          - (redis_ssm_params.Parameters | length) == (redis_ssm_parameter_names | length)
+        fail_msg: "Redis SSM parameter가 기대대로 재생성되지 않았습니다. 현재 결과: {{ redis_ssm_params }}"
+
+    # Redis apply가 진행되는 동안 RDS start도 함께 진행된다.
+    # 앱을 올리기 전에 DB가 available 상태가 되었는지만 여기서 확인한다.
+    - name: Wait until RDS instance is available
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
+      register: rds_wait_status_cmd
+      changed_when: false
+      retries: 90
+      delay: 10
+      until:
+        - (rds_wait_status_cmd.stdout | trim) == 'available'
+
+    - name: Save RDS available status
+      ansible.builtin.set_fact:
+        rds_available_status: "{{ rds_wait_status_cmd.stdout | trim }}"
+
+    # Kafka broker는 애플리케이션 ASG보다 먼저 올린다.
+    # 이미 running/pending이면 그대로 두고 stopped broker만 start 대상에 넣는다.
+    - name: Read Kafka broker EC2 states
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + kafka_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name}', '--output', 'json'] }}"
+      register: kafka_instances_cmd
+      changed_when: false
+
+    - name: Parse Kafka broker EC2 states
+      ansible.builtin.set_fact:
+        kafka_instances: "{{ kafka_instances_cmd.stdout | from_json }}"
+
+    - name: Ensure all Kafka broker EC2 instances were found
+      ansible.builtin.assert:
+        that:
+          - (kafka_instances | length) == (ec2_instances.kafka | length)
+          - (kafka_instances | map(attribute='State') | difference(['stopped', 'pending', 'running']) | length) == 0
+        fail_msg: "Kafka EC2가 start 가능한 상태가 아닙니다. expected={{ ec2_instances.kafka }} actual={{ kafka_instances }}"
+
+    - name: Select Kafka broker EC2 instances to start
+      ansible.builtin.set_fact:
+        kafka_instance_ids_to_start: "{{ kafka_instances | selectattr('State', 'equalto', 'stopped') | map(attribute='InstanceId') | list }}"
+
+    - name: Start Kafka broker EC2 instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'start-instances', '--region', aws_region, '--instance-ids'] + kafka_instance_ids_to_start }}"
+      register: start_kafka_cmd
+      changed_when: true
+      when: kafka_instance_ids_to_start | length > 0
+
+    - name: Wait until Kafka broker EC2 instances are running
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + kafka_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].State.Name', '--output', 'json'] }}"
+      register: kafka_wait_states_cmd
+      changed_when: false
+      retries: 30
+      delay: 10
+      until:
+        - (kafka_wait_states_cmd.stdout | from_json | length) == (ec2_instances.kafka | length)
+        - (kafka_wait_states_cmd.stdout | from_json | difference(['running']) | length) == 0
+
+    - name: Save Kafka running states
+      ansible.builtin.set_fact:
+        kafka_running_states: "{{ kafka_wait_states_cmd.stdout | from_json }}"
+
+    # redis-exporter를 SSM으로 재기동해야 하므로 terraform-mcp를 먼저 올리고 SSM Agent Online까지 확인한다.
+    - name: Read monitoring EC2 states
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + monitoring_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name}', '--output', 'json'] }}"
+      register: monitoring_instances_cmd
+      changed_when: false
+
+    - name: Parse monitoring EC2 states
+      ansible.builtin.set_fact:
+        monitoring_instances: "{{ monitoring_instances_cmd.stdout | from_json }}"
+
+    - name: Ensure all monitoring EC2 instances were found
+      ansible.builtin.assert:
+        that:
+          - (monitoring_instances | length) == (ec2_instances.monitoring | length)
+          - (monitoring_instances | map(attribute='State') | difference(['stopped', 'pending', 'running']) | length) == 0
+        fail_msg: "Monitoring EC2가 start 가능한 상태가 아닙니다. expected={{ ec2_instances.monitoring }} actual={{ monitoring_instances }}"
+
+    - name: Select monitoring EC2 instances to start
+      ansible.builtin.set_fact:
+        monitoring_instance_ids_to_start: "{{ monitoring_instances | selectattr('State', 'equalto', 'stopped') | map(attribute='InstanceId') | list }}"
+
+    - name: Start monitoring EC2 instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'start-instances', '--region', aws_region, '--instance-ids'] + monitoring_instance_ids_to_start }}"
+      register: start_monitoring_cmd
+      changed_when: true
+      when: monitoring_instance_ids_to_start | length > 0
+
+    - name: Wait until monitoring EC2 instances are running
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + monitoring_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name}', '--output', 'json'] }}"
+      register: monitoring_wait_states_cmd
+      changed_when: false
+      retries: 30
+      delay: 10
+      until:
+        - (monitoring_wait_states_cmd.stdout | from_json | length) == (ec2_instances.monitoring | length)
+        - (monitoring_wait_states_cmd.stdout | from_json | map(attribute='State') | difference(['running']) | length) == 0
+
+    - name: Save monitoring running instances
+      ansible.builtin.set_fact:
+        monitoring_running_instances: "{{ monitoring_wait_states_cmd.stdout | from_json }}"
+        terraform_mcp_instance: "{{ (monitoring_wait_states_cmd.stdout | from_json | selectattr('Name', 'equalto', redis_exporter.host_name) | list | first) }}"
+
+    - name: Wait until terraform-mcp SSM agent is online
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'describe-instance-information', '--region', aws_region, '--filters', 'Key=InstanceIds,Values=' + terraform_mcp_instance.InstanceId, '--query', 'InstanceInformationList[0].{InstanceId:InstanceId,PingStatus:PingStatus,PlatformName:PlatformName,AgentVersion:AgentVersion}', '--output', 'json'] }}"
+      register: terraform_mcp_ssm_cmd
+      changed_when: false
+      retries: 60
+      delay: 5
+      until:
+        - terraform_mcp_ssm_cmd.rc == 0 and (terraform_mcp_ssm_cmd.stdout | trim) != 'null' and (terraform_mcp_ssm_cmd.stdout | from_json).PingStatus == 'Online'
+
+    - name: Save terraform-mcp SSM online status
+      ansible.builtin.set_fact:
+        terraform_mcp_ssm_status: "{{ terraform_mcp_ssm_cmd.stdout | from_json }}"
+
+    - name: Print env-up summary before redis-exporter restart
+      ansible.builtin.debug:
+        msg:
+          aws:
+            account: "{{ caller_identity.Account }}"
+            user_arn: "{{ caller_identity.Arn }}"
+            region: "{{ aws_region }}"
+            profile: "{{ aws_profile | default('default', true) }}"
+          redis:
+            status: "{{ redis_available_status }}"
+            ssm_parameters: "{{ redis_ssm_params }}"
+            terraform_stdout: "{{ terraform_apply_redis_cmd.stdout_lines | default([]) }}"
+          rds:
+            before: "{{ rds_status_before_start }}"
+            after: "{{ rds_available_status }}"
+          kafka:
+            requested_start_instance_ids: "{{ kafka_instance_ids_to_start }}"
+            final_states: "{{ kafka_running_states }}"
+          monitoring:
+            requested_start_instance_ids: "{{ monitoring_instance_ids_to_start }}"
+            final_instances: "{{ monitoring_running_instances }}"
+            ssm_ping_status: "{{ terraform_mcp_ssm_status.PingStatus }}"
+
+# terraform-mcp에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
+# 별도 playbook으로 분리해둔 작업을 재사용해서 수동 재기동과 env-up 재기동이 같은 로직을 공유한다.
+- import_playbook: restart-redis-exporter.yml
+
+# redis-exporter까지 준비된 뒤 마지막으로 앱 ASG를 서비스 용량으로 복구한다.
+- name: Restore app ASG service capacity
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    aws_cli_profile_args: "{{ ['--profile', aws_profile] if (aws_profile | default('') | length) > 0 else [] }}"
+
+  tasks:
+    # 앱 서버는 Redis/RDS/Kafka와 관측 exporter가 준비된 뒤 마지막에 올린다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
+      register: caller_identity_cmd
+      changed_when: false
+
+    - name: Parse AWS caller identity
+      ansible.builtin.set_fact:
+        caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    - name: Scale app ASG up to service capacity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'update-auto-scaling-group', '--region', aws_region, '--auto-scaling-group-name', app_asg.name, '--min-size', app_asg.up.min_size | string, '--max-size', app_asg.up.max_size | string, '--desired-capacity', app_asg.up.desired_capacity | string] }}"
+      register: scale_up_asg_cmd
+      changed_when: true
+
+    - name: Wait until app ASG reaches service capacity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, '--query', 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,InstanceCount:length(Instances),InService:length(Instances[?LifecycleState==`InService`])}', '--output', 'json'] }}"
+      register: asg_up_status_cmd
+      changed_when: false
+      retries: 60
+      delay: 10
+      until:
+        - (asg_up_status_cmd.stdout | from_json).Min == app_asg.up.min_size
+        - (asg_up_status_cmd.stdout | from_json).Max == app_asg.up.max_size
+        - (asg_up_status_cmd.stdout | from_json).Desired == app_asg.up.desired_capacity
+        - (asg_up_status_cmd.stdout | from_json).InService == app_asg.up.desired_capacity
+
+    - name: Print app ASG restore summary
+      ansible.builtin.debug:
+        msg:
+          aws:
+            account: "{{ caller_identity.Account }}"
+            user_arn: "{{ caller_identity.Arn }}"
+            region: "{{ aws_region }}"
+            profile: "{{ aws_profile | default('default', true) }}"
+          app_asg: "{{ asg_up_status_cmd.stdout | from_json }}"

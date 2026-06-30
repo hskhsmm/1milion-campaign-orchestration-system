@@ -1,0 +1,156 @@
+---
+# terraform-mcp EC2 안에서 redis-exporter 컨테이너를 하나만 다시 띄우는 playbook이다.
+# 로컬에서 AWS API를 호출하고, 실제 Docker 명령은 SSM SendCommand가 terraform-mcp에 전달한다.
+- name: Restart redis exporter on terraform-mcp
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # 리소스 이름, SSM parameter 이름, exporter 컨테이너 설정은 공통 변수에서 가져온다.
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    # AWS_PROFILE이 지정되어 있으면 해당 profile로 AWS CLI를 실행한다.
+    aws_cli_profile_args: "{{ ['--profile', aws_profile] if (aws_profile | default('') | length) > 0 else [] }}"
+
+  tasks:
+    # 잘못된 AWS profile로 redis-exporter를 재기동하는 실수를 막기 위해 먼저 실행 계정을 확인한다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
+      register: caller_identity_cmd
+      changed_when: false
+
+    - name: Parse AWS caller identity
+      ansible.builtin.set_fact:
+        caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    # terraform-mcp는 고정 Name tag를 가진 EC2다. SSM SendCommand에는 InstanceId가 필요하다.
+    - name: Find running terraform-mcp instance
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + redis_exporter.host_name, 'Name=instance-state-name,Values=running', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name,PrivateIp:PrivateIpAddress}', '--output', 'json'] }}"
+      register: terraform_mcp_cmd
+      changed_when: false
+
+    - name: Parse terraform-mcp instance
+      ansible.builtin.set_fact:
+        terraform_mcp_instances: "{{ terraform_mcp_cmd.stdout | from_json }}"
+
+    - name: Ensure exactly one terraform-mcp instance is running
+      ansible.builtin.assert:
+        that:
+          - terraform_mcp_instances | length == 1
+        fail_msg: "running 상태의 {{ redis_exporter.host_name }} EC2가 정확히 1대여야 합니다. 현재 결과: {{ terraform_mcp_instances }}"
+
+    - name: Select terraform-mcp instance
+      ansible.builtin.set_fact:
+        terraform_mcp_instance: "{{ terraform_mcp_instances[0] }}"
+
+    # 여기서의 SSM은 EC2 원격 명령 통로다. PingStatus가 Online이어야 SendCommand가 안정적으로 들어간다.
+    - name: Read terraform-mcp SSM agent status
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'describe-instance-information', '--region', aws_region, '--filters', 'Key=InstanceIds,Values=' + terraform_mcp_instance.InstanceId, '--query', 'InstanceInformationList[0].{InstanceId:InstanceId,PingStatus:PingStatus,PlatformName:PlatformName,AgentVersion:AgentVersion}', '--output', 'json'] }}"
+      register: terraform_mcp_ssm_cmd
+      changed_when: false
+
+    - name: Parse terraform-mcp SSM agent status
+      ansible.builtin.set_fact:
+        terraform_mcp_ssm_status: "{{ terraform_mcp_ssm_cmd.stdout | from_json }}"
+
+    - name: Ensure terraform-mcp SSM agent is online
+      ansible.builtin.assert:
+        that:
+          - terraform_mcp_ssm_status.PingStatus == "Online"
+        fail_msg: "terraform-mcp SSM Agent가 Online이 아닙니다. 현재 상태: {{ terraform_mcp_ssm_status }}"
+
+    # 여기서의 SSM은 Parameter Store다. 로컬에서 Redis exporter 주소를 읽고 Docker 환경변수로 주입한다.
+    - name: Read Redis exporter address from Parameter Store
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-parameter', '--name', redis.ssm_parameters.exporter_addr, '--with-decryption', '--region', aws_region, '--query', 'Parameter.Value', '--output', 'text'] }}"
+      register: redis_exporter_addr_cmd
+      changed_when: false
+
+    - name: Parse Redis exporter address
+      ansible.builtin.set_fact:
+        redis_exporter_addr: "{{ redis_exporter_addr_cmd.stdout | trim }}"
+
+    - name: Ensure Redis exporter address is usable
+      ansible.builtin.assert:
+        that:
+          - redis_exporter_addr | length > 0
+          - redis_exporter_addr != "redis://pending:6379"
+          - redis_exporter_addr | regex_search('^redis://')
+        fail_msg: "REDIS_EXPORTER_ADDR 값이 유효하지 않습니다. 현재 값: {{ redis_exporter_addr }}"
+
+    - name: Build redis-exporter restart commands
+      ansible.builtin.set_fact:
+        redis_exporter_restart_commands:
+          - "set -eu"
+          - "sudo docker rm -f {{ redis_exporter.container_name }} || true"
+          - "sudo docker run -d --name {{ redis_exporter.container_name }} --restart unless-stopped --network {{ redis_exporter.docker_network }} -p {{ redis_exporter.published_port }} -e REDIS_ADDR={{ redis_exporter_addr }} -e REDIS_EXPORTER_IS_CLUSTER={{ redis_exporter.is_cluster }} {{ redis_exporter.image }}"
+          - "sudo docker ps --filter name={{ redis_exporter.container_name }}"
+
+    - name: Build SSM command parameters
+      ansible.builtin.set_fact:
+        redis_exporter_ssm_parameters: "{{ {'commands': redis_exporter_restart_commands} | to_json }}"
+
+    # 이 태스크부터는 실제로 terraform-mcp의 Docker 상태를 바꾼다.
+    # 기존 컨테이너를 제거하고 새 Redis endpoint를 바라보는 exporter를 하나만 띄운다.
+    - name: Send redis-exporter restart command through SSM
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'send-command', '--region', aws_region, '--instance-ids', terraform_mcp_instance.InstanceId, '--document-name', 'AWS-RunShellScript', '--comment', 'Restart redis-exporter from Ansible', '--parameters', redis_exporter_ssm_parameters, '--query', 'Command.CommandId', '--output', 'text'] }}"
+      register: restart_command_cmd
+      changed_when: true
+
+    - name: Parse SSM command id
+      ansible.builtin.set_fact:
+        restart_command_id: "{{ restart_command_cmd.stdout | trim }}"
+
+    - name: Wait for redis-exporter restart command to finish
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-command-invocation', '--region', aws_region, '--command-id', restart_command_id, '--instance-id', terraform_mcp_instance.InstanceId, '--query', 'Status', '--output', 'text'] }}"
+      register: restart_status_cmd
+      changed_when: false
+      failed_when: false
+      retries: 60
+      delay: 5
+      until:
+        - restart_status_cmd.rc == 0
+        - (restart_status_cmd.stdout | trim) in ["Success", "Failed", "Cancelled", "TimedOut"]
+
+    - name: Read redis-exporter restart command result
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-command-invocation', '--region', aws_region, '--command-id', restart_command_id, '--instance-id', terraform_mcp_instance.InstanceId, '--query', '{Status:Status,ResponseCode:ResponseCode,StandardOutputContent:StandardOutputContent,StandardErrorContent:StandardErrorContent}', '--output', 'json'] }}"
+      register: restart_invocation_cmd
+      changed_when: false
+
+    - name: Parse redis-exporter restart result
+      ansible.builtin.set_fact:
+        restart_invocation: "{{ restart_invocation_cmd.stdout | from_json }}"
+
+    - name: Ensure redis-exporter restart command succeeded
+      ansible.builtin.assert:
+        that:
+          - restart_invocation.Status == "Success"
+          - restart_invocation.ResponseCode == 0
+        fail_msg: "redis-exporter 재기동 실패. stdout={{ restart_invocation.StandardOutputContent }} stderr={{ restart_invocation.StandardErrorContent }}"
+
+    - name: Print redis-exporter restart summary
+      ansible.builtin.debug:
+        msg:
+          aws:
+            account: "{{ caller_identity.Account }}"
+            user_arn: "{{ caller_identity.Arn }}"
+            region: "{{ aws_region }}"
+            profile: "{{ aws_profile | default('default', true) }}"
+          target:
+            host: "{{ redis_exporter.host_name }}"
+            instance_id: "{{ terraform_mcp_instance.InstanceId }}"
+            ssm_ping_status: "{{ terraform_mcp_ssm_status.PingStatus }}"
+          redis_exporter:
+            container_name: "{{ redis_exporter.container_name }}"
+            image: "{{ redis_exporter.image }}"
+            redis_addr: "{{ redis_exporter_addr }}"
+            command_id: "{{ restart_command_id }}"
+            stdout: "{{ restart_invocation.StandardOutputContent }}"

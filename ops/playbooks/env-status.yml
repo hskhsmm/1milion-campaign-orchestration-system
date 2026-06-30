@@ -1,0 +1,134 @@
+---
+# 비용 절감용 테스트 환경의 현재 상태를 읽기만 하는 playbook이다.
+# EC2/RDS/ASG/Redis를 켜거나 끄지 않고, AWS API 조회 결과를 한 번에 모아서 보여준다.
+- name: Check cost-aware test environment status
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # 리소스 이름은 playbook에 직접 박지 않고 공통 변수 파일에서 가져온다.
+  # 이후 env-up/env-down에서도 같은 값을 재사용해서 운영 대상이 한 곳에서 관리되게 한다.
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    # AWS_PROFILE이 지정되어 있으면 해당 profile로 AWS CLI를 실행하고,
+    # 비어 있으면 로컬 AWS CLI의 default credential chain을 그대로 사용한다.
+    aws_cli_profile_args: "{{ ['--profile', aws_profile] if (aws_profile | default('') | length) > 0 else [] }}"
+
+    # 상태 점검 대상 EC2는 Kafka broker 3대와 monitoring/MCP 서버다.
+    # App 서버는 ASG가 생성/삭제하므로 ASG 조회 결과에서 따로 확인한다.
+    watched_ec2_names: "{{ ec2_instances.kafka + ec2_instances.monitoring }}"
+
+    # Redis 재생성 후 앱과 exporter가 바라볼 endpoint가 SSM Parameter Store에 맞게 들어갔는지 확인한다.
+    redis_ssm_parameter_names:
+      - "{{ redis.ssm_parameters.cluster_nodes }}"
+      - "{{ redis.ssm_parameters.exporter_addr }}"
+
+  tasks:
+    # 첫 단계에서 현재 AWS 계정/Role을 출력해서 잘못된 profile로 실행하는 실수를 줄인다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
+      register: caller_identity_cmd
+      # 상태 조회 playbook이므로 모든 조회성 command는 changed가 되지 않게 고정한다.
+      changed_when: false
+
+    - name: Parse AWS caller identity
+      ansible.builtin.set_fact:
+        caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    - name: Read app ASG capacity
+      # 앱 인스턴스는 직접 EC2 이름으로 관리하지 않고 ASG 용량과 ASG 소속 인스턴스로 확인한다.
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--auto-scaling-group-names', app_asg.name, '--region', aws_region, '--query', 'AutoScalingGroups[0].{Name:AutoScalingGroupName,Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,Instances:Instances[].{Id:InstanceId,Lifecycle:LifecycleState,Health:HealthStatus}}', '--output', 'json'] }}"
+      register: asg_status_cmd
+      changed_when: false
+
+    - name: Parse app ASG capacity
+      ansible.builtin.set_fact:
+        asg_status: "{{ asg_status_cmd.stdout | from_json }}"
+
+    - name: Read Kafka and monitoring EC2 states
+      # Kafka broker와 terraform-mcp는 고정 Name tag를 가진 EC2라서 tag:Name 기준으로 조회한다.
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + (watched_ec2_names | join(',')), 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name,PrivateIp:PrivateIpAddress,PublicIp:PublicIpAddress}', '--output', 'json'] }}"
+      register: ec2_status_cmd
+      changed_when: false
+
+    - name: Parse Kafka and monitoring EC2 states
+      ansible.builtin.set_fact:
+        ec2_status: "{{ ec2_status_cmd.stdout | from_json }}"
+
+    - name: Find terraform-mcp EC2 instance from status result
+      # SSM Agent 상태를 보려면 EC2 Name tag가 아니라 InstanceId가 필요하다.
+      # 앞에서 조회한 EC2 목록에서 terraform-mcp의 InstanceId를 뽑아 다음 태스크에 넘긴다.
+      ansible.builtin.set_fact:
+        terraform_mcp_instance: "{{ (ec2_status | selectattr('Name', 'equalto', redis_exporter.host_name) | list | first) | default({}) }}"
+
+    # 여기서의 SSM은 Parameter Store가 아니라 EC2 원격 명령 통로인 SSM Agent 상태 확인이다.
+    # 다음 단계의 restart-redis-exporter.yml이 SendCommand를 쓰려면 PingStatus가 Online이어야 한다.
+    - name: Read terraform-mcp SSM agent status
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'describe-instance-information', '--region', aws_region, '--filters', 'Key=InstanceIds,Values=' + (terraform_mcp_instance.InstanceId | default('missing')), '--query', 'InstanceInformationList[0].{InstanceId:InstanceId,PingStatus:PingStatus,PlatformName:PlatformName,AgentVersion:AgentVersion}', '--output', 'json'] }}"
+      register: terraform_mcp_ssm_cmd
+      changed_when: false
+      when: terraform_mcp_instance.InstanceId is defined
+
+    - name: Parse terraform-mcp SSM agent status
+      ansible.builtin.set_fact:
+        terraform_mcp_ssm_status: "{{ terraform_mcp_ssm_cmd.stdout | from_json }}"
+      when: terraform_mcp_ssm_cmd is not skipped
+
+    - name: Read RDS status
+      # RDS는 삭제하지 않고 stop/start로 운영하므로 DB instance status만 확인하면 된다.
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--db-instance-identifier', rds.db_instance_identifier, '--region', aws_region, '--query', 'DBInstances[0].{Identifier:DBInstanceIdentifier,Status:DBInstanceStatus,Class:DBInstanceClass,Engine:Engine,Endpoint:Endpoint.Address}', '--output', 'json'] }}"
+      register: rds_status_cmd
+      changed_when: false
+
+    - name: Parse RDS status
+      ansible.builtin.set_fact:
+        rds_status: "{{ rds_status_cmd.stdout | from_json }}"
+
+    - name: Read Redis replication group status
+      # ElastiCache는 비용 절감을 위해 destroy될 수 있으므로 조회 실패를 playbook 실패로 보지 않는다.
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['elasticache', 'describe-replication-groups', '--replication-group-id', redis.replication_group_id, '--region', aws_region, '--query', 'ReplicationGroups[0].{Id:ReplicationGroupId,Status:Status,ClusterEnabled:ClusterEnabled,NodeGroups:length(NodeGroups),Endpoint:ConfigurationEndpoint.Address}', '--output', 'json'] }}"
+      register: redis_status_cmd
+      changed_when: false
+      # Redis가 꺼진 상태도 정상적인 비용 절감 상태일 수 있다.
+      # 그래서 not-found-or-destroyed로 요약 출력하게 둔다.
+      failed_when: false
+
+    - name: Parse Redis replication group status
+      ansible.builtin.set_fact:
+        redis_status: "{{ redis_status_cmd.stdout | from_json if redis_status_cmd.rc == 0 else {'Id': redis.replication_group_id, 'Status': 'not-found-or-destroyed'} }}"
+
+    - name: Read Redis related SSM parameters
+      # 여기서의 SSM은 Parameter Store다. 앱과 redis-exporter가 사용할 Redis endpoint 설정값을 확인한다.
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-parameters', '--names'] + redis_ssm_parameter_names + ['--with-decryption', '--region', aws_region, '--query', '{Parameters:Parameters[].{Name:Name,Type:Type,Value:Value},Invalid:InvalidParameters}', '--output', 'json'] }}"
+      register: redis_ssm_params_cmd
+      changed_when: false
+
+    - name: Parse Redis related SSM parameters
+      ansible.builtin.set_fact:
+        redis_ssm_params: "{{ redis_ssm_params_cmd.stdout | from_json }}"
+
+    - name: Print environment status summary
+      # 마지막에 사람이 읽기 쉬운 하나의 summary로 모은다.
+      # 이후 Makefile을 붙이면 이 출력이 make env-status의 기본 결과가 된다.
+      ansible.builtin.debug:
+        msg:
+          aws:
+            account: "{{ caller_identity.Account }}"
+            user_arn: "{{ caller_identity.Arn }}"
+            region: "{{ aws_region }}"
+            profile: "{{ aws_profile | default('default', true) }}"
+          app_asg: "{{ asg_status }}"
+          ec2: "{{ ec2_status }}"
+          rds: "{{ rds_status }}"
+          redis: "{{ redis_status }}"
+          redis_ssm_parameters: "{{ redis_ssm_params }}"
+          terraform_mcp_ssm: "{{ terraform_mcp_ssm_status | default({'PingStatus': 'not-checked'}) }}"

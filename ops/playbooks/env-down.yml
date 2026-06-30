@@ -1,0 +1,227 @@
+---
+# 비용 절감을 위해 테스트 환경을 종료하는 playbook이다.
+# 실제로 ASG/EC2/RDS 상태를 바꾸고 Redis는 Terraform targeted destroy를 실행하므로 실행 전 확인 변수를 요구한다.
+- name: Stop cost-aware test environment
+  hosts: localhost
+  connection: local
+  gather_facts: false
+
+  # 모든 리소스 이름과 목표 용량은 group_vars/all.yml 한 곳에서 관리한다.
+  vars_files:
+    - ../group_vars/all.yml
+
+  vars:
+    # AWS_PROFILE이 지정되어 있으면 해당 profile로 AWS CLI를 실행하고, 비어 있으면 default credential chain을 사용한다.
+    aws_cli_profile_args: "{{ ['--profile', aws_profile] if (aws_profile | default('') | length) > 0 else [] }}"
+    kafka_name_values: "{{ ec2_instances.kafka | join(',') }}"
+    monitoring_name_values: "{{ ec2_instances.monitoring | join(',') }}"
+    redis_terraform_target_args: "{{ redis.terraform_targets | map('regex_replace', '^', '-target=') | list }}"
+
+  tasks:
+    # env-down은 destructive 작업이므로 실수 실행을 막기 위해 명시 확인값을 요구한다.
+    # 실행 예: ansible-playbook -i localhost, playbooks/env-down.yml -e confirm_env_down=true
+    - name: Require explicit env-down confirmation
+      ansible.builtin.assert:
+        that:
+          - confirm_env_down | default(false) | bool
+        fail_msg: "env-down은 실제 리소스를 중지/삭제합니다. -e confirm_env_down=true 를 붙여 다시 실행하세요."
+
+    # 잘못된 AWS profile로 종료 작업을 수행하는 사고를 막기 위해 가장 먼저 실행 주체를 확인한다.
+    - name: Check AWS caller identity
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
+      register: caller_identity_cmd
+      changed_when: false
+
+    - name: Parse AWS caller identity
+      ansible.builtin.set_fact:
+        caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    # 애플리케이션 트래픽을 가장 먼저 제거한다.
+    # App 인스턴스가 살아 있으면 Kafka/RDS/Redis를 내리는 동안 불필요한 연결 오류가 계속 발생할 수 있다.
+    - name: Scale app ASG down to zero
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'update-auto-scaling-group', '--region', aws_region, '--auto-scaling-group-name', app_asg.name, '--min-size', app_asg.down.min_size | string, '--max-size', app_asg.down.max_size | string, '--desired-capacity', app_asg.down.desired_capacity | string] }}"
+      register: scale_down_asg_cmd
+      changed_when: true
+
+    - name: Wait until app ASG has no active instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, '--query', 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,InstanceCount:length(Instances)}', '--output', 'json'] }}"
+      register: asg_down_status_cmd
+      changed_when: false
+      retries: 60
+      delay: 10
+      until:
+        - (asg_down_status_cmd.stdout | from_json).Min == app_asg.down.min_size
+        - (asg_down_status_cmd.stdout | from_json).Max == app_asg.down.max_size
+        - (asg_down_status_cmd.stdout | from_json).Desired == app_asg.down.desired_capacity
+        - (asg_down_status_cmd.stdout | from_json).InstanceCount == 0
+
+    - name: Save app ASG down status
+      ansible.builtin.set_fact:
+        asg_down_status: "{{ asg_down_status_cmd.stdout | from_json }}"
+
+    # Kafka는 app 트래픽을 제거한 뒤 중지한다.
+    # 이미 stopped인 broker는 다시 stop하지 않고, running/pending broker만 stop 대상에 넣는다.
+    - name: Read Kafka broker EC2 states
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + kafka_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name}', '--output', 'json'] }}"
+      register: kafka_instances_cmd
+      changed_when: false
+
+    - name: Parse Kafka broker EC2 states
+      ansible.builtin.set_fact:
+        kafka_instances: "{{ kafka_instances_cmd.stdout | from_json }}"
+
+    - name: Ensure all Kafka broker EC2 instances were found
+      ansible.builtin.assert:
+        that:
+          - kafka_instances | length == ec2_instances.kafka | length
+        fail_msg: "Kafka EC2 조회 결과가 기대 수와 다릅니다. expected={{ ec2_instances.kafka }} actual={{ kafka_instances }}"
+
+    - name: Select Kafka broker EC2 instances to stop
+      ansible.builtin.set_fact:
+        kafka_instance_ids_to_stop: "{{ (kafka_instances | selectattr('State', 'equalto', 'running') | map(attribute='InstanceId') | list) + (kafka_instances | selectattr('State', 'equalto', 'pending') | map(attribute='InstanceId') | list) }}"
+
+    - name: Stop Kafka broker EC2 instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'stop-instances', '--region', aws_region, '--instance-ids'] + kafka_instance_ids_to_stop }}"
+      register: stop_kafka_cmd
+      changed_when: true
+      when: kafka_instance_ids_to_stop | length > 0
+
+    - name: Wait until Kafka broker EC2 instances are stopped
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + kafka_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].State.Name', '--output', 'json'] }}"
+      register: kafka_wait_states_cmd
+      changed_when: false
+      retries: 30
+      delay: 10
+      until:
+        - (kafka_wait_states_cmd.stdout | from_json | length) == (ec2_instances.kafka | length)
+        - (kafka_wait_states_cmd.stdout | from_json | difference(['stopped']) | length) == 0
+
+    - name: Save Kafka stopped states
+      ansible.builtin.set_fact:
+        kafka_stopped_states: "{{ kafka_wait_states_cmd.stdout | from_json }}"
+
+    # monitoring/MCP 서버는 관측용이므로 Kafka 중지 후 함께 내린다.
+    # 이 서버를 내린 뒤에는 redis-exporter도 자연스럽게 중지된다.
+    - name: Read monitoring EC2 states
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + monitoring_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{Name:Tags[?Key==`Name`]|[0].Value,InstanceId:InstanceId,State:State.Name}', '--output', 'json'] }}"
+      register: monitoring_instances_cmd
+      changed_when: false
+
+    - name: Parse monitoring EC2 states
+      ansible.builtin.set_fact:
+        monitoring_instances: "{{ monitoring_instances_cmd.stdout | from_json }}"
+
+    - name: Ensure all monitoring EC2 instances were found
+      ansible.builtin.assert:
+        that:
+          - monitoring_instances | length == ec2_instances.monitoring | length
+        fail_msg: "Monitoring EC2 조회 결과가 기대 수와 다릅니다. expected={{ ec2_instances.monitoring }} actual={{ monitoring_instances }}"
+
+    - name: Select monitoring EC2 instances to stop
+      ansible.builtin.set_fact:
+        monitoring_instance_ids_to_stop: "{{ (monitoring_instances | selectattr('State', 'equalto', 'running') | map(attribute='InstanceId') | list) + (monitoring_instances | selectattr('State', 'equalto', 'pending') | map(attribute='InstanceId') | list) }}"
+
+    - name: Stop monitoring EC2 instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'stop-instances', '--region', aws_region, '--instance-ids'] + monitoring_instance_ids_to_stop }}"
+      register: stop_monitoring_cmd
+      changed_when: true
+      when: monitoring_instance_ids_to_stop | length > 0
+
+    - name: Wait until monitoring EC2 instances are stopped
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + monitoring_name_values, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].State.Name', '--output', 'json'] }}"
+      register: monitoring_wait_states_cmd
+      changed_when: false
+      retries: 30
+      delay: 10
+      until:
+        - (monitoring_wait_states_cmd.stdout | from_json | length) == (ec2_instances.monitoring | length)
+        - (monitoring_wait_states_cmd.stdout | from_json | difference(['stopped']) | length) == 0
+
+    - name: Save monitoring stopped states
+      ansible.builtin.set_fact:
+        monitoring_stopped_states: "{{ monitoring_wait_states_cmd.stdout | from_json }}"
+
+    # RDS는 삭제하지 않고 stop/start로 운영한다.
+    # 이미 stopped/stopping이면 그대로 두고, available일 때만 stop 요청을 보낸다.
+    - name: Read RDS status before stop
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
+      register: rds_status_before_stop_cmd
+      changed_when: false
+
+    - name: Save RDS status before stop
+      ansible.builtin.set_fact:
+        rds_status_before_stop: "{{ rds_status_before_stop_cmd.stdout | trim }}"
+
+    - name: Ensure RDS is in a stoppable or already stopped state
+      ansible.builtin.assert:
+        that:
+          - rds_status_before_stop in ['available', 'stopping', 'stopped']
+        fail_msg: "RDS가 stop 가능한 상태가 아닙니다. 현재 상태: {{ rds_status_before_stop }}"
+
+    - name: Stop RDS instance
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'stop-db-instance', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier] }}"
+      register: stop_rds_cmd
+      changed_when: true
+      when: rds_status_before_stop == 'available'
+
+    # RDS stop과 Redis destroy는 서로 의존하지 않는 장기 작업이다.
+    # RDS stop 요청을 먼저 보낸 뒤 Redis destroy를 진행해서 종료 시간을 줄인다.
+    - name: Initialize Terraform before Redis destroy
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'init', '-input=false'] }}"
+      changed_when: false
+
+    - name: Destroy Redis and Redis related SSM parameters
+      ansible.builtin.command:
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'destroy', '-auto-approve'] + redis_terraform_target_args }}"
+      register: terraform_destroy_redis_cmd
+      changed_when: true
+
+    # Redis destroy가 진행되는 동안 RDS stop도 함께 진행된다.
+    # 비용 절감 종료가 완전히 끝났는지 여기서 최종 상태만 확인한다.
+    - name: Wait until RDS instance is stopped
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['rds', 'describe-db-instances', '--region', aws_region, '--db-instance-identifier', rds.db_instance_identifier, '--query', 'DBInstances[0].DBInstanceStatus', '--output', 'text'] }}"
+      register: rds_wait_status_cmd
+      changed_when: false
+      retries: 90
+      delay: 10
+      until:
+        - (rds_wait_status_cmd.stdout | trim) == 'stopped'
+
+    - name: Save RDS stopped status
+      ansible.builtin.set_fact:
+        rds_stopped_status: "{{ rds_wait_status_cmd.stdout | trim }}"
+
+    - name: Print env-down summary
+      ansible.builtin.debug:
+        msg:
+          aws:
+            account: "{{ caller_identity.Account }}"
+            user_arn: "{{ caller_identity.Arn }}"
+            region: "{{ aws_region }}"
+            profile: "{{ aws_profile | default('default', true) }}"
+          app_asg: "{{ asg_down_status }}"
+          kafka:
+            requested_stop_instance_ids: "{{ kafka_instance_ids_to_stop }}"
+            final_states: "{{ kafka_stopped_states }}"
+          monitoring:
+            requested_stop_instance_ids: "{{ monitoring_instance_ids_to_stop }}"
+            final_states: "{{ monitoring_stopped_states }}"
+          rds:
+            before: "{{ rds_status_before_stop }}"
+            after: "{{ rds_stopped_status }}"
+          redis:
+            terraform_targets: "{{ redis.terraform_targets }}"
+            terraform_stdout: "{{ terraform_destroy_redis_cmd.stdout_lines | default([]) }}"
