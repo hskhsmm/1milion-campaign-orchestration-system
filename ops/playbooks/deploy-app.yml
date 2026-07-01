@@ -33,6 +33,13 @@
       SPRING_DATA_REDIS_CLUSTER_NODES: "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
       SLACK_WEBHOOK_URL: "/batch-kafka/prod/SLACK_WEBHOOK_URL"
       ECR_IMAGE: "/batch-kafka/prod/ECR_IMAGE"
+    deploy_required_env_keys:
+      - SPRING_DATASOURCE_URL
+      - SPRING_DATASOURCE_USERNAME
+      - SPRING_DATASOURCE_PASSWORD
+      - SPRING_KAFKA_BOOTSTRAP_SERVERS
+      - SPRING_DATA_REDIS_CLUSTER_NODES
+      - ECR_IMAGE
 
   tasks:
     # 배포에 필요한 런타임 명령이 서버에 있는지 먼저 확인해서 실패 원인을 빠르게 드러낸다.
@@ -164,6 +171,16 @@
             | list
           }}
       no_log: true
+      tags:
+        - before_install
+
+    # 필수 SSM Parameter가 없으면 앱 기동이나 health check까지 가지 않고 배포 초반에 실패시킨다.
+    - name: Verify required deployment parameters exist
+      ansible.builtin.assert:
+        that:
+          - item in (deploy_env_lines | map('regex_replace', '=.*$', '') | list)
+        fail_msg: "Required SSM parameter is missing: {{ item }} ({{ deploy_ssm_parameters[item] }})"
+      loop: "{{ deploy_required_env_keys }}"
       tags:
         - before_install
 
@@ -309,6 +326,7 @@
       tags:
         - application_start
 
+    # redis-exporter는 terraform-mcp에서만 단독 실행한다. 앱 인스턴스에 남아 있는 legacy 컨테이너는 중복 수집 방지를 위해 제거한다.
     - name: Remove leftover application containers
       ansible.builtin.command:
         argv:
