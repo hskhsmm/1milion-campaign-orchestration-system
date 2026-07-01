@@ -264,9 +264,11 @@ ansible-playbook: command not found
 
 배포 구조를 Ansible 기반으로 바꾸려면 앱 서버에도 Ansible 실행 환경이 필요하다.
 
-장기적으로는 AMI나 launch template bootstrap에서 Ansible을 미리 설치하는 방식이 더 적절하다. 하지만 이번 이슈의 제외 범위에는 Terraform 인프라 리소스 구조 변경이 포함되어 있었기 때문에, launch template이나 AMI 변경은 하지 않았다.
+초기 적용에서는 Terraform 변경 범위를 늘리지 않기 위해 wrapper에서 최소 bootstrap 설치를 시도하도록 했다.
 
-대신 wrapper에서 최소 bootstrap 설치를 시도하도록 했다.
+이 방식은 당장 배포를 성공시키기 위한 현실적인 보완책이다. 다만 앱 인스턴스는 ASG가 생성하고 교체하기 때문에, 특정 EC2에 직접 접속해서 Ansible을 설치하는 방식은 맞지 않다. 인스턴스가 교체되면 수동 설치 상태가 사라지기 때문이다.
+
+따라서 장기적으로는 ASG가 새 인스턴스를 만들 때 사용하는 Launch Template 또는 AMI 단계에서 Ansible 실행 환경을 미리 준비해야 한다.
 
 ```bash
 install_ansible() {
@@ -297,6 +299,50 @@ Installed:
 ```
 
 이후 같은 배포에서 `BeforeInstall` playbook이 정상 실행되었다.
+
+## ASG Launch Template bootstrap 보강
+
+wrapper bootstrap만으로도 배포는 성공했지만, 배포 시점에 패키지를 설치하는 구조는 외부 패키지 저장소나 네트워크 상태에 영향을 받는다.
+
+그래서 후속으로 앱 ASG Launch Template에 `user_data`를 연결했다.
+
+```hcl
+resource "aws_launch_template" "app" {
+  name          = "batch-kafka-app-lt"
+  image_id      = "ami-01c64e7a84a57e681"
+  instance_type = "t3.small"
+  user_data     = filebase64("${path.module}/app-user-data.sh")
+}
+```
+
+새로 추가한 `infra/app-user-data.sh`는 앱 인스턴스가 시작될 때 `ansible-playbook`이 있는지 확인하고, 없으면 OS 환경에 맞게 설치를 시도한다.
+
+```bash
+if command -v ansible-playbook >/dev/null 2>&1; then
+  echo "[app-user-data] ansible-playbook already installed: $(ansible-playbook --version | head -n 1)"
+elif command -v dnf >/dev/null 2>&1; then
+  install_ansible_with_dnf
+elif command -v yum >/dev/null 2>&1; then
+  install_ansible_with_yum
+elif command -v python3 >/dev/null 2>&1; then
+  install_ansible_with_python
+else
+  echo "[app-user-data] ERROR: no supported package manager or python3 found for Ansible install" >&2
+  exit 1
+fi
+```
+
+이렇게 하면 ASG가 새 앱 인스턴스를 생성할 때마다 Ansible 실행 환경이 준비된다.
+
+단, Launch Template의 `user_data` 변경은 이미 떠 있는 EC2에 즉시 적용되지 않는다. Terraform apply로 Launch Template 새 버전이 만들어진 뒤, ASG가 새 인스턴스를 생성할 때부터 적용된다. 이 프로젝트에서는 `env-down`으로 ASG를 0으로 내렸다가 `env-up`으로 다시 올리는 흐름에서 새 Launch Template 설정이 반영된다.
+
+또한 shell script가 Windows 작업 환경에서 CRLF로 변환되면 EC2에서 실행 문제가 생길 수 있으므로 루트 `.gitattributes`에 다음 설정을 추가했다.
+
+```gitattributes
+*.sh text eol=lf
+```
+
+wrapper의 bootstrap 로직은 완전히 제거하지 않았다. Launch Template bootstrap이 정상 동작하기 전의 안전장치이자, 예외적으로 Ansible이 빠진 인스턴스가 생겼을 때 배포 실패를 완화하는 fallback으로 남겨두었다.
 
 ## 배포 Playbook 작성
 
@@ -404,6 +450,35 @@ deploy_ssm_parameters:
   ECR_IMAGE: "/batch-kafka/prod/ECR_IMAGE"
 ```
 
+처음에는 `ECR_IMAGE`만 명시적으로 검증했다. 하지만 실제 배포 관점에서는 DB, Kafka, Redis 접속 정보도 필수값이다.
+
+예를 들어 `SPRING_DATA_REDIS_CLUSTER_NODES`가 없으면 컨테이너는 올라가더라도 애플리케이션이 Redis에 연결하지 못하고 health check 단계에서 실패할 수 있다. 이런 실패는 원인이 뒤늦게 드러난다.
+
+그래서 필수 환경변수 목록을 분리했다.
+
+```yaml
+deploy_required_env_keys:
+  - SPRING_DATASOURCE_URL
+  - SPRING_DATASOURCE_USERNAME
+  - SPRING_DATASOURCE_PASSWORD
+  - SPRING_KAFKA_BOOTSTRAP_SERVERS
+  - SPRING_DATA_REDIS_CLUSTER_NODES
+  - ECR_IMAGE
+```
+
+그리고 SSM Parameter 조회 결과에서 필수값이 하나라도 빠지면 `BeforeInstall` 단계에서 바로 실패시키도록 했다.
+
+```yaml
+- name: Verify required deployment parameters exist
+  ansible.builtin.assert:
+    that:
+      - item in (deploy_env_lines | map('regex_replace', '=.*$', '') | list)
+    fail_msg: "Required SSM parameter is missing: {{ item }} ({{ deploy_ssm_parameters[item] }})"
+  loop: "{{ deploy_required_env_keys }}"
+```
+
+이렇게 하면 배포 실패 지점이 `ApplicationStart`나 `ValidateService`까지 밀리지 않는다. 배포에 필요한 설정값이 없다는 사실을 `BeforeInstall`에서 바로 확인할 수 있다.
+
 최종적으로 `/opt/campaign-core/.env.prod`를 `0600` 권한으로 생성한다.
 
 ```yaml
@@ -417,7 +492,7 @@ deploy_ssm_parameters:
   no_log: true
 ```
 
-마지막으로 `ECR_IMAGE`가 없으면 명확히 실패시킨다.
+추가로 `ECR_IMAGE`는 이미지 pull과 compose 실행에 직접 필요하므로 별도 검증도 유지했다.
 
 ```yaml
 - name: Verify ECR_IMAGE parameter exists
@@ -527,6 +602,10 @@ deploy_ssm_parameters:
 ```
 
 컨테이너 이름 충돌을 피하기 위해 남은 컨테이너도 정리한다.
+
+여기서 `redis-exporter`를 함께 제거하는 이유는 운영 모니터링 구조 때문이다. Redis exporter는 앱 ASG 인스턴스마다 띄우지 않고 `terraform-mcp`에서 하나만 실행한다. 앱 인스턴스에 exporter가 남아 있으면 Grafana에서 Redis 지표가 중복 수집될 수 있다.
+
+따라서 앱 배포 시점에는 앱 인스턴스에 남아 있는 legacy `redis-exporter` 컨테이너를 제거하고, Redis exporter는 별도 Ansible playbook을 통해 `terraform-mcp`에서만 재기동한다.
 
 ```yaml
 - name: Remove leftover application containers
@@ -926,17 +1005,13 @@ deploy-app.yml
 
 ## 아쉬운 점과 다음 개선 방향
 
-이번 작업에서 Ansible bootstrap을 wrapper에 넣었다.
+이번 작업 이후 앱 ASG Launch Template의 `user_data`에 Ansible bootstrap을 추가했다.
 
-이는 현실적인 보완이지만, 가장 이상적인 방식은 아니다.
+이제 새로 생성되는 앱 인스턴스는 CodeDeploy 배포가 시작되기 전에 Ansible 실행 환경을 준비할 수 있다. wrapper의 bootstrap은 완전히 제거하지 않고 fallback으로 남겨두었다.
 
-배포 시점에 패키지를 설치하면 다음 문제가 생길 수 있다.
+다만 `user_data`도 인스턴스 시작 시점에 패키지를 설치한다는 점에서는 여전히 외부 패키지 저장소와 네트워크 상태의 영향을 받는다.
 
-- 첫 배포 시간이 길어진다.
-- 외부 패키지 저장소 상태에 영향을 받는다.
-- 동일 AMI라도 배포 시점에 따라 설치되는 Ansible 버전이 달라질 수 있다.
-
-따라서 다음 개선 방향은 앱 AMI 또는 launch template bootstrap에서 Ansible을 미리 설치하는 것이다.
+따라서 더 장기적인 개선 방향은 앱 AMI bake 단계에서 Docker, CodeDeploy agent, AWS CLI, docker-compose, Ansible을 미리 포함하는 것이다.
 
 예상 방향은 다음과 같다.
 
@@ -983,6 +1058,7 @@ Ansible:
 ```text
 Terraform:
   인프라 리소스 정의
+  앱 ASG 인스턴스 bootstrap 기준 관리
 
 Ansible:
   인프라 운영 lifecycle
