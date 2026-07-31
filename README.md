@@ -77,7 +77,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | Kafka | EC2 단일 브로커 | **EC2 3-broker KRaft 클러스터** |
 | 앱 서버 | 단일 EC2 | **ASG (min=2, max=3)** |
 | 인프라 관리 | 수동 콘솔 | **Terraform IaC** |
-| 배포 | GitHub Actions + CodeDeploy | **OIDC + ECR + CodeDeploy** |
+| 배포 | GitHub Actions + CodeDeploy | **OIDC + ECR + CodeDeploy + Ansible playbook** |
 | 모니터링 | 웹 대시보드 (자체 구현) | **Prometheus + Grafana 16패널 + MCP 서버** |
 | 장애 테스트 | 없음 | **T01~T07 전체 통과** |
 
@@ -620,14 +620,26 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
   ├── ./gradlew build
   ├── docker build → ECR push (commit SHA 태그)
   ├── SSM에 최신 ECR_IMAGE 파라미터 업데이트
-  ├── appspec.yml + scripts/ → S3 upload
+  ├── appspec.yml + deploy/ + ops/ + stress-test/ → S3 upload
   └── CodeDeploy 배포 트리거
          |
 [CodeDeploy — OneAtATime (ASG 순차 배포)]
-  ├── beforeInstall.sh   : SSM에서 환경변수 로드 → .env 생성
-  ├── applicationStart.sh: docker compose down → docker compose up
-  └── validateService.sh : 헬스체크 통과 확인
+  ├── BeforeInstall
+  │    └── run-ansible-deploy.sh → ops/playbooks/deploy-app.yml --tags before_install
+  │        ECR login, /opt/campaign-core 준비, SSM Parameter 기반 .env.prod 생성
+  ├── AfterInstall
+  │    └── run-ansible-deploy.sh → ops/playbooks/deploy-app.yml --tags after_install
+  │        .env.prod의 ECR_IMAGE 확인, Docker image pull
+  ├── ApplicationStart
+  │    └── run-ansible-deploy.sh → ops/playbooks/deploy-app.yml --tags application_start
+  │        compose 파일 배치, stress-test 스크립트 동기화, 기존 컨테이너 정리, 새 컨테이너 실행
+  └── ValidateService
+       └── run-ansible-deploy.sh → ops/playbooks/deploy-app.yml --tags validate_service
+           actuator health check 통과 확인
 ```
+
+`appspec.yml`의 lifecycle hook은 같은 wrapper를 호출하고, wrapper가 CodeDeploy의 `LIFECYCLE_EVENT`를 Ansible tag로 변환한다.
+배포 번들에 `ops/`가 포함되므로 앱 서버에 별도 playbook checkout 없이 CodeDeploy archive 안의 playbook을 그대로 실행한다.
 
 **배포 중 새 push 발생 시**: `concurrency: cancel-in-progress: true` 로 이전 배포 취소 후 새 배포 실행.
 
@@ -645,7 +657,7 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
 | **Batch** | Spring Batch | 정합성 검증 Job, PENDING 복구 Job |
 | **IaC** | Terraform | 전체 AWS 인프라 코드화, 재현 가능 |
 | **Container** | Docker, Amazon ECR | 이미지 버전 관리, 배포 표준화 |
-| **CI/CD** | GitHub Actions + CodeDeploy | OIDC 인증, ASG 순차 무중단 배포 |
+| **CI/CD** | GitHub Actions + CodeDeploy + Ansible | OIDC 인증, ASG 순차 무중단 배포, 서버 내부 배포 절차 playbook화 |
 | **Load Test** | k6 (shared-iterations) | 유니크 userId 보장, 정합성 검증 |
 | **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
 | **AI 운영** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림 |
