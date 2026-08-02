@@ -13,6 +13,8 @@ infra/.terraform/
 infra/terraform.tfstate
 infra/terraform.tfstate.backup
 infra/*.tfvars
+infra/tfplan
+infra/*.tfplan
 
 # Python
 __pycache__/
