@@ -52,7 +52,7 @@ public class ParticipationService {
         }
 
         long sequence = total - remaining;
-        log.info("[ATOMIC] campaignId={} userId={} sequence={} remaining={}",
+        log.debug("[ATOMIC] campaignId={} userId={} sequence={} remaining={}",
                 campaignId, userId, sequence, remaining);
     }
 }
