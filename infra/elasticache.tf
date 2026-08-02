@@ -34,7 +34,7 @@ resource "aws_elasticache_replication_group" "redis" {
 }
 
 # terraform apply 완료 시 엔드포인트를 SSM에 자동 등록
-# beforeInstall.sh가 이 값을 읽어 앱/exporter에 주입
+# Ansible 배포 playbook이 이 값을 읽어 앱/exporter에 주입
 resource "aws_ssm_parameter" "redis_cluster_nodes" {
   name  = "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
   type  = "SecureString"

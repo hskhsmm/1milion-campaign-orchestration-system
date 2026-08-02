@@ -156,7 +156,7 @@ public void participate(Long campaignId, Long userId) {
     }
 
     long sequence = total - remaining;
-    log.info("[ATOMIC] campaignId={} userId={} sequence={} remaining={}", ...);
+    log.debug("[ATOMIC] campaignId={} userId={} sequence={} remaining={}", ...);
     // 202 반환 — 여기서 응답 완료
 }
 ```
@@ -679,7 +679,7 @@ terraform apply
 
 ### SSM Parameter Store 관리
 
-앱 기동 시 `beforeInstall.sh`가 SSM에서 환경변수 자동 주입:
+앱 배포 시 CodeDeploy 공통 wrapper(`run-ansible-deploy.sh`)가 Ansible playbook을 호출하고, playbook이 SSM에서 환경변수를 주입:
 
 ```bash
 SPRING_DATASOURCE_URL=$(aws ssm get-parameter --name /batch-kafka/prod/SPRING_DATASOURCE_URL ...)
@@ -701,12 +701,12 @@ SLACK_WEBHOOK_URL=$(aws ssm get-parameter ...)
     |-- OIDC → AWS IAM Role 임시 자격증명 (키 없음)
     |-- ./gradlew build
     |-- docker build → ECR push
-    |-- appspec.yml + scripts/ → S3 upload
+    |-- appspec.yml + deploy/ + ops/ → S3 upload
     |-- CodeDeploy 배포 트리거
     v
 [CodeDeploy — OneAtATime]
-    |-- beforeInstall.sh: SSM → .env 파일 생성
-    |-- applicationStart.sh: docker compose down → up
+    |-- run-ansible-deploy.sh → deploy-app.yml --tags before_install: SSM → .env 파일 생성
+    |-- run-ansible-deploy.sh → deploy-app.yml --tags application_start: docker compose down → up
     v
 [ASG 인스턴스 순차 배포 완료]
 ```

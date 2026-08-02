@@ -109,6 +109,19 @@
           - (redis_ssm_params.Parameters | length) == (redis_ssm_parameter_names | length)
         fail_msg: "Redis SSM parameter가 기대대로 재생성되지 않았습니다. 현재 결과: {{ redis_ssm_params }}"
 
+    # SSM value에는 lifecycle.ignore_changes = [value]가 걸려 있어, 일반 terraform apply나
+    # ElastiCache 교체만으로는 갱신되지 않을 수 있다. 실제 configuration endpoint와
+    # 다르면 오래된 endpoint를 앱/exporter에 계속 주입하는 상태로 넘어가지 않도록 중단한다.
+    - name: Ensure Redis SSM parameter values match the current ElastiCache endpoint
+      ansible.builtin.assert:
+        that:
+          - (redis_ssm_params.Parameters | selectattr('Name', 'equalto', redis.ssm_parameters.cluster_nodes) | map(attribute='Value') | first) == (redis_available_status.Endpoint + ':6379')
+          - (redis_ssm_params.Parameters | selectattr('Name', 'equalto', redis.ssm_parameters.exporter_addr) | map(attribute='Value') | first) == ('redis://' + redis_available_status.Endpoint + ':6379')
+        fail_msg: >-
+          Redis SSM parameter 값이 현재 ElastiCache configuration endpoint({{ redis_available_status.Endpoint }})와 일치하지 않습니다.
+          ignore_changes=[value] 설정으로 이전 endpoint 값이 남아있을 수 있으니 SSM 파라미터를 수동으로 갱신한 뒤 다시 실행하세요.
+          현재 SSM 값: {{ redis_ssm_params.Parameters }}
+
     # Redis apply가 진행되는 동안 RDS start도 함께 진행된다.
     # 앱을 올리기 전에 DB가 available 상태가 되었는지만 여기서 확인한다.
     - name: Wait until RDS instance is available
