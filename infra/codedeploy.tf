@@ -33,9 +33,9 @@ resource "aws_codedeploy_app" "app" {
 # import: terraform import aws_codedeploy_deployment_group.app batch-kafka-app:batch-kafka-prod-dg
 # ──────────────────────────────────────────
 resource "aws_codedeploy_deployment_group" "app" {
-  app_name               = aws_codedeploy_app.app.name
-  deployment_group_name  = "batch-kafka-prod-dg"
-  service_role_arn       = aws_iam_role.codedeploy.arn
+  app_name              = aws_codedeploy_app.app.name
+  deployment_group_name = "batch-kafka-prod-dg"
+  service_role_arn      = aws_iam_role.codedeploy.arn
 
   deployment_config_name = "CodeDeployDefault.OneAtATime"
 

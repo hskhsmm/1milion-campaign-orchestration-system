@@ -20,8 +20,9 @@ resource "aws_db_parameter_group" "slow" {
   }
 
   parameter {
-    name  = "log_output"
-    value = "TABLE"
+    name         = "log_output"
+    value        = "TABLE"
+    apply_method = "pending-reboot"
   }
 
   tags = {}
