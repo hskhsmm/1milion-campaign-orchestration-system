@@ -6,12 +6,16 @@ exec > >(tee -a "${LOG_FILE}" | logger -t batch-kafka-app-user-data -s 2>/dev/co
 
 echo "[app-user-data] start"
 
+# pip 폴백은 run-ansible-deploy.sh와 동일한 버전으로 고정해
+# 배포 시점에 따라 다른 Ansible 버전이 깔리는 것을 방지한다.
+ANSIBLE_PIP_VERSION="9.5.1"
+
 install_ansible_with_dnf() {
   dnf install -y ansible \
     || dnf install -y ansible-core \
     || {
       dnf install -y python3 python3-pip
-      python3 -m pip install ansible
+      python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
     }
 }
 
@@ -21,13 +25,13 @@ install_ansible_with_yum() {
     || amazon-linux-extras install -y ansible2 \
     || {
       yum install -y python3 python3-pip
-      python3 -m pip install ansible
+      python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
     }
 }
 
 install_ansible_with_python() {
   python3 -m ensurepip --upgrade || true
-  python3 -m pip install ansible
+  python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
 }
 
 # App instances are created by ASG, so deployment runtime dependencies must be

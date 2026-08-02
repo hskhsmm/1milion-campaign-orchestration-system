@@ -25,6 +25,10 @@ if [[ -z "${HOOK_TAG}" ]]; then
   exit 1
 fi
 
+# infra/app-user-data.sh의 ANSIBLE_PIP_VERSION과 동일하게 유지해
+# 부팅 시점 설치와 배포 시점 설치 간 버전 드리프트를 방지한다.
+ANSIBLE_PIP_VERSION="9.5.1"
+
 install_ansible() {
   echo "[run-ansible-deploy] ansible-playbook is not installed. Trying bootstrap install."
 
@@ -34,9 +38,9 @@ install_ansible() {
     yum install -y ansible \
       || yum install -y ansible-core \
       || amazon-linux-extras install -y ansible2 \
-      || python3 -m pip install ansible
+      || python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
   elif command -v python3 >/dev/null 2>&1; then
-    python3 -m pip install ansible
+    python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
   else
     echo "[run-ansible-deploy] ERROR: no supported package manager or python3 found for Ansible install" >&2
     return 1
