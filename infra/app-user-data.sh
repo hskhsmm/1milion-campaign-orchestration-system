@@ -10,7 +10,9 @@ echo "[app-user-data] start"
 # 실행 시점마다 버전이 달라질 수 있다. 그래서 패키지매니저는 python3/pip
 # 준비에만 쓰고, Ansible 자체는 항상 pip로 이 버전을 고정 설치한다.
 # run-ansible-deploy.sh의 ANSIBLE_PIP_VERSION과 동일하게 유지한다.
-ANSIBLE_PIP_VERSION="9.5.1"
+# ansible-core 2.16(ansible 9.x)부터 컨트롤 노드에 Python 3.10+가 필요한데
+# 이 AMI(AL2023)의 기본 python3는 3.9라서, 3.9와 호환되는 마지막 8.x로 고정한다.
+ANSIBLE_PIP_VERSION="8.7.0"
 
 install_ansible_with_dnf() {
   dnf install -y python3 python3-pip
