@@ -33,6 +33,22 @@ fi
 # 이 AMI(AL2023)의 기본 python3는 3.9라서, 3.9와 호환되는 마지막 8.x로 고정한다.
 ANSIBLE_PIP_VERSION="8.7.0"
 
+wait_for_cloud_init() {
+  if ! command -v cloud-init >/dev/null 2>&1 \
+    || [[ -f /var/lib/cloud/instance/boot-finished ]]; then
+    return 0
+  fi
+
+  echo "[run-ansible-deploy] waiting for cloud-init bootstrap"
+  if ! timeout 300 cloud-init status --wait; then
+    echo "[run-ansible-deploy] ERROR: cloud-init did not complete successfully" >&2
+    cloud-init status --long || true
+    return 1
+  fi
+}
+
+wait_for_cloud_init
+
 install_ansible() {
   echo "[run-ansible-deploy] ansible-playbook is not installed. Trying bootstrap install."
 
