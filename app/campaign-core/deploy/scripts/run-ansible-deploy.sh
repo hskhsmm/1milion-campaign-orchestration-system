@@ -38,8 +38,13 @@ install_ansible() {
 
   if command -v dnf >/dev/null 2>&1; then
     dnf install -y python3 python3-pip
+    # AMI에 rpm으로 ansible(-core)이 이미 깔려있으면 pip이 RECORD 파일이 없어
+    # 언인스톨을 못 해 "Cannot uninstall ansible, RECORD file not found" 로 실패한다.
+    # pip 설치 전에 rpm 버전을 먼저 지워서 이 충돌을 원천 차단한다.
+    dnf remove -y ansible ansible-core 2>/dev/null || true
   elif command -v yum >/dev/null 2>&1; then
     yum install -y python3 python3-pip
+    yum remove -y ansible ansible-core 2>/dev/null || true
   elif ! command -v python3 >/dev/null 2>&1; then
     echo "[run-ansible-deploy] ERROR: no supported package manager or python3 found for Ansible install" >&2
     return 1

@@ -16,11 +16,16 @@ ANSIBLE_PIP_VERSION="8.7.0"
 
 install_ansible_with_dnf() {
   dnf install -y python3 python3-pip
+  # AMI에 rpm으로 ansible(-core)이 이미 깔려있으면 pip이 RECORD 파일이 없어
+  # 언인스톨을 못 해 "Cannot uninstall ansible, RECORD file not found" 로 실패한다.
+  # pip 설치 전에 rpm 버전을 먼저 지워서 이 충돌을 원천 차단한다.
+  dnf remove -y ansible ansible-core 2>/dev/null || true
   python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
 }
 
 install_ansible_with_yum() {
   yum install -y python3 python3-pip
+  yum remove -y ansible ansible-core 2>/dev/null || true
   python3 -m pip install "ansible==${ANSIBLE_PIP_VERSION}"
 }
 
