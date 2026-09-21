@@ -10,6 +10,8 @@ BATCH_API_URL     = os.environ.get(
     "http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com",
 )
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
+CONSISTENCY_POLL_INTERVAL_SECONDS = float(os.environ.get("CONSISTENCY_POLL_INTERVAL_SECONDS", "1"))
+CONSISTENCY_POLL_TIMEOUT_SECONDS  = int(os.environ.get("CONSISTENCY_POLL_TIMEOUT_SECONDS", "30"))
 
 # P1
 HTTP_5XX_THRESHOLD           = 1

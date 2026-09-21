@@ -1,5 +1,6 @@
 """P1 감지 — 5xx 에러 / Redis Queue 적재량 / 데이터 정합성."""
 import logging
+import time
 
 import requests
 
@@ -101,44 +102,100 @@ def _check_redis_queue() -> None:
 # 데이터 정합성 검사 (1시간 폴링)
 # ---------------------------------------------------------------------------
 
-def check_consistency() -> None:
-    """Redis 재고 카운터 vs DB INSERT 건수 정합성 확인."""
+def check_consistency() -> dict:
+    """현재 Spring Batch 정합성 Job을 dry-run으로 실행하고 결과를 알린다."""
     if config.BATCH_CAMPAIGN_ID == 0:
         logger.info("BATCH_CAMPAIGN_ID 미설정 — 정합성 검사 스킵")
-        return
+        return {"status": "skipped", "reason": "BATCH_CAMPAIGN_ID 미설정"}
 
-    url = f"{config.BATCH_API_URL}/api/admin/campaigns/{config.BATCH_CAMPAIGN_ID}/consistency"
+    base_url = f"{config.BATCH_API_URL}/api/admin/consistency-recovery"
     try:
-        resp = requests.get(url, timeout=10)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        logger.error("정합성 API 호출 실패: %s", e)
-        return
-
-    redis_count = data.get("redisCount", 0)
-    db_count    = data.get("dbCount", 0)
-    diff        = abs(redis_count - db_count)
-
-    logger.info("정합성 검사 — redis=%d db=%d diff=%d", redis_count, db_count, diff)
-
-    if diff > 0:
-        key = "consistency_mismatch"
-        if check_and_record(key, config.COOLDOWN_SECONDS):
-            send_alert(
-                "P1",
-                "데이터 정합성 불일치",
-                f"Redis 확정 건수: *{redis_count:,}*\n"
-                f"DB INSERT 건수: *{db_count:,}*\n"
-                f"차이: *{diff:,}건* — 유실 또는 중복 가능성",
-            )
-    else:
-        reset_alert("consistency_mismatch")
-        send_alert(
-            "OK",
-            "정합성 검사 통과",
-            f"Redis = DB = *{db_count:,}건* 일치",
+        resp = requests.post(
+            base_url,
+            json={
+                "requestedBy": "mcp-monitor",
+                "dryRun": True,
+                "autoFix": False,
+                "campaignId": config.BATCH_CAMPAIGN_ID,
+                "maxCampaigns": 1,
+            },
+            timeout=10,
         )
+        resp.raise_for_status()
+        payload = resp.json()
+        data = payload.get("data") or {}
+        execution_id = data["consistencyRecoveryExecutionId"]
+    except Exception as e:
+        logger.error("정합성 복구 Job 시작 실패: %s", e)
+        return {"status": "error", "reason": str(e)}
+
+    deadline = time.monotonic() + config.CONSISTENCY_POLL_TIMEOUT_SECONDS
+    while time.monotonic() < deadline:
+        try:
+            resp = requests.get(f"{base_url}/executions/{execution_id}", timeout=10)
+            resp.raise_for_status()
+            data = (resp.json().get("data") or {})
+            execution = data.get("execution") or {}
+            status = execution.get("status", "UNKNOWN")
+        except Exception as e:
+            logger.error("정합성 복구 Job 결과 조회 실패. executionId=%s error=%s", execution_id, e)
+            return {"status": "error", "executionId": execution_id, "reason": str(e)}
+
+        if status == "FAILED":
+            if check_and_record("consistency_check_failed", config.COOLDOWN_SECONDS):
+                send_alert(
+                    "P1",
+                    "정합성 검사 실패",
+                    f"executionId: *{execution_id}*\nSpring Batch 상태: *FAILED*",
+                )
+            return {"status": "failed", "executionId": execution_id}
+
+        if status == "COMPLETED":
+            anomaly_count = int(execution.get("anomalyCount", 0))
+            results = data.get("results") or []
+            reset_alert("consistency_check_failed")
+            logger.info(
+                "정합성 검사 완료 — executionId=%s campaignId=%s anomalies=%d",
+                execution_id,
+                config.BATCH_CAMPAIGN_ID,
+                anomaly_count,
+            )
+
+            if anomaly_count > 0:
+                if check_and_record("consistency_mismatch", config.COOLDOWN_SECONDS):
+                    details = []
+                    for result in results[:5]:
+                        details.append(
+                            f"campaign={result.get('campaignId')} "
+                            f"type={result.get('anomalyType')} "
+                            f"severity={result.get('severity')}"
+                        )
+                    detail_text = "\n".join(details) or "상세 결과 없음"
+                    send_alert(
+                        "P1",
+                        "데이터 정합성 이상 탐지",
+                        f"campaignId: *{config.BATCH_CAMPAIGN_ID}*\n"
+                        f"이상 분류: *{anomaly_count:,}건*\n{detail_text}",
+                    )
+            else:
+                reset_alert("consistency_mismatch")
+                send_alert(
+                    "OK",
+                    "정합성 검사 통과",
+                    f"campaignId *{config.BATCH_CAMPAIGN_ID}*, anomaly 0건",
+                )
+
+            return {
+                "status": "completed",
+                "executionId": execution_id,
+                "anomalyCount": anomaly_count,
+                "resultCount": len(results),
+            }
+
+        time.sleep(config.CONSISTENCY_POLL_INTERVAL_SECONDS)
+
+    logger.error("정합성 복구 Job 대기 시간 초과. executionId=%s", execution_id)
+    return {"status": "timeout", "executionId": execution_id}
 
 
 # ---------------------------------------------------------------------------
