@@ -6,7 +6,6 @@ from unittest.mock import Mock, patch
 
 os.environ.setdefault("SLACK_WEBHOOK_URL", "https://example.invalid/slack")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
-sys.modules.setdefault("requests", Mock())
 
 from detectors import p1_detector  # noqa: E402
 
