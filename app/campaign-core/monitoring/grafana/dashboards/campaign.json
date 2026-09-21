@@ -330,7 +330,7 @@
     },
     {
       "id": 8,
-      "title": "Consumer DB 저장 지연 (poll → commit, 전역 평균)",
+      "title": "Consumer DB 처리 지연 (poll → DB 처리 종료, 전역 평균)",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -345,7 +345,7 @@
             "uid": "prometheus"
           },
           "expr": "sum(rate(consumer_pending_to_success_latency_seconds_sum[1m])) / sum(rate(consumer_pending_to_success_latency_seconds_count[1m]))",
-          "legendFormat": "INSERT 지연"
+          "legendFormat": "DB 처리 지연"
         }
       ],
       "fieldConfig": {

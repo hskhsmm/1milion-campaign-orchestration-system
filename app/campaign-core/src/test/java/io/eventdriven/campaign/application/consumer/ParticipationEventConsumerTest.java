@@ -24,6 +24,7 @@ import static org.mockito.ArgumentMatchers.anyList;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.Mockito.doNothing;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.verify;
@@ -77,6 +78,11 @@ class ParticipationEventConsumerTest {
                 .doThrow(new RuntimeException("db unavailable"))
                 .when(participationHistoryRepository)
                 .insertSuccess(anyLong(), anyLong(), anyLong());
+        doAnswer(invocation -> {
+            assertThat(meterRegistry.get("consumer.pending_to_success.latency").timer().count())
+                    .isEqualTo(1L);
+            return null;
+        }).when(slackNotificationService).sendDlqAlert(anyString(), anyString());
 
         consumer.consumeParticipationEvent(records, acknowledgment);
 
@@ -85,7 +91,22 @@ class ParticipationEventConsumerTest {
         assertThat(meterRegistry.get("consumer.db.committed").counter().count()).isEqualTo(1D);
         assertThat(meterRegistry.get("consumer.db.transient.failures").counter().count()).isEqualTo(2D);
         assertThat(meterRegistry.get("consumer.db.commit.batch.size").summary().totalAmount()).isEqualTo(1D);
+        assertThat(meterRegistry.get("consumer.pending_to_success.latency").timer().count()).isEqualTo(1L);
         verify(acknowledgment, never()).acknowledge();
+    }
+
+    @Test
+    @DisplayName("DB 처리 대상이 없는 batch는 DB 지연 시간에 포함하지 않는다")
+    void consumeParticipationEvent_doesNotRecordDbLatencyWhenAllRecordsFailParsing() throws Exception {
+        List<ConsumerRecord<String, String>> records = List.of(record("1", "invalid"));
+        when(jsonMapper.readValue("invalid", ParticipationEvent.class))
+                .thenThrow(new RuntimeException("invalid json"));
+
+        consumer.consumeParticipationEvent(records, acknowledgment);
+
+        assertThat(meterRegistry.find("consumer.pending_to_success.latency").timer()).isNull();
+        verify(jdbcTemplate, never()).batchUpdate(anyString(), anyList());
+        verify(acknowledgment).acknowledge();
     }
 
     private ConsumerRecord<String, String> record(String key, String value) {
