@@ -37,7 +37,7 @@
 - **공정성**: 먼저 요청한 사람이 먼저 당첨 (선착순)
 - **정합성**: 재고 초과 발급 0건, 데이터 유실 0건
 - **가용성**: 단일 장애점(SPOF) 제거, 브로커/인스턴스 장애 자동 복구
-- **성능**: 평균 TPS ~3,737/s, 피크 ~4,800/s (14차 기준)
+- **성능**: 평균 API TPS ~3,737/s, 피크 ~4,800/s (14차, `202 Accepted` 응답 기준)
 
 ### 기술 스택
 
@@ -49,9 +49,9 @@
 | DB | MySQL 8.0.44 (AWS RDS db.t3.micro) |
 | 인프라 | AWS EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy |
 | IaC | Terraform (전체 인프라 코드화) |
-| 모니터링 | Prometheus, Grafana, CloudWatch, Micrometer (커스텀 메트릭 4종) |
+| 모니터링 | Prometheus, Grafana, CloudWatch, Micrometer (커스텀 메트릭 9종) |
 | AI 운영 | MCP Server (Python/FastAPI, Prometheus 폴링, Slack 알림) |
-| 부하 테스트 | k6 (shared-iterations executor) |
+| 부하 테스트 | k6 (shared-iterations, ramping-arrival-rate) |
 
 ---
 
@@ -497,14 +497,11 @@ Kafka at-least-once 재전송으로 동일 메시지가 다시 와도 INSERT IGN
 
 ## 8. Spring Batch 안전망
 
-### PendingRecoveryJob
+### ConsistencyRecoveryJob
 
-Redis에 stock이 있는데 DB success_count가 기대치보다 적으면 누락 감지 후 보정.
+Redis 재고, DB 성공 건수, 캠페인 총 재고를 비교해 불일치를 분류하고 실행 기록을 남긴다. `MISSING_REDIS_STOCK`처럼 안전한 항목만 정책에 따라 자동 복구하며, 과잉 복구 위험이 있는 항목은 보고 전용으로 둔다.
 
-### ConsistencyRecoveryJob (MISSING_REDIS_STOCK)
-
-Redis stock 키가 없는데 DB에 성공 기록이 있는 케이스 탐지.
-T04에서 Redis stock 키를 강제 삭제한 뒤 `restoreStock=20` 복구 동작 확인 ✅
+v2의 DB `PENDING` 상태를 전제로 하던 `PendingRecoveryJob`은 Redis-first v3와 맞지 않아 제거했다.
 
 ### DlqReplayJob
 
@@ -589,7 +586,7 @@ DLQ에 적재된 메시지를 분류 후 재처리.
 **redis-exporter 위치**: terraform-mcp에 단독 배포 (앱 인스턴스에서 제거)
 → ASG 인스턴스가 몇 대든 Redis 메트릭은 항상 1개 시계열
 
-### 커스텀 비즈니스 메트릭 4종
+### 커스텀 비즈니스 메트릭 9종
 
 | 메트릭명 | 타입 | 설명 |
 |---------|------|------|
@@ -597,8 +594,13 @@ DLQ에 적재된 메시지를 분류 후 재처리.
 | `bridge.messages.published{campaignId}` | Counter | 캠페인별 Kafka 발행 성공 건수 (드레인 속도 계산) |
 | `consumer.pending_to_success.latency` | Timer | Consumer 배치 시작 ~ DB INSERT 완료 지연 |
 | `redis.queue.size{campaignId}` | Gauge | 캠페인별 Redis Queue 현재 적재량 |
+| `consumer.kafka.records.polled` | Counter | Kafka에서 poll한 레코드 수 |
+| `consumer.events.parsed` | Counter | 정상 payload로 파싱한 이벤트 수 |
+| `consumer.db.committed` | Counter | DB 성공 처리 경로를 통과한 이벤트 수 |
+| `consumer.db.transient.failures` | Counter | DB 일시 장애로 ack를 보류한 이벤트 수 |
+| `consumer.db.commit.batch.size` | DistributionSummary | Consumer DB 처리 batch 크기 |
 
-### Grafana 대시보드 13개 패널
+### Grafana 대시보드 16개 패널
 
 | 번호 | 패널 | 핵심 쿼리 |
 |------|------|-----------|
@@ -609,12 +611,15 @@ DLQ에 적재된 메시지를 분류 후 재처리.
 | 5 | Bridge 드레인 속도 | `rate(bridge_messages_published_total[1m])` |
 | 6 | Bridge 사이클 소요시간 | `bridge_drain_duration_seconds` |
 | 7 | Redis Queue 적재량 | `redis_queue_size` |
-| 8 | Consumer PENDING→SUCCESS 지연 | `consumer_pending_to_success_latency_seconds` |
+| 8 | Consumer DB 저장 지연 (poll→commit) | `consumer_pending_to_success_latency_seconds` (legacy metric name) |
 | 9 | Kafka Consumer Group Lag | `kafka_consumergroup_lag` |
 | 10 | Redis 메모리 사용량 | `redis_memory_used_bytes` |
 | 11 | HikariCP 커넥션 풀 | `hikaricp_connections` (pending/active/idle/max) |
 | 12 | HikariCP 활성율 | `hikaricp_connections_active / hikaricp_connections_max` |
 | 13 | CPU 사용률 | `process_cpu_usage` |
+| 14 | Consumer 후단 처리량 | `rate(consumer_*_total[1m])` |
+| 15 | Consumer DB 일시 실패율 | `rate(consumer_db_transient_failures_total[1m])` |
+| 16 | Consumer DB commit batch size | 전역 `sum(rate(_sum)) / sum(rate(_count))` |
 
 ---
 
