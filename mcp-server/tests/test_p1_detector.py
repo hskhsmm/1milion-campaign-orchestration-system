@@ -78,6 +78,83 @@ class ConsistencyDetectorTest(unittest.TestCase):
         send_alert.assert_called_once()
         self.assertEqual("P1", send_alert.call_args.args[0])
 
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=True)
+    @patch.object(p1_detector.requests, "post", side_effect=RuntimeError("connection refused"))
+    def test_alerts_when_job_start_fails(self, post, check_and_record, send_alert):
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61):
+            result = p1_detector.check_consistency()
+
+        self.assertEqual("error", result["status"])
+        check_and_record.assert_called_once_with(
+            "consistency_check_failed",
+            p1_detector.config.COOLDOWN_SECONDS,
+        )
+        send_alert.assert_called_once()
+        self.assertIn("Job 시작 실패", send_alert.call_args.args[2])
+
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=True)
+    @patch.object(p1_detector.requests, "get", side_effect=RuntimeError("read timeout"))
+    @patch.object(p1_detector.requests, "post")
+    def test_alerts_when_job_poll_fails(self, post, get, check_and_record, send_alert):
+        post.return_value = response({
+            "success": True,
+            "data": {"consistencyRecoveryExecutionId": 77},
+        })
+
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61):
+            result = p1_detector.check_consistency()
+
+        self.assertEqual("error", result["status"])
+        self.assertEqual(77, result["executionId"])
+        check_and_record.assert_called_once_with(
+            "consistency_check_failed",
+            p1_detector.config.COOLDOWN_SECONDS,
+        )
+        send_alert.assert_called_once()
+        self.assertIn("Job 결과 조회 실패", send_alert.call_args.args[2])
+
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=True)
+    @patch.object(p1_detector.requests, "post")
+    def test_alerts_when_job_times_out(self, post, check_and_record, send_alert):
+        post.return_value = response({
+            "success": True,
+            "data": {"consistencyRecoveryExecutionId": 77},
+        })
+
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61), \
+                patch.object(p1_detector.config, "CONSISTENCY_POLL_TIMEOUT_SECONDS", 0):
+            result = p1_detector.check_consistency()
+
+        self.assertEqual("timeout", result["status"])
+        check_and_record.assert_called_once_with(
+            "consistency_check_failed",
+            p1_detector.config.COOLDOWN_SECONDS,
+        )
+        send_alert.assert_called_once()
+        self.assertIn("시간 초과", send_alert.call_args.args[2])
+
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=False)
+    @patch.object(p1_detector.requests, "post", side_effect=RuntimeError("connection refused"))
+    def test_suppresses_repeated_failure_alert_during_cooldown(
+        self,
+        post,
+        check_and_record,
+        send_alert,
+    ):
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61):
+            result = p1_detector.check_consistency()
+
+        self.assertEqual("error", result["status"])
+        check_and_record.assert_called_once_with(
+            "consistency_check_failed",
+            p1_detector.config.COOLDOWN_SECONDS,
+        )
+        send_alert.assert_not_called()
+
 
 def response(payload):
     result = Mock()

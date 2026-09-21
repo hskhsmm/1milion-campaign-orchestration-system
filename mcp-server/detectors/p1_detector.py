@@ -102,6 +102,19 @@ def _check_redis_queue() -> None:
 # 데이터 정합성 검사 (1시간 폴링)
 # ---------------------------------------------------------------------------
 
+def _notify_consistency_check_failure(reason: str, execution_id: int | None = None) -> None:
+    """정합성 검사 실행 실패를 같은 cooldown 상태로 묶어 알린다."""
+    if not check_and_record("consistency_check_failed", config.COOLDOWN_SECONDS):
+        return
+
+    execution_text = f"executionId: *{execution_id}*\n" if execution_id is not None else ""
+    send_alert(
+        "P1",
+        "정합성 검사 실행 실패",
+        f"{execution_text}원인: *{reason}*",
+    )
+
+
 def check_consistency() -> dict:
     """현재 Spring Batch 정합성 Job을 dry-run으로 실행하고 결과를 알린다."""
     if config.BATCH_CAMPAIGN_ID == 0:
@@ -127,6 +140,7 @@ def check_consistency() -> dict:
         execution_id = data["consistencyRecoveryExecutionId"]
     except Exception as e:
         logger.error("정합성 복구 Job 시작 실패: %s", e)
+        _notify_consistency_check_failure(f"Job 시작 실패: {e}")
         return {"status": "error", "reason": str(e)}
 
     deadline = time.monotonic() + config.CONSISTENCY_POLL_TIMEOUT_SECONDS
@@ -139,15 +153,11 @@ def check_consistency() -> dict:
             status = execution.get("status", "UNKNOWN")
         except Exception as e:
             logger.error("정합성 복구 Job 결과 조회 실패. executionId=%s error=%s", execution_id, e)
+            _notify_consistency_check_failure(f"Job 결과 조회 실패: {e}", execution_id)
             return {"status": "error", "executionId": execution_id, "reason": str(e)}
 
         if status == "FAILED":
-            if check_and_record("consistency_check_failed", config.COOLDOWN_SECONDS):
-                send_alert(
-                    "P1",
-                    "정합성 검사 실패",
-                    f"executionId: *{execution_id}*\nSpring Batch 상태: *FAILED*",
-                )
+            _notify_consistency_check_failure("Spring Batch 상태: FAILED", execution_id)
             return {"status": "failed", "executionId": execution_id}
 
         if status == "COMPLETED":
@@ -195,6 +205,7 @@ def check_consistency() -> dict:
         time.sleep(config.CONSISTENCY_POLL_INTERVAL_SECONDS)
 
     logger.error("정합성 복구 Job 대기 시간 초과. executionId=%s", execution_id)
+    _notify_consistency_check_failure("Job 완료 대기 시간 초과", execution_id)
     return {"status": "timeout", "executionId": execution_id}
 
 
