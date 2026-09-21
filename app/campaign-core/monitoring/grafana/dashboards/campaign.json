@@ -508,8 +508,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pending (대기)"
+              "id": "byRegexp",
+              "options": "/.* pending$/"
             },
             "properties": [
               {
