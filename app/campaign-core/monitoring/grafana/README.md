@@ -100,12 +100,14 @@ Grafana 화면에서 대시보드를 새로고침하면 아래 패널이 보여�
 ```text
 Consumer 후단 처리량
 Consumer DB 일시 실패율
-Consumer DB commit batch size
+Consumer DB commit batch size (전역 가중 평균)
 ```
 
-패널은 보이는데 `No data`가 표시된다면 정상일 수 있다.
+Consumer 처리 패널은 보이는데 `No data`가 표시된다면 정상일 수 있다.
 
 새 Consumer 지표는 Kafka Consumer가 실제로 메시지를 처리하고 DB commit 경로를 지나야 값이 생성된다. 따라서 부하 테스트를 한 번 실행한 뒤 확인한다.
+
+`redis_queue_size`는 앱 프로세스가 주기적으로 관측한 Gauge다. 캠페인 종료 직후 과거 값이 남아 있으면 실제 Redis `LLEN`, Kafka lag, DB 최종 건수를 함께 확인한다. 현재 코드는 active set에서 빠진 캠페인의 로컬 Gauge를 `0`으로 갱신한다.
 
 ## S3 업로드 여부
 
