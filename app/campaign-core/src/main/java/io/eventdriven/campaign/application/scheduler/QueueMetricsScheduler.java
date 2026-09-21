@@ -8,6 +8,7 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 
+import java.util.HashSet;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -50,13 +51,12 @@ public class QueueMetricsScheduler {
     @Scheduled(fixedDelay = 10_000)
     public void collectQueueSizes() {
         Set<String> campaignIds = redisTemplate.opsForSet().members(ACTIVE_CAMPAIGNS_KEY);
-        if (campaignIds == null || campaignIds.isEmpty()) {
-            return;
-        }
+        Set<Long> activeCampaignIds = new HashSet<>();
 
-        for (String campaignIdStr : campaignIds) {
+        for (String campaignIdStr : campaignIds != null ? campaignIds : Set.<String>of()) {
             try {
                 Long campaignId = Long.parseLong(campaignIdStr);
+                activeCampaignIds.add(campaignId);
                 String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
 
                 Long size = redisTemplate.opsForList().size(queueKey);
@@ -80,5 +80,13 @@ public class QueueMetricsScheduler {
                 log.error("Queue 메트릭 수집 실패. campaignId={}", campaignIdStr, e);
             }
         }
+
+        // Bridge가 Queue를 비우고 active Set에서 제거한 캠페인은 LLEN을 다시 읽지 않는다.
+        // 각 JVM에 마지막 non-zero 값이 남지 않도록 이미 등록된 Gauge를 명시적으로 0 처리한다.
+        queueSizes.keySet().forEach(campaignId -> {
+            if (!activeCampaignIds.contains(campaignId)) {
+                queueSizes.put(campaignId, 0L);
+            }
+        });
     }
 }
