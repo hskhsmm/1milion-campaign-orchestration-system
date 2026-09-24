@@ -35,6 +35,8 @@ cd /mnt/c/Users/user/Desktop/1milion-campaign-orchestration-system/ops
 ```bash
 make check-tools
 make requirements
+type -a aws
+aws --version
 aws sts get-caller-identity
 terraform version
 ```
@@ -169,14 +171,10 @@ redis-exporter는 App ASG 인스턴스마다 띄우지 않고 `terraform-mcp`에
 | 증상 | 확인할 것 |
 | --- | --- |
 | `aws`를 찾지 못함 | WSL 안에 AWS CLI가 설치되어 있는지 확인 |
+| SSM `send-command`가 `badly formed help string`으로 실패 | `type -a aws`, `aws --version`으로 오래된 `/usr/bin/aws`가 우선되지 않는지 확인하고 `/usr/local/bin`을 PATH 앞에 둔다 |
 | `terraform`을 찾지 못함 | WSL 안에 Terraform이 설치되어 있는지 확인 |
 | Ansible이 `ansible.cfg`를 무시함 | `/mnt/c` 경로 world-writable 이슈이므로 `ANSIBLE_CONFIG=./ansible.cfg`를 명시 |
 | Redis exporter 재기동 실패 | `terraform-mcp`가 running인지, SSM Agent가 Online인지 확인 |
 | App이 Redis에 붙지 못함 | `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 값이 새 Redis endpoint인지 확인 |
 | Grafana Redis 지표가 두 배로 보임 | App 인스턴스에서 redis-exporter가 추가로 떠 있지 않은지 확인 |
-
-## 다음 작업
-
-- CodeDeploy 배포 스크립트와 Ansible 역할 분리 재검토
-- WSL 기반 운영 자동화 세팅 과정 블로그화
-- Ansible playbook 도입 과정 블로그화
+| 신규 ASG 인스턴스가 `Pending:Wait` 후 반복 종료 | CodeDeploy deployment target 로그와 `/var/log/cloud-init-output.log`를 함께 확인한다. `BeforeInstall`은 cloud-init 완료 후 Ansible을 실행해야 한다 |

@@ -19,8 +19,6 @@ import org.springframework.kafka.support.Acknowledgment;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
-import java.time.Duration;
-import java.time.LocalDateTime;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -49,16 +47,16 @@ public class ParticipationEventConsumer {
             containerFactory = "kafkaListenerContainerFactory"
     )
     public void consumeParticipationEvent(List<ConsumerRecord<String, String>> records, Acknowledgment acknowledgment) {
+        long batchStartNanos = System.nanoTime();
         List<ParticipationEvent> events = parseRecords(records);
         if (events.isEmpty()) {
-            recordBackendThroughput(records.size(), 0, 0, false, 0);
+            recordBackendThroughput(records.size(), 0, 0, 0);
             acknowledgment.acknowledge();
             return;
         }
 
-        LocalDateTime batchStart = LocalDateTime.now();
         List<ParticipationEvent> successEvents = new ArrayList<>();
-        boolean hasTransientFailure = false;
+        List<TransientFailure> transientFailures = new ArrayList<>();
 
         try {
             List<Object[]> batchArgs = new ArrayList<>(events.size());
@@ -89,28 +87,40 @@ public class ParticipationEventConsumer {
                 } catch (Exception e) {
                     log.error("Insert failed (transient). campaignId={}, userId={}, sequence={}",
                             event.getCampaignId(), event.getUserId(), event.getSequence(), e);
-                    hasTransientFailure = true;
-                    sendToDlqWithSlack(
-                            String.valueOf(event.getUserId()),
-                            serializeEvent(event),
-                            "INSERT_FAILED",
-                            e
-                    );
+                    transientFailures.add(new TransientFailure(event, e));
                 }
             }
         }
 
-        long latencyMs = Duration.between(batchStart, LocalDateTime.now()).toMillis();
-        recordBackendThroughput(records.size(), events.size(), successEvents.size(), hasTransientFailure, latencyMs);
+        long dbProcessingNanos = System.nanoTime() - batchStartNanos;
+        recordBackendThroughput(
+                records.size(),
+                events.size(),
+                successEvents.size(),
+                transientFailures.size()
+        );
+        recordDbProcessingLatency(dbProcessingNanos);
 
-        log.info("Consumer batch processed. polled={}, parsed={}, success={}, transientFailure={}, latencyMs={}",
-                records.size(), events.size(), successEvents.size(), hasTransientFailure, latencyMs);
+        log.info("Consumer batch processed. polled={}, parsed={}, success={}, transientFailures={}, latencyMs={}",
+                records.size(), events.size(), successEvents.size(), transientFailures.size(),
+                TimeUnit.NANOSECONDS.toMillis(dbProcessingNanos));
+
+        for (TransientFailure failure : transientFailures) {
+            ParticipationEvent event = failure.event();
+            sendToDlqWithSlack(
+                    String.valueOf(event.getUserId()),
+                    serializeEvent(event),
+                    "INSERT_FAILED",
+                    failure.cause()
+            );
+        }
+
         // On transient DB failure, keep the Kafka offset uncommitted so it can be redelivered after recovery.
-        if (!hasTransientFailure) {
+        if (transientFailures.isEmpty()) {
             acknowledgment.acknowledge();
         } else {
             log.warn("Skipping ack due to transient DB failure. Kafka will redeliver after recovery. count={}",
-                    events.size() - successEvents.size());
+                    transientFailures.size());
         }
     }
 
@@ -118,8 +128,7 @@ public class ParticipationEventConsumer {
             int polledCount,
             int parsedCount,
             int committedCount,
-            boolean hasTransientFailure,
-            long latencyMs
+            int transientFailureCount
     ) {
         incrementCounter(METRIC_CONSUMER_POLLED, "Kafka records polled by participation consumer", polledCount);
         incrementCounter(METRIC_CONSUMER_PARSED, "Participation events parsed by consumer", parsedCount);
@@ -130,14 +139,18 @@ public class ParticipationEventConsumer {
                 .register(meterRegistry)
                 .record(committedCount);
 
-        Timer.builder("consumer.pending_to_success.latency")
-                .description("Time from consumer batch start to DB success insert")
-                .register(meterRegistry)
-                .record(latencyMs, TimeUnit.MILLISECONDS);
+        incrementCounter(
+                METRIC_DB_TRANSIENT_FAILURE,
+                "Participation events with transient DB failures",
+                transientFailureCount
+        );
+    }
 
-        if (hasTransientFailure) {
-            incrementCounter(METRIC_DB_TRANSIENT_FAILURE, "Transient DB failures detected by consumer", 1);
-        }
+    private void recordDbProcessingLatency(long latencyNanos) {
+        Timer.builder("consumer.pending_to_success.latency")
+                .description("Time from Kafka batch receipt to DB processing completion")
+                .register(meterRegistry)
+                .record(latencyNanos, TimeUnit.NANOSECONDS);
     }
 
     private void incrementCounter(String name, String description, double amount) {
@@ -198,5 +211,8 @@ public class ParticipationEventConsumer {
                     + ",\"userId\":" + event.getUserId()
                     + ",\"sequence\":" + event.getSequence() + "}";
         }
+    }
+
+    private record TransientFailure(ParticipationEvent event, Exception cause) {
     }
 }

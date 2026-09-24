@@ -421,8 +421,15 @@ def _handle_get_test_report(start_minutes_ago: int, end_minutes_ago: int) -> lis
 
 def _handle_trigger_consistency_check() -> list[TextContent]:
     try:
-        check_consistency()
-        return [TextContent(type="text", text="정합성 검사 실행 완료 — Slack 결과 확인")]
+        result = check_consistency()
+        return [TextContent(
+            type="text",
+            text=(
+                f"정합성 검사 상태: {result.get('status')} "
+                f"(executionId={result.get('executionId', '-')}, "
+                f"anomalyCount={result.get('anomalyCount', '-')})"
+            ),
+        )]
     except Exception as e:
         return [TextContent(type="text", text=f"정합성 검사 실패: {e}")]
 

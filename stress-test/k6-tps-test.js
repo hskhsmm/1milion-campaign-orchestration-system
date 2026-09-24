@@ -25,6 +25,7 @@
 import http from 'k6/http';
 import { check } from 'k6';
 import { Counter, Trend } from 'k6/metrics';
+import exec from 'k6/execution';
 
 // 커스텀 메트릭
 const acceptedCount = new Counter('participation_accepted_202');
@@ -40,16 +41,42 @@ const START_RPS = parseInt(__ENV.START_RPS || '50', 10);
 const WARMUP_SECONDS = parseInt(__ENV.WARMUP_SECONDS || '10', 10);
 const STEADY_SECONDS = parseInt(__ENV.STEADY_SECONDS || '30', 10);
 const COOLDOWN_SECONDS = parseInt(__ENV.COOLDOWN_SECONDS || '5', 10);
+const STEP_RAMP_SECONDS = parseInt(__ENV.STEP_RAMP_SECONDS || '15', 10);
+const STAGE_SECONDS = parseInt(__ENV.STAGE_SECONDS || '60', 10);
+const RPS_STAGES = (__ENV.RPS_STAGES || '')
+  .split(',')
+  .map((value) => parseInt(value.trim(), 10))
+  .filter((value) => Number.isFinite(value) && value > 0);
+const PEAK_TARGET_RPS = RPS_STAGES.length > 0 ? Math.max(...RPS_STAGES) : TARGET_RPS;
 const PRE_ALLOCATED_VUS = parseInt(
-  __ENV.PRE_ALLOCATED_VUS || String(Math.max(200, Math.ceil(TARGET_RPS * 0.6))),
+  __ENV.PRE_ALLOCATED_VUS || String(Math.max(200, Math.ceil(PEAK_TARGET_RPS * 0.6))),
   10
 );
 const MAX_VUS = parseInt(
-  __ENV.MAX_VUS || String(Math.max(2000, TARGET_RPS * 2)),
+  __ENV.MAX_VUS || String(Math.max(2000, PEAK_TARGET_RPS * 2)),
   10
 );
-const P95_MS = parseInt(__ENV.P95_MS || '10000', 10);
-const MAX_FAIL_RATE = parseFloat(__ENV.MAX_FAIL_RATE || '0.05');
+const P95_MS = parseInt(__ENV.P95_MS || '1000', 10);
+const MAX_FAIL_RATE = parseFloat(__ENV.MAX_FAIL_RATE || '0.01');
+const CAMPAIGN_STOCK = parseInt(__ENV.CAMPAIGN_STOCK || '9999999', 10);
+
+function buildStages() {
+  if (RPS_STAGES.length === 0) {
+    return [
+      { target: TARGET_RPS, duration: `${WARMUP_SECONDS}s` },
+      { target: TARGET_RPS, duration: `${STEADY_SECONDS}s` },
+      { target: 0, duration: `${COOLDOWN_SECONDS}s` },
+    ];
+  }
+
+  const stages = [];
+  for (const target of RPS_STAGES) {
+    stages.push({ target, duration: `${STEP_RAMP_SECONDS}s` });
+    stages.push({ target, duration: `${STAGE_SECONDS}s` });
+  }
+  stages.push({ target: 0, duration: `${COOLDOWN_SECONDS}s` });
+  return stages;
+}
 
 export const options = {
   scenarios: {
@@ -59,29 +86,26 @@ export const options = {
       timeUnit: '1s',
       preAllocatedVUs: PRE_ALLOCATED_VUS,
       maxVUs: MAX_VUS,
-      stages: [
-        { target: TARGET_RPS, duration: `${WARMUP_SECONDS}s` }, // 워밍업: 목표 RPS까지 램프업
-        { target: TARGET_RPS, duration: `${STEADY_SECONDS}s` }, // 안정 구간: 실제 TPS 측정
-        { target: 0, duration: `${COOLDOWN_SECONDS}s` }, // 종료
-      ],
+      stages: buildStages(),
     },
   },
   thresholds: {
-    http_req_duration: [`p(95)<${P95_MS}`], // 기본 10초, 필요시 env로 조정
+    http_req_duration: [`p(95)<${P95_MS}`],
     http_req_failed: [`rate<${MAX_FAIL_RATE}`],
+    dropped_iterations: ['count==0'],
     participation_accepted_202: ['count>0'],
   },
 };
 
 export function setup() {
   console.log(
-    `[TPS setup] target=${TARGET_RPS}/s start=${START_RPS}/s warmup=${WARMUP_SECONDS}s steady=${STEADY_SECONDS}s preVUs=${PRE_ALLOCATED_VUS} maxVUs=${MAX_VUS}`
+    `[TPS setup] targets=${RPS_STAGES.length > 0 ? RPS_STAGES.join(',') : TARGET_RPS}/s start=${START_RPS}/s preVUs=${PRE_ALLOCATED_VUS} maxVUs=${MAX_VUS}`
   );
 
   // 재고 소진 없이 TPS만 측정 — 충분히 큰 stock 설정
   const res = http.post(
     `${BASE_URL}/api/admin/campaigns`,
-    JSON.stringify({ name: `TPS-Test-${Date.now()}`, totalStock: 9999999 }),
+    JSON.stringify({ name: `TPS-Test-${Date.now()}`, totalStock: CAMPAIGN_STOCK }),
     { headers: { 'Content-Type': 'application/json' } }
   );
 
@@ -90,14 +114,13 @@ export function setup() {
   }
 
   const campaignId = JSON.parse(res.body).data.id;
-  console.log(`[Setup] 캠페인 생성 완료. ID=${campaignId}, stock=9,999,999, 목표 RPS=${TARGET_RPS}`);
+  console.log(`[Setup] 캠페인 생성 완료. ID=${campaignId}, stock=${CAMPAIGN_STOCK}, peak target RPS=${PEAK_TARGET_RPS}`);
   return { campaignId };
 }
 
 export default function (data) {
   const campaignId = data.campaignId;
-  // __VU(1~maxVUs)와 __ITER(VU별 0~) 조합으로 유니크 userId 생성
-  const userId = __VU * 100000 + __ITER + 1;
+  const userId = exec.scenario.iterationInTest + 1;
 
   const start = Date.now();
   const res = http.post(
@@ -114,7 +137,9 @@ export default function (data) {
   else if (res.status === 429) rateLimitCount.add(1);
   else {
     errorCount.add(1);
-    console.error(`[VU ${__VU}] 예상치 못한 응답: ${res.status} — ${res.body}`);
+    if (exec.scenario.iterationInTest % 1000 === 0) {
+      console.error(`[iteration ${exec.scenario.iterationInTest}] 예상치 못한 응답: ${res.status} — ${res.body}`);
+    }
   }
 }
 

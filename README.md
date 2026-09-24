@@ -56,12 +56,14 @@ v3는 한 가지 질문으로 시작했습니다.
 
 | 지표 | 값 |
 |------|----|
-| 평균 TPS | **~3,737/s** |
-| 피크 TPS | **~4,800/s** |
+| 평균 API TPS (202 응답 기준) | **~3,737/s** |
+| 피크 API TPS (202 응답 기준) | **~4,800/s** |
 | 총 처리 정합성 | **1,500,000건 (diff=0)** |
 | 5xx 에러 | **0건** |
 | v1 대비 TPS 향상 | **246 → 3,737 (약 15배)** |
 | 장애 테스트 | **T01~T07 전체 통과** |
+
+> 2026-09-20 ASG 3대 재검증에서는 API 1분 rate 피크 `5,336/s`, Bridge 피크 `4,546/s`, Consumer DB 성공 경로 피크 `4,518/s`를 각각 관측했다. 이는 서로 다른 시점의 피크이며 지속 가능한 end-to-end TPS를 의미하지 않는다. 상세 조건과 해석은 [`docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md`](docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md)를 참조한다.
 
 ---
 
@@ -72,7 +74,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | 목표 트래픽 | 10만 건 | **150만 건** |
 | API 응답 경로 | Redis DECR → **DB PENDING INSERT** → LPUSH | Redis DECR → LPUSH → 202 (**DB 미접촉**) |
 | HikariCP pending | ~980 (병목) | **거의 0** |
-| TPS (DB 커밋 기준) | 278~595/s | **~3,737/s** |
+| API TPS (202 응답 기준) | 278~595/s | **~3,737/s** |
 | Redis | ElastiCache 단일 | **ElastiCache CME 3샤드** |
 | Kafka | EC2 단일 브로커 | **EC2 3-broker KRaft 클러스터** |
 | 앱 서버 | 단일 EC2 | **ASG (min=2, max=3)** |
@@ -557,18 +559,18 @@ terraform-mcp EC2
 | API 에러율 (5xx) | `rate(...{status=~"5.."}[1m])` |
 | Bridge 드레인 속도 | `rate(bridge_messages_published_total[1m])` |
 | Redis Queue 적재량 | `redis_queue_size` (커스텀 Gauge) |
-| Consumer PENDING→SUCCESS 지연 | `consumer_pending_to_success_latency_seconds` |
+| Consumer DB 저장 지연 (poll→commit) | `consumer_pending_to_success_latency_seconds` (legacy metric name) |
 | Kafka Consumer Lag | `kafka_consumergroup_lag` |
 | HikariCP 커넥션 풀 | `hikaricp_connections` |
 | 앱 CPU 사용률 | `process_cpu_usage` |
 | Consumer 후단 처리량 | `consumer_kafka_records_polled_total`, `consumer_events_parsed_total`, `consumer_db_committed_total` |
 | Consumer DB 일시 실패율 | `consumer_db_transient_failures_total` |
-| Consumer DB commit batch size | `consumer_db_commit_batch_size` |
+| Consumer DB commit batch size (전역 가중 평균) | `consumer_db_commit_batch_size` |
 
 **커스텀 메트릭 9종** (Micrometer 기반)
 - `bridge.drain.duration` — Bridge drainQueues() 소요시간
 - `bridge.messages.published` — Kafka 발행 성공 건수
-- `consumer.pending_to_success.latency` — API → DB INSERT 지연
+- `consumer.pending_to_success.latency` — Consumer batch 시작 → DB 처리 완료 지연 (legacy metric name)
 - `redis.queue.size` — Redis Queue 현재 적재량 (Gauge)
 - `consumer.kafka.records.polled` — Kafka Consumer poll 건수
 - `consumer.events.parsed` — 정상 payload 파싱 건수
@@ -654,11 +656,11 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
 | **Message Queue** | Apache Kafka (KRaft, 3-broker) | 영속 로그, 재처리 기준, RF=3 내결함성 |
 | **Cache/Queue** | Redis ElastiCache CME (3샤드) | 인메모리 원자적 재고 차감, API 버퍼 |
 | **Database** | MySQL 8.0 (RDS) | 최종 확정 저장, UNIQUE 멱등성 보장 |
-| **Batch** | Spring Batch | 정합성 검증 Job, PENDING 복구 Job |
+| **Batch** | Spring Batch | 정합성 검증·복구, DLQ 재처리, 통계 집계 Job |
 | **IaC** | Terraform | 전체 AWS 인프라 코드화, 재현 가능 |
 | **Container** | Docker, Amazon ECR | 이미지 버전 관리, 배포 표준화 |
 | **CI/CD** | GitHub Actions + CodeDeploy + Ansible | OIDC 인증, ASG 순차 무중단 배포, 서버 내부 배포 절차 playbook화 |
-| **Load Test** | k6 (shared-iterations) | 유니크 userId 보장, 정합성 검증 |
+| **Load Test** | k6 (shared-iterations, ramping-arrival-rate) | 정확한 총량 정합성 검증과 지속 가능 처리량 탐색 분리 |
 | **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
 | **AI 운영** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림 |
 | **Cloud** | AWS (EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy, SSM) | 실제 운영 환경 |

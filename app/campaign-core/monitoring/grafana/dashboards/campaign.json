@@ -174,7 +174,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(http_server_requests_seconds_count{uri=~\"/api/campaigns.*/participation\", status=~\"5..\"}[1m]))",
+          "expr": "sum(rate(http_server_requests_seconds_count{uri=~\"/api/campaigns.*/participation\", status=~\"5..\"}[1m])) or vector(0)",
           "legendFormat": "5xx 에러율"
         }
       ],
@@ -237,7 +237,7 @@
     },
     {
       "id": 6,
-      "title": "Bridge 드레인 사이클 소요시간 (평균)",
+      "title": "Bridge 드레인 사이클 소요시간 (전역 평균)",
       "type": "timeseries",
       "gridPos": {
         "x": 12,
@@ -251,7 +251,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(bridge_drain_duration_seconds_sum[1m]) / rate(bridge_drain_duration_seconds_count[1m])",
+          "expr": "sum(rate(bridge_drain_duration_seconds_sum[1m])) / sum(rate(bridge_drain_duration_seconds_count[1m]))",
           "legendFormat": "평균 소요시간"
         }
       ],
@@ -330,7 +330,7 @@
     },
     {
       "id": 8,
-      "title": "Consumer INSERT 평균 지연 (API → DB)",
+      "title": "Consumer DB 처리 지연 (poll → DB 처리 종료, 전역 평균)",
       "type": "timeseries",
       "gridPos": {
         "x": 0,
@@ -344,8 +344,8 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(consumer_pending_to_success_latency_seconds_sum[1m]) / rate(consumer_pending_to_success_latency_seconds_count[1m])",
-          "legendFormat": "INSERT 지연"
+          "expr": "sum(rate(consumer_pending_to_success_latency_seconds_sum[1m])) / sum(rate(consumer_pending_to_success_latency_seconds_count[1m]))",
+          "legendFormat": "DB 처리 지연"
         }
       ],
       "fieldConfig": {
@@ -467,7 +467,7 @@
             "uid": "prometheus"
           },
           "expr": "hikaricp_connections_pending",
-          "legendFormat": "pending (대기)"
+          "legendFormat": "{{instance}} pending"
         },
         {
           "datasource": {
@@ -475,7 +475,7 @@
             "uid": "prometheus"
           },
           "expr": "hikaricp_connections_active",
-          "legendFormat": "active (사용중)"
+          "legendFormat": "{{instance}} active"
         },
         {
           "datasource": {
@@ -483,7 +483,7 @@
             "uid": "prometheus"
           },
           "expr": "hikaricp_connections_idle",
-          "legendFormat": "idle (유휴)"
+          "legendFormat": "{{instance}} idle"
         },
         {
           "datasource": {
@@ -491,7 +491,7 @@
             "uid": "prometheus"
           },
           "expr": "hikaricp_connections_max",
-          "legendFormat": "max (최대)"
+          "legendFormat": "{{instance}} max"
         }
       ],
       "fieldConfig": {
@@ -508,8 +508,8 @@
         "overrides": [
           {
             "matcher": {
-              "id": "byName",
-              "options": "pending (대기)"
+              "id": "byRegexp",
+              "options": "/.* pending$/"
             },
             "properties": [
               {
@@ -554,7 +554,7 @@
             "uid": "prometheus"
           },
           "expr": "hikaricp_connections_active / hikaricp_connections_max",
-          "legendFormat": "활성율"
+          "legendFormat": "{{instance}} 활성율"
         }
       ],
       "fieldConfig": {
@@ -611,7 +611,7 @@
             "uid": "prometheus"
           },
           "expr": "process_cpu_usage",
-          "legendFormat": "CPU"
+          "legendFormat": "{{instance}} CPU"
         }
       ],
       "fieldConfig": {
@@ -725,7 +725,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum(rate(consumer_db_transient_failures_total[1m]))",
+          "expr": "sum(rate(consumer_db_transient_failures_total[1m])) or vector(0)",
           "legendFormat": "transient failures"
         }
       ],
@@ -762,7 +762,7 @@
     },
     {
       "id": 16,
-      "title": "Consumer DB commit batch size (평균)",
+      "title": "Consumer DB commit batch size (전역 가중 평균)",
       "type": "timeseries",
       "gridPos": {
         "x": 12,
@@ -776,7 +776,7 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "rate(consumer_db_commit_batch_size_sum[1m]) / rate(consumer_db_commit_batch_size_count[1m])",
+          "expr": "sum(rate(consumer_db_commit_batch_size_sum[1m])) / sum(rate(consumer_db_commit_batch_size_count[1m]))",
           "legendFormat": "avg batch size"
         }
       ],

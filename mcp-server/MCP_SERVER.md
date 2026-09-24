@@ -84,6 +84,8 @@ ASG_NAME          = os.environ.get("ASG_NAME", "batch-kafka-app-asg")
 RDS_ID            = os.environ.get("RDS_ID", "batch-kafka-db")
 BATCH_API_URL     = os.environ.get("BATCH_API_URL", "http://alb-...")
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
+CONSISTENCY_POLL_INTERVAL_SECONDS = float(os.environ.get("CONSISTENCY_POLL_INTERVAL_SECONDS", "1"))
+CONSISTENCY_POLL_TIMEOUT_SECONDS  = int(os.environ.get("CONSISTENCY_POLL_TIMEOUT_SECONDS", "30"))
 ```
 
 `SLACK_WEBHOOK_URL`만 필수값.
@@ -184,21 +186,21 @@ promql = "campaign_redis_queue_size"
 ```
 
 2단계 임계값:
-- `>= 700,000` (70%) → P2 WARNING "Consumer 확인 권장"
-- `>= 850,000` (85%) → P1 CRITICAL "데이터 유실 위험"
+- `>= 1,050,000` (70%) → WARNING "Consumer 확인 권장"
+- `>= 1,275,000` (85%) → P1 CRITICAL "데이터 유실 위험"
 
 CRITICAL 발생 시 WARNING 쿨다운은 리셋 — CRITICAL 알림이 오면 WARNING 중복 방지.
 
 #### 데이터 정합성 검사 (1시간 주기)
 
 ```python
-GET /api/admin/campaigns/{id}/consistency
-→ {"redisCount": 1000000, "dbCount": 1000000}
+POST /api/admin/consistency-recovery
+→ dryRun=true, autoFix=false, campaignId=<id>
+→ GET /api/admin/consistency-recovery/executions/{executionId}
 ```
 
-Redis 확정 건수 vs DB INSERT 건수 비교.
-차이 > 0 이면 P1 (유실 또는 중복 의심).
-일치하면 OK 알림 (1시간마다 "정상 확인" 메시지).
+Spring Batch 정합성 검사 결과의 `anomalyCount`와 분류를 확인한다.
+이상이 있으면 P1, anomaly 0이면 OK 알림을 보낸다.
 
 `BATCH_CAMPAIGN_ID=0`이면 검사 스킵 — 환경변수 미설정 안전 처리.
 
@@ -365,7 +367,7 @@ docker run 실행
         │       │             └── Prometheus 쿼리 (Bridge 사이클)
         │       │
         │       └── [1시간마다] run_consistency_check()
-        │               └── GET /api/admin/campaigns/{id}/consistency
+        │               └── POST dry-run Job → GET /api/admin/consistency-recovery/executions/{id}
         │
         └── Slack "모니터링 시작" 전송
 ```
@@ -586,7 +588,7 @@ p1 작성하고 나면 p2, p3는 쿼리와 임계값만 바꾸면 됐다.
 
 이 서버 자체보다 **연동하는 시스템이 이미 완성돼 있었다**:
 
-- Prometheus에 커스텀 메트릭 4종이 이미 수집 중 (Phase B에서 구축)
+- Prometheus에 API, Bridge, Redis Queue, Consumer/DB 처리량 메트릭이 이미 수집 중
 - CloudWatch에 ASG/RDS 메트릭이 자동 수집 중
 - Slack Webhook은 기존 규격 그대로 사용
 - MCP 프로토콜은 라이브러리가 핵심 처리를 담당
@@ -600,7 +602,7 @@ p1 작성하고 나면 p2, p3는 쿼리와 임계값만 바꾸면 됐다.
 
 - Prometheus 메트릭 이름이 실제와 다를 경우 쿼리 조정
 - CloudWatch API 레이트리밋 (30초마다 폴링 × 2개 메트릭)
-- `check_consistency` API가 Spring Boot에 아직 구현 안 됐을 가능성
+- 정합성 Job 실행 시간이 polling timeout을 넘는 경우 비동기 결과 추적 보강
 - MCP SSE 연결 안정성 (네트워크 끊김 시 재연결)
 
 이런 부분은 실제 배포 후 로그 보면서 조정한다.

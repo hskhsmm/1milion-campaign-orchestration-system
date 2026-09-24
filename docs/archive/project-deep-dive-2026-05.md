@@ -1,4 +1,6 @@
-# 1Million Campaign Orchestration System — 프로젝트 심층 분석
+# 1Million Campaign Orchestration System — 프로젝트 심층 분석 (2026-05 기록)
+
+> **보관 문서:** `PendingRecoveryJobConfig`, 수동 Redis 초기화 등 현재 제거된 구성도 포함한다. 현행 운영·테스트 절차는 루트 `ARCHITECTURE.md`, `ops/README.md`, `stress-test/TEST_GUIDE.md`와 최신 날짜별 보고서를 기준으로 한다.
 
 > 이 문서는 프로젝트를 구축하면서 생긴 궁금증과 그에 대한 답변을 정리한 문서입니다.
 > 면접 준비 및 프로젝트 이해 심화 목적으로 작성되었습니다.
