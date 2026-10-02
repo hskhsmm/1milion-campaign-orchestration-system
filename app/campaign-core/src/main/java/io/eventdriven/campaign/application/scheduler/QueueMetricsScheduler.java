@@ -81,11 +81,22 @@ public class QueueMetricsScheduler {
             }
         }
 
-        // Bridge가 Queue를 비우고 active Set에서 제거한 캠페인은 LLEN을 다시 읽지 않는다.
-        // 각 JVM에 마지막 non-zero 값이 남지 않도록 이미 등록된 Gauge를 명시적으로 0 처리한다.
-        queueSizes.keySet().forEach(campaignId -> {
-            if (!activeCampaignIds.contains(campaignId)) {
-                queueSizes.put(campaignId, 0L);
+        // active Set에서 빠진 캠페인도 마지막 값이 0이 아니면 실제 LLEN을 다시 읽는다.
+        // 무조건 0으로 처리하면 잔량이 남은 채 Set에서 빠진 고립 큐가 0으로 위장된다 (2026-09-25, 09-28).
+        // 실제로 비었음(LLEN 0)이 확인된 뒤에는 더 읽지 않는다.
+        queueSizes.forEach((campaignId, lastSize) -> {
+            if (activeCampaignIds.contains(campaignId) || lastSize == 0L) {
+                return;
+            }
+            try {
+                Long size = redisTemplate.opsForList().size(QUEUE_KEY_PREFIX + campaignId + "}");
+                long queueSize = size != null ? size : 0L;
+                queueSizes.put(campaignId, queueSize);
+                if (queueSize > 0) {
+                    log.warn("active Set에 없는 캠페인 Queue에 잔량 존재 (고립 의심). campaignId={}, size={}", campaignId, queueSize);
+                }
+            } catch (Exception e) {
+                log.error("비활성 캠페인 Queue 메트릭 수집 실패. campaignId={}", campaignId, e);
             }
         });
     }
