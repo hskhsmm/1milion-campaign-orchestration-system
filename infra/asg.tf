@@ -1,11 +1,30 @@
 # ──────────────────────────────────────────
 # Launch Template
 # ──────────────────────────────────────────
+# user-data = boothook(docker 기동 전 AMI 잔존 컨테이너 restart 정책 해제) + 기존 셸 스크립트.
+# boothook은 shell script 파트보다 먼저, docker.service 기동 전에 실행된다.
+locals {
+  app_user_data = <<EOT
+Content-Type: multipart/mixed; boundary="==BATCH-KAFKA-APP=="
+MIME-Version: 1.0
+
+--==BATCH-KAFKA-APP==
+Content-Type: text/cloud-boothook; charset="us-ascii"
+
+${file("${path.module}/app-boothook.sh")}
+--==BATCH-KAFKA-APP==
+Content-Type: text/x-shellscript; charset="us-ascii"
+
+${file("${path.module}/app-user-data.sh")}
+--==BATCH-KAFKA-APP==--
+EOT
+}
+
 resource "aws_launch_template" "app" {
   name          = "batch-kafka-app-lt"
-  image_id      = "ami-01c64e7a84a57e681" # batch-kafka-app-ami (Docker + CodeDeploy 포함)
+  image_id      = var.app_ami_id
   instance_type = "t3.small"
-  user_data     = filebase64("${path.module}/app-user-data.sh")
+  user_data     = base64encode(local.app_user_data)
 
   iam_instance_profile {
     name = aws_iam_instance_profile.batch_kafka_app.name

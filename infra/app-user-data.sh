@@ -6,6 +6,23 @@ exec > >(tee -a "${LOG_FILE}" | logger -t batch-kafka-app-user-data -s 2>/dev/co
 
 echo "[app-user-data] start"
 
+# AMI에 남은 이전 컨테이너/이미지 정리 (app-boothook.sh가 자동 기동을 막은 뒤 실제 삭제).
+# CodeDeploy BeforeInstall은 cloud-init 완료를 기다리므로 이 시점에 현재 앱 컨테이너는 아직 없다.
+remove_baked_containers() {
+  if ! command -v docker >/dev/null 2>&1; then
+    echo "[app-user-data] docker not installed, skip container cleanup"
+    return 0
+  fi
+  systemctl start docker
+  echo "[app-user-data] containers before cleanup:"
+  docker ps -a --format '{{.ID}} {{.Names}} {{.Image}} {{.Status}}'
+  docker ps -aq | xargs -r docker rm -f
+  docker image prune -af >/dev/null
+  echo "[app-user-data] container cleanup completed"
+}
+
+remove_baked_containers
+
 # dnf/yum의 ansible(-core) 패키지는 그 순간 저장소에 있는 버전이 그대로 깔려
 # 실행 시점마다 버전이 달라질 수 있다. 그래서 패키지매니저는 python3/pip
 # 준비에만 쓰고, Ansible 자체는 항상 pip로 이 버전을 고정 설치한다.
