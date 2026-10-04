@@ -8,7 +8,8 @@
 # 절차:
 #   1. Launch Template(batch-kafka-app-lt, $Latest)에 boothook이 들어 있는지 확인
 #      (없으면 임시 인스턴스에서 구버전 컨테이너가 떠 prod Redis에 붙으므로 중단)
-#   2. 같은 LT로 ASG 밖에 임시 인스턴스 1대 기동 (CodeDeploy 배포 대상 아님)
+#   2. 운영 앱 SG 대신 임시 격리 SG(인바운드 없음, HTTP/S 아웃바운드만)를 만들어
+#      같은 LT로 ASG 밖에 임시 인스턴스 1대 기동 (CodeDeploy 배포 대상 아님)
 #   3. cloud-init 완료 대기 → 컨테이너·이미지 0개 확인 → 배포 잔재·마커·cloud-init 기록 정리
 #   4. 인스턴스 정지 → create-image → available 대기 → 임시 인스턴스 종료
 #   5. 새 AMI ID 출력 → infra/terraform.tfvars의 app_ami_id에 넣고 terraform apply (사람이 실행)
@@ -22,6 +23,22 @@ source "$(dirname "$0")/lib-ssm.sh"
 LT_NAME="batch-kafka-app-lt"
 BUILDER_NAME="batch-kafka-app-ami-builder"
 AMI_NAME="batch-kafka-app-ami-$(date +%Y%m%d-%H%M)"
+BUILDER_SG_NAME="batch-kafka-app-ami-builder-$(date +%Y%m%d-%H%M%S)-$$"
+builder_sg_id=""
+instance_id=""
+
+cleanup() {
+  if [[ -n "$instance_id" ]]; then
+    echo "임시 인스턴스 종료: $instance_id"
+    aws_ ec2 terminate-instances --instance-ids "$instance_id" >/dev/null || true
+    aws_ ec2 wait instance-terminated --instance-ids "$instance_id" || true
+  fi
+  if [[ -n "$builder_sg_id" ]]; then
+    echo "임시 격리 보안그룹 삭제: $builder_sg_id"
+    aws_ ec2 delete-security-group --group-id "$builder_sg_id" >/dev/null || true
+  fi
+}
+trap cleanup EXIT
 
 lt_data() {
   aws_ ec2 describe-launch-template-versions --launch-template-name "$LT_NAME" --versions '$Latest' \
@@ -33,6 +50,8 @@ lt_version=$(aws_ ec2 describe-launch-template-versions --launch-template-name "
 base_ami=$(lt_data ImageId)
 subnet_id=$(aws_ autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$APP_ASG" \
   --query 'AutoScalingGroups[0].VPCZoneIdentifier' --output text | cut -d, -f1)
+vpc_id=$(aws_ ec2 describe-subnets --subnet-ids "$subnet_id" \
+  --query 'Subnets[0].VpcId' --output text)
 
 echo "Launch Template: $LT_NAME v$lt_version"
 echo "기준 AMI:        $base_ami"
@@ -51,18 +70,24 @@ if [[ "${CONFIRM:-}" != "yes" ]]; then
   exit 0
 fi
 
+builder_sg_id=$(aws_ ec2 create-security-group --vpc-id "$vpc_id" \
+  --group-name "$BUILDER_SG_NAME" \
+  --description 'Temporary isolated app AMI builder; no Redis/RDS/Kafka access' \
+  --tag-specifications "ResourceType=security-group,Tags=[{Key=Name,Value=$BUILDER_SG_NAME},{Key=Purpose,Value=app-ami-build}]" \
+  --query GroupId --output text)
+# SG 기본 아웃바운드 전체 허용을 제거한다. 인스턴스는 이 단계가 끝난 뒤에만 기동한다.
+aws_ ec2 revoke-security-group-egress --group-id "$builder_sg_id" \
+  --ip-permissions '[{"IpProtocol":"-1","IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]' >/dev/null
+aws_ ec2 authorize-security-group-egress --group-id "$builder_sg_id" \
+  --ip-permissions '[{"IpProtocol":"tcp","FromPort":80,"ToPort":80,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]},{"IpProtocol":"tcp","FromPort":443,"ToPort":443,"IpRanges":[{"CidrIp":"0.0.0.0/0"}]}]' >/dev/null
+echo "격리 보안그룹: $builder_sg_id (인바운드 없음, 아웃바운드 80/443만 허용)"
+
 instance_id=$(aws_ ec2 run-instances \
   --launch-template "LaunchTemplateName=$LT_NAME,Version=$lt_version" \
-  --network-interfaces "DeviceIndex=0,SubnetId=$subnet_id,Groups=$(lt_data 'NetworkInterfaces[0].Groups[0]'),AssociatePublicIpAddress=true" \
+  --network-interfaces "DeviceIndex=0,SubnetId=$subnet_id,Groups=$builder_sg_id,AssociatePublicIpAddress=true" \
   --tag-specifications "ResourceType=instance,Tags=[{Key=Name,Value=$BUILDER_NAME}]" \
   --query 'Instances[0].InstanceId' --output text)
 echo "임시 인스턴스 기동: $instance_id ($(date '+%T'))"
-
-cleanup_instance() {
-  echo "임시 인스턴스 종료: $instance_id"
-  aws_ ec2 terminate-instances --instance-ids "$instance_id" >/dev/null || true
-}
-trap cleanup_instance EXIT
 
 echo "SSM Online 대기"
 ping=""
