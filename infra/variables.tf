@@ -28,5 +28,5 @@ variable "github_repo" {
 variable "app_ami_id" {
   description = "앱 ASG Launch Template AMI (Docker + CodeDeploy agent). 잔존 컨테이너 없는 AMI로 교체 시 ops/scripts/rebuild-app-ami.sh 결과로 변경"
   type        = string
-  default     = "ami-01c64e7a84a57e681" # batch-kafka-app-ami (2026-04-27, 구버전 컨테이너 잔존)
+  default     = "ami-04256089838fb06c8" # 2026-10-04 재생성, 격리 부팅에서 컨테이너·이미지 0개 검증
 }

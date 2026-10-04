@@ -12,7 +12,8 @@
 #      같은 LT로 ASG 밖에 임시 인스턴스 1대 기동 (CodeDeploy 배포 대상 아님)
 #   3. cloud-init 완료 대기 → 컨테이너·이미지 0개 확인 → 배포 잔재·마커·cloud-init 기록 정리
 #   4. 인스턴스 정지 → create-image → available 대기 → 임시 인스턴스 종료
-#   5. 새 AMI ID 출력 → infra/terraform.tfvars의 app_ami_id에 넣고 terraform apply (사람이 실행)
+#   5. 새 AMI ID 출력 → infra/variables.tf의 app_ami_id 기본값을 PR에 기록하고
+#      Launch Template만 plan/apply (사람이 실행)
 #
 # 사용법:
 #   ./ops/scripts/rebuild-app-ami.sh            # 계획만 출력 (AWS 변경 없음)
@@ -131,6 +132,6 @@ echo "AMI available: $ami_id ($(date '+%T'))"
 
 echo
 echo "다음 단계 (사람이 실행):"
-echo "  1. infra/terraform.tfvars 에 app_ami_id = \"$ami_id\" 추가"
-echo "  2. cd infra && terraform plan && terraform apply   # Launch Template 새 버전"
+echo "  1. infra/variables.tf 의 app_ami_id 기본값을 \"$ami_id\" 로 갱신하고 PR에 기록"
+echo "  2. cd infra && terraform plan -target=aws_launch_template.app 후 변경 범위 확인·적용"
 echo "  3. 새 인스턴스 1대 기동 후 docker ps -a에 현재 앱 컨테이너만 있는지 확인"
