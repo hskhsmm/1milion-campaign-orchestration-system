@@ -133,5 +133,5 @@ echo "AMI available: $ami_id ($(date '+%T'))"
 echo
 echo "다음 단계 (사람이 실행):"
 echo "  1. infra/variables.tf 의 app_ami_id 기본값을 \"$ami_id\" 로 갱신하고 PR에 기록"
-echo "  2. cd infra && terraform plan -target=aws_launch_template.app 후 변경 범위 확인·적용"
+echo "  2. cd infra && terraform plan -target=aws_launch_template.app -out=lt.tfplan 후 변경 범위를 확인하고 terraform apply lt.tfplan"
 echo "  3. 새 인스턴스 1대 기동 후 docker ps -a에 현재 앱 컨테이너만 있는지 확인"

@@ -8,14 +8,19 @@
 # 남은 컨테이너 삭제는 docker가 뜬 뒤 app-user-data.sh에서 한다.
 #
 # boothook은 매 부팅마다 실행되므로, 배포된 앱 컨테이너가 재부팅 후에도 살아나도록 인스턴스당 1회만 실행한다.
+set -Eeuo pipefail
 
 LOG_FILE="/var/log/batch-kafka-app-boothook.log"
 MARKER_DIR="/var/lib/batch-kafka-app"
 exec >>"${LOG_FILE}" 2>&1
+trap 'status=$?; echo "[app-boothook] ERROR: sanitization failed; disabling Docker startup"; systemctl stop docker.service docker.socket || true; systemctl mask docker.service docker.socket || true; exit "$status"' ERR
 
 # cloud-init이 boothook에 INSTANCE_ID를 넘긴다. 없으면 cloud-init 데이터에서 읽는다.
 # 마커가 AMI에 구워져도 인스턴스 ID가 다르므로 새 인스턴스에서는 반드시 다시 실행된다.
-instance_id="${INSTANCE_ID:-$(cat /var/lib/cloud/data/instance-id 2>/dev/null)}"
+instance_id="${INSTANCE_ID:-}"
+if [[ -z "${instance_id}" ]]; then
+  instance_id=$(cat /var/lib/cloud/data/instance-id 2>/dev/null || true)
+fi
 if [[ -z "${instance_id}" ]]; then
   instance_id="unknown-$(date +%s)"
 fi
@@ -31,13 +36,14 @@ fi
 if systemctl is-active --quiet docker; then
   # 예상과 달리 docker가 이미 떠 있으면 컨테이너를 바로 제거한다.
   echo "[app-boothook] WARN: docker already active, removing containers directly"
-  docker ps -a --format '{{.ID}} {{.Names}} {{.Image}} {{.Status}}' || true
-  docker ps -aq | xargs -r docker rm -f || true
+  docker ps -a --format '{{.ID}} {{.Names}} {{.Image}} {{.Status}}'
+  docker ps -aq | xargs -r docker rm -f
 else
   for hostconfig in /var/lib/docker/containers/*/hostconfig.json; do
     [[ -f "${hostconfig}" ]] || continue
     echo "[app-boothook] disable restart policy: ${hostconfig}"
     sed -i 's/"RestartPolicy":{"Name":"[^"]*"/"RestartPolicy":{"Name":"no"/' "${hostconfig}"
+    grep -Eq '"RestartPolicy"[[:space:]]*:[[:space:]]*\{[[:space:]]*"Name"[[:space:]]*:[[:space:]]*"no"' "${hostconfig}"
   done
 fi
 

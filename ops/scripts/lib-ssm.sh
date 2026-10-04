@@ -25,7 +25,7 @@ mcp_instance_id() {
 # 앱 ASG에 붙은 InService/Pending 인스턴스 전부
 app_instance_ids() {
   aws_ autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$APP_ASG" \
-    --query 'AutoScalingGroups[0].Instances[].InstanceId' --output text
+    --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService' || starts_with(LifecycleState, 'Pending')].InstanceId" --output text
 }
 
 # Redis configuration endpoint host (redis://host:6379 → host)
@@ -67,7 +67,7 @@ ssm_run() {
 ssm_fetch() {
   local instance_id="$1" producer="$2" out="$3" tmp size offset=1 chunk=20000
   tmp="/tmp/ssm-fetch-$$"
-  size=$(ssm_run "$instance_id" "( $producer ) 2>&1 | gzip -c | base64 -w0 > $tmp.b64 && stat -c %s $tmp.b64" | tr -d '[:space:]')
+  size=$(ssm_run "$instance_id" "set -o pipefail; ( $producer ) 2>&1 | gzip -c | base64 -w0 > $tmp.b64 && stat -c %s $tmp.b64" | tr -d '[:space:]')
   [[ "$size" =~ ^[0-9]+$ ]] || { echo "원격 파일 생성 실패: $size" >&2; return 1; }
 
   : > "$out.b64"

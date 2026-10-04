@@ -24,6 +24,6 @@ echo
 echo "== 핵심 로그 (인스턴스별)"
 for f in "$OUT_DIR"/app-*.log; do
   echo "-- $(basename "$f")"
-  grep -E "Campaign drained and deactivated|Deactivation skipped|Failed to drain campaign queue|Kafka publish completed with failure|Bridge message moved to DLQ|Started CampaignCoreApplication|RedisCommandTimeout|RedisConnectionFailure|MOVED|ASK " "$f" \
-    | head -50 || echo "(없음)"
+  grep -m 50 -E "Campaign drained and deactivated|Deactivation skipped|Failed to drain campaign queue|Kafka publish completed with failure|Bridge message moved to DLQ|Started CampaignCoreApplication|RedisCommandTimeout|RedisConnectionFailure|MOVED|ASK " "$f" \
+    || echo "(없음)"
 done

@@ -10,6 +10,14 @@ set -euo pipefail
 source "$(dirname "$0")/lib-ssm.sh"
 
 INSTANCE_ID="${1:?사용법: $0 <instance-id>}"
+CURRENT_IMAGE="${CURRENT_IMAGE:-${CURRENT_TAG:-}}"
+if [[ -z "$CURRENT_IMAGE" ]]; then
+  CURRENT_IMAGE=$(aws_ ssm get-parameter --name /batch-kafka/prod/ECR_IMAGE \
+    --query 'Parameter.Value' --output text 2>/dev/null || true)
+fi
+if [[ -z "$CURRENT_IMAGE" ]]; then
+  echo "현재 배포 이미지 조회 실패: 모든 실행 중 컨테이너를 캡처합니다." >&2
+fi
 
 echo "SSM Online 대기: $INSTANCE_ID"
 for _ in $(seq 1 90); do
@@ -25,10 +33,12 @@ LOOP='mkdir -p /tmp/boot-capture
 echo "capture_start=$(date -u +%FT%TZ) boot=$(uptime -s)" > /tmp/boot-capture/_capture.meta
 end=$(( $(date +%s) + 360 ))
 while [ $(date +%s) -lt $end ]; do
-  # 부하를 줄이기 위해 10초 간격, 현재 배포 이미지(bc294b4…)가 아닌 컨테이너만 저장한다.
+  # 부하를 줄이기 위해 10초 간격, 현재 배포 이미지가 아닌 컨테이너만 저장한다.
   for id in $(docker ps -q 2>/dev/null); do
     img=$(docker inspect -f "{{.Config.Image}}" $id 2>/dev/null)
-    case "$img" in *"${CURRENT_TAG}"*) continue ;; esac
+    if [ -n "$CURRENT_IMAGE" ]; then
+      case "$img" in *"${CURRENT_IMAGE}"*) continue ;; esac
+    fi
     docker inspect -f "{{.Id}} name={{.Name}} image={{.Config.Image}} created={{.Created}} started={{.State.StartedAt}} restart={{.HostConfig.RestartPolicy.Name}}" $id > /tmp/boot-capture/$id.meta 2>&1
     docker logs --timestamps --tail 3000 $id > /tmp/boot-capture/$id.log.tmp 2>&1 && mv /tmp/boot-capture/$id.log.tmp /tmp/boot-capture/$id.log
   done
@@ -37,7 +47,7 @@ while [ $(date +%s) -lt $end ]; do
   sleep 10
 done
 echo "capture_end=$(date -u +%FT%TZ)" >> /tmp/boot-capture/_capture.meta'
-LOOP="CURRENT_TAG=${CURRENT_TAG:-bc294b4a1e96519b579478466fb68d36e5145db0}
+LOOP="CURRENT_IMAGE='${CURRENT_IMAGE}'
 $LOOP"
 
 params=$(python3 -c 'import json,sys; print(json.dumps({"commands": [sys.argv[1]], "executionTimeout": ["600"]}))' "$LOOP")

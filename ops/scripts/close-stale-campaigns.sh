@@ -24,7 +24,7 @@ echo "실행 인스턴스: $instance_id"
 if [[ "${CONFIRM:-}" == "yes" ]]; then
   sql="UPDATE campaign SET status='CLOSED', updated_at=NOW(6) WHERE status='OPEN' AND id <= ${MAX_ID}; SELECT ROW_COUNT() AS closed;"
 else
-  sql="SELECT id, name, total_stock, current_stock, status, created_at FROM campaign WHERE status='OPEN' ORDER BY id;"
+  sql="SELECT id, name, total_stock, current_stock, status, created_at FROM campaign WHERE status='OPEN' AND id <= ${MAX_ID} ORDER BY id;"
 fi
 
 # .env.prod는 배포 playbook이 SSM Parameter Store에서 만든 따옴표 없는 KEY=VALUE 파일이다.
