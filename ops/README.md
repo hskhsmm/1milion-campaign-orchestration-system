@@ -60,6 +60,18 @@ make redis-exporter
 | `make env-up` | 테스트 환경 기동 | RDS start와 Redis targeted apply 병렬 진행, EC2 start, redis-exporter 재기동, ASG 복구 |
 | `make redis-exporter` | `terraform-mcp`에서 redis-exporter 컨테이너 재기동 | Docker 컨테이너 교체 |
 
+### 운영·증거 수집 스크립트 (`ops/scripts/`)
+
+| 스크립트 | 설명 | 실제 변경 |
+| --- | --- | --- |
+| `redis-watch-start.sh <campaignId>` / `redis-watch-fetch.sh [--stop]` | terraform-mcp에서 Redis 상태(active Set, flag, LLEN, 재고) 1초 기록 시작 / 회수 | terraform-mcp에 기록용 컨테이너 |
+| `collect-app-logs.sh [dir]` | ASG 전 인스턴스(또는 `INSTANCE_IDS`) 앱 로그 수집 | 없음 |
+| `capture-boot-containers.sh <instance>` | 새 인스턴스 부팅 시 현재 배포 이미지가 아닌 컨테이너의 메타·로그 저장 | 대상 인스턴스 `/tmp/boot-capture/` |
+| `rebuild-app-ami.sh` | 잔존 컨테이너·이미지 없는 앱 AMI 재생성. 기본은 계획만 출력 | `CONFIRM=yes`일 때 임시 EC2 기동→AMI 생성→종료 |
+| `close-stale-campaigns.sh` | DB에 OPEN으로 남은 과거 캠페인 조회 / CLOSED 처리 (`MAX_ID` 필수) | `CONFIRM=yes`일 때 DB UPDATE |
+
+배경: `docs/current/2026-09-28-150m-reproduction-set-removal-trace.md`, `docs/current/2026-10-03-ami-baked-container-remediation.md`
+
 ## CodeDeploy 애플리케이션 배포 흐름
 
 CodeDeploy는 배포 lifecycle을 시작하고 S3 배포 번들을 앱 서버에 전달하는 역할에 집중한다. 서버 내부에서 수행되는 실제 배포 절차는 `ops/playbooks/deploy-app.yml`이 담당한다.

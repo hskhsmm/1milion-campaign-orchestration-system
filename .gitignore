@@ -25,3 +25,4 @@ __pycache__/
 .env
 app/campaign-core/.env
 /3-broker clustering 이후- 테스트 사진/
+evidence/

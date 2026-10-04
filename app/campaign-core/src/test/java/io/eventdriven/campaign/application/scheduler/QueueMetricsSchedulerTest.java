@@ -14,6 +14,8 @@ import org.springframework.data.redis.core.SetOperations;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
@@ -46,12 +48,14 @@ class QueueMetricsSchedulerTest {
     }
 
     @Test
-    @DisplayName("캠페인이 active Set에서 제거되면 기존 Gauge를 0으로 갱신한다")
-    void collectQueueSizes_zerosGaugeAfterCampaignIsDeactivated() {
+    @DisplayName("캠페인이 큐를 비우고 active Set에서 제거되면 Gauge가 0이 된다")
+    void collectQueueSizes_zerosGaugeAfterCampaignIsDrainedAndDeactivated() {
         when(setOperations.members("active:campaigns"))
                 .thenReturn(Set.of("61"))
                 .thenReturn(Set.of());
-        when(listOperations.size("queue:campaign:{61}")).thenReturn(34_598L);
+        when(listOperations.size("queue:campaign:{61}"))
+                .thenReturn(34_598L)
+                .thenReturn(0L);
 
         scheduler.collectQueueSizes();
         scheduler.collectQueueSizes();
@@ -60,12 +64,48 @@ class QueueMetricsSchedulerTest {
     }
 
     @Test
-    @DisplayName("다른 캠페인이 활성 상태여도 종료된 캠페인의 Gauge는 0이 된다")
-    void collectQueueSizes_zerosOnlyInactiveCampaignGauges() {
+    @DisplayName("잔량이 남은 채 active Set에서 제거되면 0이 아닌 실제 LLEN을 보고한다")
+    void collectQueueSizes_reportsOrphanedQueueSize() {
+        when(setOperations.members("active:campaigns"))
+                .thenReturn(Set.of("64"))
+                .thenReturn(Set.of());
+        when(listOperations.size("queue:campaign:{64}"))
+                .thenReturn(211_595L)
+                .thenReturn(206_000L);
+
+        scheduler.collectQueueSizes();
+        scheduler.collectQueueSizes();
+
+        assertThat(queueGauge(64L)).isEqualTo(206_000D);
+    }
+
+    @Test
+    @DisplayName("비활성 캠페인은 LLEN 0이 확인된 뒤 더 조회하지 않는다")
+    void collectQueueSizes_stopsReadingInactiveQueueAfterEmpty() {
+        when(setOperations.members("active:campaigns"))
+                .thenReturn(Set.of("61"))
+                .thenReturn(Set.of());
+        when(listOperations.size("queue:campaign:{61}"))
+                .thenReturn(100L)
+                .thenReturn(0L);
+
+        scheduler.collectQueueSizes();
+        scheduler.collectQueueSizes();
+        scheduler.collectQueueSizes();
+
+        verify(listOperations, times(2)).size("queue:campaign:{61}");
+        assertThat(queueGauge(61L)).isZero();
+    }
+
+    @Test
+    @DisplayName("다른 캠페인이 활성 상태여도 비워진 비활성 캠페인의 Gauge는 0이 된다")
+    void collectQueueSizes_zerosOnlyDrainedInactiveCampaignGauges() {
         when(setOperations.members("active:campaigns"))
                 .thenReturn(Set.of("61", "62"))
                 .thenReturn(Set.of("62"));
-        when(listOperations.size("queue:campaign:{61}")).thenReturn(100L);
+        when(listOperations.size("queue:campaign:{61}"))
+                .thenReturn(100L)
+                .thenReturn(0L);
         when(listOperations.size("queue:campaign:{62}"))
                 .thenReturn(200L)
                 .thenReturn(50L);

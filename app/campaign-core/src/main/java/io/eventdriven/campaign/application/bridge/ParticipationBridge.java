@@ -16,6 +16,7 @@ import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
+import java.net.InetAddress;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.CompletionException;
@@ -27,9 +28,9 @@ public class ParticipationBridge {
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";
-    private static final String LEGACY_QUEUE_KEY_PREFIX = "queue:campaign:"; // 롤링 배포 전환 기간 fallback
     private static final String IMMEDIATE_SEND_FAILED = "IMMEDIATE_SEND_FAILED";
     private static final String ASYNC_SEND_FAILED = "ASYNC_SEND_FAILED";
+    private static final String INSTANCE_ID = resolveInstanceId();
 
     private final RedisTemplate<String, String> redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
@@ -89,20 +90,36 @@ public class ParticipationBridge {
             String message = redisTemplate.opsForList().rightPop(queueKey);
             if (message == null) {
                 if (!redisStockService.isActive(campaignId)) {
-                    redisStockService.deactivateCampaign(campaignId);
-                    log.info("Campaign drained and deactivated. campaignId={}", campaignId);
+                    deactivateIfQueueEmpty(campaignId, queueKey);
                 }
                 break;
             }
             publishAsync(campaignId, message);
         }
+    }
 
-        // 롤링 배포 전환 기간: 구 키(해시태그 없음)에 고립된 메시지 드레인
-        String legacyKey = LEGACY_QUEUE_KEY_PREFIX + campaignId;
-        String legacyMessage;
-        while ((legacyMessage = redisTemplate.opsForList().rightPop(legacyKey)) != null) {
-            log.info("Legacy queue key drained. campaignId={}", campaignId);
-            publishAsync(campaignId, legacyMessage);
+    // RPOP null 한 번만으로 active Set에서 제거하면 잔량이 영구 고립될 수 있다 (2026-09-19, 09-25 재발).
+    // 제거 직전 LLEN을 재확인하고, 잔량이 있으면 제거하지 않고 당시 상태를 남긴다.
+    private void deactivateIfQueueEmpty(Long campaignId, String queueKey) {
+        Long remaining = redisTemplate.opsForList().size(queueKey);
+        if (remaining == null || remaining > 0) {
+            log.warn("Deactivation skipped: queue not empty after null RPOP with active flag absent. campaignId={}, llen={}, instance={}",
+                    campaignId, remaining, INSTANCE_ID);
+            return;
+        }
+        redisStockService.deactivateCampaign(campaignId);
+        log.info("Campaign drained and deactivated. campaignId={}, instance={}", campaignId, INSTANCE_ID);
+    }
+
+    private static String resolveInstanceId() {
+        String hostname = System.getenv("HOSTNAME");
+        if (hostname != null && !hostname.isBlank()) {
+            return hostname;
+        }
+        try {
+            return InetAddress.getLocalHost().getHostName();
+        } catch (Exception e) {
+            return "unknown";
         }
     }
 
