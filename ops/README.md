@@ -119,6 +119,8 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 
 `make env-down`은 기존 수동 종료 절차를 자동화한다.
 
+`env-up`과 `env-down`은 시작 전에 현재 AWS 계정 ID 및 `terraform-mcp` EC2의 VPC/서브넷 ID를 조회해 Terraform의 필수 입력값으로 전달한다. 따라서 로컬 `terraform.tfvars`나 `TF_VAR_*` 환경변수가 없어도 실행할 수 있다. Redis용 SSM Parameter Store 값은 Terraform 입력값이 아니라, Redis 생성 후 앱과 exporter에 전달할 endpoint다.
+
 1. App ASG를 `min=0`, `max=0`, `desired=0`으로 축소한다.
 2. `kafka-1`, `kafka-2`, `kafka-3` EC2를 중지한다.
 3. `terraform-mcp` EC2를 중지한다.

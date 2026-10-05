@@ -40,6 +40,9 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
+    - name: Resolve required Terraform inputs before changing resources
+      ansible.builtin.include_tasks: terraform-inputs.yml
+
     # RDS와 Redis 생성은 서로 의존하지 않는다.
     # RDS start 요청을 먼저 보내고 Redis Terraform apply를 진행해서 두 장기 작업이 겹치게 만든다.
     - name: Read RDS status before start
@@ -74,7 +77,7 @@
 
     - name: Apply Redis and Redis related SSM parameters
       ansible.builtin.command:
-        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'apply', '-auto-approve'] + redis_terraform_target_args }}"
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'apply', '-auto-approve', '-input=false'] + redis_terraform_target_args + terraform_var_args }}"
       register: terraform_apply_redis_cmd
       changed_when: true
 

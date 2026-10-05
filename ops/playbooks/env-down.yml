@@ -37,6 +37,9 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
+    - name: Resolve required Terraform inputs before changing resources
+      ansible.builtin.include_tasks: terraform-inputs.yml
+
     # 애플리케이션 트래픽을 가장 먼저 제거한다.
     # App 인스턴스가 살아 있으면 Kafka/RDS/Redis를 내리는 동안 불필요한 연결 오류가 계속 발생할 수 있다.
     - name: Scale app ASG down to zero
@@ -184,7 +187,7 @@
 
     - name: Destroy Redis and Redis related SSM parameters
       ansible.builtin.command:
-        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'destroy', '-auto-approve'] + redis_terraform_target_args }}"
+        argv: "{{ ['terraform', '-chdir=' + terraform_dir, 'destroy', '-auto-approve', '-input=false'] + redis_terraform_target_args + terraform_var_args }}"
       register: terraform_destroy_redis_cmd
       changed_when: true
 

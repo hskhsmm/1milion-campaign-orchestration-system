@@ -1,0 +1,30 @@
+---
+# Terraform 루트 모듈의 필수 입력값은 Redis용 SSM Parameter와 다르다.
+# 로컬 terraform.tfvars/TF_VAR_* 유무에 의존하지 않도록 현재 AWS 환경에서 확인한다.
+- name: Read terraform-mcp network identifiers for Terraform
+  ansible.builtin.command:
+    argv: "{{ ['aws'] + aws_cli_profile_args + ['ec2', 'describe-instances', '--region', aws_region, '--filters', 'Name=tag:Name,Values=' + redis_exporter.host_name, 'Name=instance-state-name,Values=pending,running,stopping,stopped', '--query', 'Reservations[].Instances[].{InstanceId:InstanceId,VpcId:VpcId,SubnetId:SubnetId}', '--output', 'json'] }}"
+  register: terraform_mcp_network_cmd
+  changed_when: false
+
+- name: Parse terraform-mcp network identifiers
+  ansible.builtin.set_fact:
+    terraform_mcp_network_instances: "{{ terraform_mcp_network_cmd.stdout | from_json }}"
+
+- name: Require exactly one terraform-mcp instance with VPC and subnet
+  ansible.builtin.assert:
+    that:
+      - terraform_mcp_network_instances | length == 1
+      - terraform_mcp_network_instances[0].VpcId is match('^vpc-[0-9a-f]+$')
+      - terraform_mcp_network_instances[0].SubnetId is match('^subnet-[0-9a-f]+$')
+      - caller_identity.Account is match('^[0-9]{12}$')
+    fail_msg: >-
+      Terraform 입력값을 확인할 수 없습니다. terraform-mcp EC2가 현재 계정/리전에 정확히 1대이고
+      VPC·Subnet ID가 있는지 확인하세요. 조회 결과: {{ terraform_mcp_network_instances }}
+
+- name: Set explicit Terraform root module variables
+  ansible.builtin.set_fact:
+    terraform_var_args:
+      - "-var=account_id={{ caller_identity.Account }}"
+      - "-var=vpc_id={{ terraform_mcp_network_instances[0].VpcId }}"
+      - "-var=subnet_id={{ terraform_mcp_network_instances[0].SubnetId }}"
