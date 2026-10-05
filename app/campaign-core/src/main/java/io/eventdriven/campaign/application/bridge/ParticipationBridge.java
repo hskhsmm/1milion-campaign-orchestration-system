@@ -90,7 +90,7 @@ public class ParticipationBridge {
             String message = redisTemplate.opsForList().rightPop(queueKey);
             if (message == null) {
                 if (!redisStockService.isActive(campaignId)) {
-                    deactivateIfQueueEmpty(campaignId, queueKey);
+                    deactivateIfQueueEmpty(campaignId);
                 }
                 break;
             }
@@ -98,17 +98,12 @@ public class ParticipationBridge {
         }
     }
 
-    // RPOP null 한 번만으로 active Set에서 제거하면 잔량이 영구 고립될 수 있다 (2026-09-19, 09-25 재발).
-    // 제거 직전 LLEN을 재확인하고, 잔량이 있으면 제거하지 않고 당시 상태를 남긴다.
-    private void deactivateIfQueueEmpty(Long campaignId, String queueKey) {
-        Long remaining = redisTemplate.opsForList().size(queueKey);
-        if (remaining == null || remaining > 0) {
-            log.warn("Deactivation skipped: queue not empty after null RPOP with active flag absent. campaignId={}, llen={}, instance={}",
-                    campaignId, remaining, INSTANCE_ID);
-            return;
+    // Recovery activation and Set removal must not interleave across app instances.
+    // RedisStockService takes a per-campaign lock and rechecks flag/LLEN before SREM.
+    private void deactivateIfQueueEmpty(Long campaignId) {
+        if (redisStockService.deactivateIfQueueEmpty(campaignId)) {
+            log.info("Campaign drained and deactivated. campaignId={}, instance={}", campaignId, INSTANCE_ID);
         }
-        redisStockService.deactivateCampaign(campaignId);
-        log.info("Campaign drained and deactivated. campaignId={}, instance={}", campaignId, INSTANCE_ID);
     }
 
     private static String resolveInstanceId() {
