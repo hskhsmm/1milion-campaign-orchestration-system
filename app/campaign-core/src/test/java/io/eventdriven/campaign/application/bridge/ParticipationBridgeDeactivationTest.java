@@ -26,7 +26,7 @@ import static org.mockito.Mockito.when;
 /**
  * active Set 제거 가드 검증 (2026-09-25 150만 재테스트 큐 고립 후속)
  *
- * RPOP null + flag 없음만으로 Set에서 빼지 않고, LLEN이 0으로 확인될 때만 제거해야 한다.
+ * Bridge forwards cleanup to RedisStockService, where the lock and final state check live.
  */
 @ExtendWith(MockitoExtension.class)
 class ParticipationBridgeDeactivationTest {
@@ -66,14 +66,14 @@ class ParticipationBridgeDeactivationTest {
     }
 
     @Test
-    @DisplayName("flag 없음 + RPOP null + LLEN 0이면 active Set에서 제거한다")
-    void drainQueues_inactiveAndEmpty_deactivates() {
+    @DisplayName("flag 없음 + RPOP null이면 잠금 기반 cleanup을 요청한다")
+    void drainQueues_inactiveAndEmpty_requestsCleanup() {
         when(listOperations.size(QUEUE_KEY)).thenReturn(0L);
         when(redisStockService.isActive(62L)).thenReturn(false);
 
         participationBridge.drainQueues();
 
-        verify(redisStockService).deactivateCampaign(62L);
+        verify(redisStockService).deactivateIfQueueEmpty(62L);
     }
 
     @Test
@@ -88,29 +88,6 @@ class ParticipationBridgeDeactivationTest {
     }
 
     @Test
-    @DisplayName("flag 없음 + RPOP null이어도 LLEN이 남아 있으면 active Set에서 제거하지 않는다")
-    void drainQueues_inactiveButQueueRemaining_keepsActive() {
-        // 사이클 시작 LLEN, 제거 직전 재확인 LLEN 모두 잔량 존재 (9/25 고립 상황)
-        when(listOperations.size(QUEUE_KEY)).thenReturn(1_300_000L);
-        when(redisStockService.isActive(62L)).thenReturn(false);
-
-        participationBridge.drainQueues();
-
-        verify(redisStockService, never()).deactivateCampaign(62L);
-    }
-
-    @Test
-    @DisplayName("제거 직전 LLEN 결과가 null이면 확인 불가로 보고 제거하지 않는다")
-    void drainQueues_inactiveAndLlenUnknown_keepsActive() {
-        when(listOperations.size(QUEUE_KEY)).thenReturn(null);
-        when(redisStockService.isActive(62L)).thenReturn(false);
-
-        participationBridge.drainQueues();
-
-        verify(redisStockService, never()).deactivateCampaign(62L);
-    }
-
-    @Test
     @DisplayName("flag가 살아 있으면 큐가 비어도 active Set에서 제거하지 않는다")
     void drainQueues_activeFlag_keepsActive() {
         when(listOperations.size(QUEUE_KEY)).thenReturn(0L);
@@ -118,6 +95,6 @@ class ParticipationBridgeDeactivationTest {
 
         participationBridge.drainQueues();
 
-        verify(redisStockService, never()).deactivateCampaign(62L);
+        verify(redisStockService, never()).deactivateIfQueueEmpty(62L);
     }
 }

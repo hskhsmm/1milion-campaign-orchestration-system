@@ -6,7 +6,9 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 import org.springframework.stereotype.Service;
 
+import java.time.Duration;
 import java.util.List;
+import java.util.UUID;
 
 @SuppressWarnings("rawtypes")
 
@@ -24,6 +26,10 @@ public class RedisStockService {
     private static final String TOTAL_KEY_PREFIX = "total:campaign:{";               // 해시태그 포함 — Redis Cluster 슬롯 통일
     private static final String QUEUE_KEY_PREFIX = "queue:campaign:{";               // 해시태그 포함 — Lua 원자화 필수 조건
     private static final String PARTICIPATED_KEY_PREFIX = "participated:campaign:{"; // 해시태그 포함 — 중복 참여 방지
+    private static final String STATE_LOCK_KEY_PREFIX = "lock:campaign:{";
+    private static final Duration STATE_LOCK_LEASE = Duration.ofSeconds(60);
+    private static final long STATE_LOCK_WAIT_NANOS = Duration.ofSeconds(3).toNanos();
+    private static final DefaultRedisScript<Long> RELEASE_STATE_LOCK_SCRIPT = releaseStateLockScript();
     private static final long MAX_QUEUE_SIZE = 2_500_000;
     public static final Long INACTIVE_CAMPAIGN = -999L;
     public static final Long QUEUE_FULL = -998L;
@@ -55,14 +61,68 @@ public class RedisStockService {
 
     // 캠페인 활성화 — Bridge 순회용 전역 Set + Lua용 캠페인별 플래그 둘 다 등록
     public void activateCampaign(Long campaignId) {
-        redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
-        redisTemplate.opsForValue().set(getActiveFlagKey(campaignId), "1");
+        String token = awaitStateLock(campaignId);
+        try {
+            redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+            redisTemplate.opsForValue().set(getActiveFlagKey(campaignId), "1");
+        } finally {
+            releaseStateLock(campaignId, token);
+        }
     }
 
     // 캠페인 비활성화 — Bridge 순회용 전역 Set + Lua용 캠페인별 플래그 둘 다 정리
     public void deactivateCampaign(Long campaignId) {
-        redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
-        redisTemplate.delete(getActiveFlagKey(campaignId));
+        String token = awaitStateLock(campaignId);
+        try {
+            redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+            redisTemplate.delete(getActiveFlagKey(campaignId));
+        } finally {
+            releaseStateLock(campaignId, token);
+        }
+    }
+
+    /**
+     * Bridge cleanup only. Recovery activation and Set removal share the same per-campaign lock.
+     * The active flag is already absent here, so do not delete it after a concurrent recovery.
+     * A busy lock is safe to skip: the next Bridge cycle will retry.
+     */
+    public boolean deactivateIfQueueEmpty(Long campaignId) {
+        String token = tryAcquireStateLock(campaignId);
+        if (token == null) {
+            return false;
+        }
+        boolean removed = false;
+        try {
+            String queueKey = getQueueKey(campaignId);
+            Long remaining = redisTemplate.opsForList().size(queueKey);
+            if (isActive(campaignId) || remaining == null || remaining > 0) {
+                return false;
+            }
+
+            redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+            removed = true;
+
+            // Queue writes are atomic within the campaign's Redis Cluster slot, but the
+            // global active Set is in another slot. Restore its index if state changed.
+            Long afterRemoval = redisTemplate.opsForList().size(queueKey);
+            if (isActive(campaignId) || afterRemoval == null || afterRemoval > 0) {
+                redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+                return false;
+            }
+            return true;
+        } catch (RuntimeException e) {
+            // A failed post-removal read must not leave a known campaign out of the index.
+            if (removed) {
+                try {
+                    redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
+                } catch (RuntimeException restoreFailure) {
+                    e.addSuppressed(restoreFailure);
+                }
+            }
+            throw e;
+        } finally {
+            releaseStateLock(campaignId, token);
+        }
     }
 
     // Bridge cleanup 판단용 — active flag 존재 여부 확인
@@ -136,6 +196,52 @@ public class RedisStockService {
 
     private String getActiveFlagKey(Long campaignId) {
         return ACTIVE_FLAG_KEY_PREFIX + campaignId + "}";
+    }
+
+    private String getStateLockKey(Long campaignId) {
+        return STATE_LOCK_KEY_PREFIX + campaignId + "}:state";
+    }
+
+    private String tryAcquireStateLock(Long campaignId) {
+        String token = UUID.randomUUID().toString();
+        return Boolean.TRUE.equals(redisTemplate.opsForValue()
+                .setIfAbsent(getStateLockKey(campaignId), token, STATE_LOCK_LEASE)) ? token : null;
+    }
+
+    private String awaitStateLock(Long campaignId) {
+        long deadline = System.nanoTime() + STATE_LOCK_WAIT_NANOS;
+        String token;
+        while ((token = tryAcquireStateLock(campaignId)) == null) {
+            if (System.nanoTime() >= deadline) {
+                throw new IllegalStateException("Timed out waiting for campaign state lock. campaignId=" + campaignId);
+            }
+            try {
+                Thread.sleep(25);
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                throw new IllegalStateException("Interrupted while waiting for campaign state lock. campaignId=" + campaignId, e);
+            }
+        }
+        return token;
+    }
+
+    private void releaseStateLock(Long campaignId, String token) {
+        try {
+            Long released = redisTemplate.execute(RELEASE_STATE_LOCK_SCRIPT, List.of(getStateLockKey(campaignId)), token);
+            if (!Long.valueOf(1L).equals(released)) {
+                log.warn("Campaign state lock expired before release. campaignId={}", campaignId);
+            }
+        } catch (RuntimeException e) {
+            // The lease expires even if release fails; do not mask the state transition result.
+            log.error("Failed to release campaign state lock. campaignId={}", campaignId, e);
+        }
+    }
+
+    private static DefaultRedisScript<Long> releaseStateLockScript() {
+        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
+        script.setScriptText("if redis.call('GET', KEYS[1]) == ARGV[1] then return redis.call('DEL', KEYS[1]) else return 0 end");
+        script.setResultType(Long.class);
+        return script;
     }
 
 
