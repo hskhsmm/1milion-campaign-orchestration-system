@@ -1,6 +1,6 @@
-# 1Million Campaign Orchestration System
+# 내 맘대로 캠페인 — 선착순 이벤트 시스템
 
-> **150만 트래픽 선착순 이벤트 시스템 — 14차 반복 실험 + AI 자율 운영**
+> **Redis-first 선착순 이벤트 시스템 — 14회 부하 실험 · 150만 건 정합성 검증 · AWS 운영 자동화**
 >
 > *[event-driven-batch-kafka-system (v1, 10만 트래픽)](https://github.com/hskhsmm/event-driven-batch-kafka-system) 의 확장 프로젝트입니다.*
 
@@ -32,25 +32,25 @@
 
 ## 프로젝트 소개
 
-### 왜 이 프로젝트인가
+### 프로젝트 배경
 
 v1(10만 트래픽)에서 Kafka 파티션 수에 따른 처리량 vs 공정성 트레이드오프를 실험으로 증명했습니다.
 v3는 한 가지 질문으로 시작했습니다.
 
 > **"v1 구조로 150만 트래픽을 정합성 보장 하에 처리할 수 있는가?"**
 
-답은 No였습니다. v1은 API 응답 경로에 DB가 있어 HikariCP pending이 980까지 쌓였고,
-구조적 전환 없이는 스케일아웃도 의미가 없었습니다.
+기존 구조에서는 API 응답 경로의 DB 쓰기로 HikariCP pending이 약 980까지 누적됐습니다.
+DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 경로의 개선 효과를 실험으로 확인했습니다.
 
 ### 해결 방향
 
-단순한 스케일업이 아닌 세 방향으로 고도화했습니다.
+응답 경로, 인프라 재현성, 관측 체계를 함께 개선했습니다.
 
 | 방향 | 내용 |
 |------|------|
-| **구조적 전환** | API 응답 경로에서 DB 완전 제거 → Redis-first v3 |
+| **구조적 전환** | 일반 접수 응답 경로에서 DB 쓰기 분리 → Redis-first v3 |
 | **인프라 코드화** | 전체 AWS 인프라를 Terraform으로 관리 |
-| **AI 자율 운영** | MCP 서버로 Prometheus/CloudWatch 30초 폴링 + Slack 알림 |
+| **관측·운영 보조** | MCP 서버로 지표 조회·Slack 알림, AI를 활용한 원인 가설 정리 |
 
 ### 최종 결과
 
@@ -61,7 +61,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | 총 처리 정합성 | **1,500,000건 (diff=0)** |
 | 5xx 에러 | **0건** |
 | v1 대비 TPS 향상 | **246 → 3,737 (약 15배)** |
-| 장애 테스트 | **T01~T07 전체 통과** |
+| 장애 테스트 | **7종 장애 시나리오 실행·복구 검증** |
 
 > 2026-09-20 ASG 3대 재검증에서는 API 1분 rate 피크 `5,336/s`, Bridge 피크 `4,546/s`, Consumer DB 성공 경로 피크 `4,518/s`를 각각 관측했다. 이는 서로 다른 시점의 피크이며 지속 가능한 end-to-end TPS를 의미하지 않는다. 상세 조건과 해석은 [`docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md`](docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md)를 참조한다.
 
@@ -72,7 +72,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | 항목 | v1 (10만 트래픽) | v3 (150만 트래픽) |
 |------|-----------------|------------------|
 | 목표 트래픽 | 10만 건 | **150만 건** |
-| API 응답 경로 | Redis DECR → **DB PENDING INSERT** → LPUSH | Redis DECR → LPUSH → 202 (**DB 미접촉**) |
+| API 응답 경로 | Redis DECR → **DB PENDING INSERT** → LPUSH | Redis Lua (검증·차감·Queue 적재) → 202 (**DB 미접촉**) |
 | HikariCP pending | ~980 (병목) | **거의 0** |
 | API TPS (202 응답 기준) | 278~595/s | **~3,737/s** |
 | Redis | ElastiCache 단일 | **ElastiCache CME 3샤드** |
@@ -81,7 +81,7 @@ v3는 한 가지 질문으로 시작했습니다.
 | 인프라 관리 | 수동 콘솔 | **Terraform IaC** |
 | 배포 | GitHub Actions + CodeDeploy | **OIDC + ECR + CodeDeploy + Ansible playbook** |
 | 모니터링 | 웹 대시보드 (자체 구현) | **Prometheus + Grafana 16패널 + MCP 서버** |
-| 장애 테스트 | 없음 | **T01~T07 전체 통과** |
+| 장애 테스트 | 없음 | **7종 장애 시나리오 실행·복구 검증** |
 
 ---
 
@@ -220,11 +220,11 @@ jdbcTemplate.batchUpdate(
 | 파티션 키 | Consumer 지연 | 이유 |
 |---------|-------------|------|
 | campaignId | 1.25s | 단일 캠페인 트래픽이 한 파티션으로 집중 |
-| **userId** | **200ms** | 10개 파티션에 균등 분산 → Consumer 10개 병렬 처리 |
+| **userId** | **200ms** | 파티션에 부하 분산 → Consumer 병렬 처리 |
 
 ### 5. ASG 수평 확장 vs 스케일업
 
-7~8차에서 앱 CPU 80~90% 고착 확인 후 스케일업(t3.xlarge) 대신 ASG를 선택했습니다.
+7–8차에서 앱 CPU 80–90% 고착 확인 후 스케일업(t3.xlarge) 대신 ASG를 선택했습니다.
 
 | 비교 | 스케일업 (t3.xlarge) | ASG (t3.small × 2) |
 |------|---------------------|-------------------|
@@ -271,7 +271,7 @@ jdbcTemplate.batchUpdate(
 | DB COUNT | **1,500,000** |
 | diff | **0** |
 
-> **p95 2.15s는 의도된 결과입니다.**
+> **p95 2.15s는 최대 부하 조건에서 측정한 결과입니다.**
 > VUS=3,000은 t3.small 3대를 CPU 97%까지 포화시키는 **한계 측정 조건**입니다.
 > 정상 운영 목표(CPU 50% 수준, VUS=1,500)에서는 응답시간이 현저히 낮아집니다.
 > 이 테스트의 목적은 레이턴시 최적화가 아니라 "시스템이 물리적 한계에서도 정합성을 지키는가"의 검증입니다.
@@ -281,7 +281,7 @@ jdbcTemplate.batchUpdate(
 ### ASG 3대 CPU 97%
 
 TPS 3,737/s는 t3.small 3대를 CPU 97%까지 포화시키는 수치입니다.
-서버 스펙이 커지면 더 높은 TPS 달성 가능 (ASG 추가 스케일아웃 필요 지점 확인).
+이 실험에서는 앱 CPU가 추가 확장 여부를 판단할 병목으로 관측됐습니다.
 
 ![ASG CPU 97%](docs/images/14th-asg-cpu-97.png)
 
@@ -578,10 +578,10 @@ terraform-mcp EC2
 - `consumer.db.transient.failures` — DB 장애 등으로 ack 보류가 필요한 일시 실패 수
 - `consumer.db.commit.batch.size` — Consumer DB commit batch 크기
 
-### MCP 서버 — AI 자율 운영
+### MCP 서버 — 관측·운영 보조
 
-사람이 Grafana를 24시간 보던 수동 감시를 자동화한 서버입니다.
 Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을 발송합니다.
+MCP 도구로 지표와 테스트 결과를 조회하고, AI를 활용해 원인 가설을 정리합니다. 운영 조치는 사람이 판단합니다.
 
 ```
 [Prometheus / CloudWatch]  ← 30초 폴링
@@ -662,7 +662,7 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
 | **CI/CD** | GitHub Actions + CodeDeploy + Ansible | OIDC 인증, ASG 순차 무중단 배포, 서버 내부 배포 절차 playbook화 |
 | **Load Test** | k6 (shared-iterations, ramping-arrival-rate) | 정확한 총량 정합성 검증과 지속 가능 처리량 탐색 분리 |
 | **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
-| **AI 운영** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림 |
+| **운영 보조** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림, 지표 조회 |
 | **Cloud** | AWS (EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy, SSM) | 실제 운영 환경 |
 
 ---
@@ -673,7 +673,5 @@ Prometheus/CloudWatch를 30초마다 폴링해 이상 감지 시 Slack 알림을
 
 ---
 
-> 이 프로젝트는 "기술을 써봤다"가 아니라 **"측정하고 → 원인을 추적하고 → 수정하고 → 재실험으로 검증"하는 엔지니어링 사이클**을 14차 반복한 결과물입니다.
->
-> 단일 도메인(선착순 캠페인)을 끝까지 파고들며 데이터 유실 141K를 발견하고 원자화로 해결한 경험,
-> 장애 7개 시나리오를 실제 AWS 환경에서 검증한 경험이 핵심입니다.
+> 부하 실험에서 확인한 병목과 데이터 유실 원인을 기록하고, 수정 후 재실험과 DB 건수 비교로 결과를 검증했습니다.
+> 실제 AWS 환경에서는 7종 장애 시나리오를 실행해 오류와 복구 동작을 확인했습니다.
