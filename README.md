@@ -423,7 +423,7 @@ LPUSH 성공 시 SET, 이후 요청은 EXISTS 체크로 -997 반환 → 409.
 | T03 | Queue 만원 429 | ✅ | Lua 원자화 경로 실제 검증 (Redis 잔여재고+DB=total_stock) |
 | T04 | ConsistencyJob 복구 | ✅ | MISSING_REDIS_STOCK 감지 → restoreStock=20 복구 |
 | T05 | Kafka 브로커 1대 장애 | ✅ | lag 스파이크→즉시 해소, 5xx 0건 |
-| T06 | RDS 다운 → DLQ → 재처리 | ✅ | SG 3306 삭제/복구, 구조적 허점 2건 발견 및 수정 |
+| T06 | RDS 접근 차단 및 복구 | ✅ | SG 3306 삭제/복구, 구조적 허점 2건 발견 및 수정 |
 | T07 | ASG 인스턴스 1대 종료 | ✅ | TPS 80% 급락→3~4분 완전 복구, 5xx 0건, diff=0 |
 
 ### T03 — Queue 만원 원자화 검증
@@ -448,7 +448,7 @@ RDS Security Group 3306 포트 삭제로 장애 주입 → 5xx 발생 → 복구
 
 **발견한 구조적 허점 2건:**
 1. `remaining==0` 시 동기 DB 호출이 남아있어 RDS 장애 시 500 전파 → `try-catch`로 수정
-2. `actuator/health`가 DB 상태를 포함 → ALB TG가 unhealthy 처리 → Redis-first API인데도 5xx 발생 (개선 포인트 — health indicator 커스터마이징으로 DB를 헬스체크 대상에서 제외하면 해결 가능하나, 이번 프로젝트 범위에서는 구조적 허점 문서화에 그침)
+2. T06 당시 `actuator/health`가 DB 상태를 포함해 ALB TG가 unhealthy로 판정되면서 Redis-first API에도 5xx가 발생했습니다. 이후 DB·Kafka health indicator를 비활성화해 접수 API의 health 판정에서 제외했습니다.
 
 **자동 복구 확인**: Consumer `hasTransientFailure` ack 보류 → SG 복구 후 Kafka 재전달로 자동 재처리.
 
