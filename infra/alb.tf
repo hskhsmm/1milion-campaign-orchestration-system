@@ -1,5 +1,17 @@
-# ALB
+# 기존 단일 리소스를 count 인스턴스로 주소만 옮긴다. alb_enabled=true 최초 plan은 교체가 없어야 한다.
+moved {
+  from = aws_lb.main
+  to   = aws_lb.main[0]
+}
+
+moved {
+  from = aws_lb_listener.http
+  to   = aws_lb_listener.http[0]
+}
+
+# ALB와 Listener만 비용 절감 시 제거한다.
 resource "aws_lb" "main" {
+  count              = var.alb_enabled ? 1 : 0
   name               = "alb-batch-kafka-api"
   internal           = false
   load_balancer_type = "application"
@@ -14,7 +26,7 @@ resource "aws_lb" "main" {
   tags = {}
 }
 
-# Target Group
+# Target Group은 ASG가 ARN으로 참조하므로 ALB가 내려가도 유지한다.
 resource "aws_lb_target_group" "api_8080" {
   name        = "tg-api-8080"
   port        = 8080
@@ -39,7 +51,8 @@ resource "aws_lb_target_group" "api_8080" {
 
 # Listener (HTTP:80 → tg-api-8080)
 resource "aws_lb_listener" "http" {
-  load_balancer_arn = aws_lb.main.arn
+  count             = var.alb_enabled ? 1 : 0
+  load_balancer_arn = aws_lb.main[0].arn
   port              = 80
   protocol          = "HTTP"
 

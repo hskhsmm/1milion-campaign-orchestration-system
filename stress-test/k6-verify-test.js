@@ -12,7 +12,8 @@ import { textSummary } from 'https://jslib.k6.io/k6-summary/0.0.1/index.js';
  * 4. DB 확인 → 정확히 50개 성공했는지 검증
  */
 
-const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
+const BASE_URL = __ENV.BASE_URL;
+if (!BASE_URL) throw new Error('BASE_URL이 필요합니다. -e BASE_URL=...을 전달하세요.');
 
 export const options = {
   stages: [

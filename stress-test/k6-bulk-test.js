@@ -11,7 +11,8 @@ import { check, sleep } from 'k6';
  * ./k6.exe run k6-bulk-test.js
  */
 
-const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
+const BASE_URL = __ENV.BASE_URL;
+if (!BASE_URL) throw new Error('BASE_URL이 필요합니다. -e BASE_URL=...을 전달하세요.');
 
 export const options = {
   vus: 1,           // 가상 사용자 1명 (API 자체가 대량 메시지 발행하므로)

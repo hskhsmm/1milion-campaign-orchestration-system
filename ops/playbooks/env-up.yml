@@ -40,6 +40,12 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
+    - name: Ensure AWS account is the test environment account
+      ansible.builtin.assert:
+        that:
+          - caller_identity.Account == aws_account_id
+        fail_msg: "AWS 계정이 예상과 다릅니다: {{ caller_identity.Account }}"
+
     - name: Resolve required Terraform inputs before changing resources
       ansible.builtin.include_tasks: terraform-inputs.yml
 
@@ -245,6 +251,32 @@
       ansible.builtin.set_fact:
         terraform_mcp_ssm_status: "{{ terraform_mcp_ssm_cmd.stdout | from_json }}"
 
+    # Redis targeted apply가 끝난 뒤 같은 Terraform state에서 ALB를 순차 생성한다.
+    # App ASG는 마지막 play에서만 올리므로 ALB 생성 중 요청이 처리되지 않는다.
+    - name: Create ALB and HTTP listener before app ASG scales up
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ playbook_dir }}/../scripts/terraform-alb.sh"
+          - up
+          - "{{ terraform_dir }}"
+          - "{{ aws_account_id }}"
+          - "{{ terraform_mcp_network_instances[0].VpcId }}"
+          - "{{ terraform_mcp_network_instances[0].SubnetId }}"
+          - "{{ aws_region }}"
+      register: terraform_apply_alb_cmd
+      changed_when: true
+
+    - name: Save current ALB URL
+      ansible.builtin.set_fact:
+        alb_base_url: "{{ terraform_apply_alb_cmd.stdout_lines | last | trim }}"
+
+    - name: Ensure ALB URL was resolved
+      ansible.builtin.assert:
+        that:
+          - alb_base_url is match('^http://' ~ alb.name ~ '-[0-9]+[.]' ~ aws_region ~ '[.]elb[.]amazonaws[.]com$')
+        fail_msg: "ALB 생성 후 URL을 확인할 수 없습니다: {{ alb_base_url }}"
+
     - name: Print env-up summary before redis-exporter restart
       ansible.builtin.debug:
         msg:
@@ -256,7 +288,10 @@
           redis:
             status: "{{ redis_available_status }}"
             ssm_parameters: "{{ redis_ssm_params }}"
-            terraform_stdout: "{{ terraform_apply_redis_cmd.stdout_lines | default([]) }}"
+            terraform_exit_code: "{{ terraform_apply_redis_cmd.rc }}"
+          alb:
+            base_url: "{{ alb_base_url }}"
+            terraform_exit_code: "{{ terraform_apply_alb_cmd.rc }}"
           rds:
             before: "{{ rds_status_before_start }}"
             after: "{{ rds_available_status }}"
@@ -295,6 +330,12 @@
     - name: Parse AWS caller identity
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
+
+    - name: Ensure AWS account is the test environment account before app scale-up
+      ansible.builtin.assert:
+        that:
+          - caller_identity.Account == aws_account_id
+        fail_msg: "AWS 계정이 예상과 다릅니다: {{ caller_identity.Account }}"
 
     - name: Scale app ASG up to service capacity
       ansible.builtin.command:

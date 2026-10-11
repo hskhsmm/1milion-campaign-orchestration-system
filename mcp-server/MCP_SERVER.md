@@ -82,14 +82,16 @@ PROMETHEUS_URL    = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 AWS_REGION        = os.environ.get("AWS_REGION", "ap-northeast-2")
 ASG_NAME          = os.environ.get("ASG_NAME", "batch-kafka-app-asg")
 RDS_ID            = os.environ.get("RDS_ID", "batch-kafka-db")
-BATCH_API_URL     = os.environ.get("BATCH_API_URL", "http://alb-...")
+ALB_NAME          = os.environ.get("ALB_NAME", "alb-batch-kafka-api")
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
 CONSISTENCY_POLL_INTERVAL_SECONDS = float(os.environ.get("CONSISTENCY_POLL_INTERVAL_SECONDS", "1"))
 CONSISTENCY_POLL_TIMEOUT_SECONDS  = int(os.environ.get("CONSISTENCY_POLL_TIMEOUT_SECONDS", "30"))
 ```
 
-`SLACK_WEBHOOK_URL`만 필수값.
-나머지는 기본값이 있어서 환경변수 주입 없이도 로컬 테스트 가능.
+`SLACK_WEBHOOK_URL`은 기동 필수값이다. `BATCH_CAMPAIGN_ID`를 지정해 정합성 검사를 실행할 때는
+MCP가 매번 AWS ELBv2 API에서 `ALB_NAME`의 현재 DNS를 조회한다. 조회 실패나 ALB 비활성 상태는
+실패 알림으로 처리하며, 이전 ALB DNS로 대체하지 않는다. `terraform-mcp` EC2 역할에
+`elasticloadbalancing:DescribeLoadBalancers` 읽기 권한이 적용되어 있어야 한다.
 
 ---
 
@@ -424,17 +426,18 @@ monitoring 네트워크
 ### 빌드 및 실행
 
 ```bash
-# terraform-mcp EC2에서 실행
+# terraform-mcp EC2에서 실행. Terraform의 ALB 조회 IAM 정책을 먼저 적용한다.
+# 기존 운영 컨테이너 이름은 mcp-server이며, 교체 전 실행 옵션과 비밀 환경변수를 안전하게 보존한다.
 
 # 1. 레포 클론 (또는 pull)
 cd ~/1milion-campaign-orchestration-system
 
 # 2. 이미지 빌드
-sudo docker build -t mcp-monitor ./mcp-server
+sudo docker build -t mcp-server:latest ./mcp-server
 
-# 3. 컨테이너 실행
+# 3. 최초 설치 시에만 컨테이너 실행 (기존 mcp-server가 있으면 아래 교체 절차 사용)
 sudo docker run -d \
-  --name mcp-monitor \
+  --name mcp-server \
   --restart unless-stopped \
   --network monitoring \
   -p 8000:8000 \
@@ -443,19 +446,69 @@ sudo docker run -d \
   -e AWS_REGION="ap-northeast-2" \
   -e ASG_NAME="batch-kafka-app-asg" \
   -e RDS_ID="batch-kafka-db" \
-  -e BATCH_API_URL="http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com" \
+  -e ALB_NAME="alb-batch-kafka-api" \
   -e BATCH_CAMPAIGN_ID="1" \
-  mcp-monitor
+  mcp-server:latest
 
 # 4. monitoring 네트워크 연결 (run 시 --network로 이미 연결됨, 확인용)
-sudo docker network inspect monitoring | grep mcp-monitor
+sudo docker network inspect monitoring | grep mcp-server
 
 # 5. 기동 확인
 curl http://localhost:8000/health
 # → {"status": "ok"}
 
 # 6. 로그 확인
-sudo docker logs mcp-monitor --follow
+sudo docker logs mcp-server --follow
+```
+
+기존 `mcp-server`가 있는 서버에서는 위 `docker run`을 그대로 다시 실행하면 이름 충돌이 난다.
+다음은 현재 운영 구성(`monitoring` 네트워크, 호스트 8000 포트, 마운트 없음,
+`unless-stopped`)을 유지하면서 교체하는 절차다. 실행 전에 새 이미지를 빌드하고,
+아래 검사에서 기존 옵션이 다르면 중단해 실제 옵션을 반영한다. 비밀 환경변수는
+터미널에 출력하거나 명령 인자로 다시 입력하지 않고 권한 600 임시 파일로 전달한다.
+
+```bash
+set -euo pipefail
+backup_name="mcp-server-rollback-$(date +%Y%m%d%H%M%S)"
+env_file="$(sudo mktemp /tmp/mcp-server-env.XXXXXX)"
+trap 'sudo rm -f "$env_file"' EXIT
+sudo chmod 600 "$env_file"
+
+# 현재 운영 컨테이너의 실행 옵션과 비밀 환경변수를 보존한다.
+test "$(sudo docker inspect -f '{{.HostConfig.NetworkMode}}' mcp-server)" = monitoring
+test "$(sudo docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' mcp-server)" = unless-stopped
+test "$(sudo docker inspect -f '{{len .Mounts}}' mcp-server)" = 0
+test "$(sudo docker inspect -f '{{len .HostConfig.PortBindings}}' mcp-server)" = 1
+sudo docker port mcp-server 8000/tcp | grep -q ':8000$'
+sudo docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' mcp-server \
+  | sudo tee "$env_file" >/dev/null
+
+sudo docker stop mcp-server
+sudo docker rename mcp-server "$backup_name"
+
+if ! sudo docker run -d \
+  --name mcp-server \
+  --restart unless-stopped \
+  --network monitoring \
+  -p 8000:8000 \
+  --env-file "$env_file" \
+  mcp-server:latest; then
+  sudo docker rm -f mcp-server 2>/dev/null || true
+  sudo docker rename "$backup_name" mcp-server
+  sudo docker start mcp-server
+  exit 1
+fi
+
+if ! curl -fsS --retry 12 --retry-delay 2 http://localhost:8000/health; then
+  sudo docker rm -f mcp-server
+  sudo docker rename "$backup_name" mcp-server
+  sudo docker start mcp-server
+  exit 1
+fi
+
+# 이전 컨테이너는 롤백용으로 정지 상태로 남겨둔다. 임시 비밀 파일은 즉시 삭제한다.
+sudo rm -f "$env_file"
+trap - EXIT
 ```
 
 ### AWS IAM 권한 설정

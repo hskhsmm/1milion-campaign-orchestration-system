@@ -20,6 +20,7 @@ check-tools:
 	@command -v ansible-galaxy >/dev/null
 	@command -v aws >/dev/null
 	@command -v terraform >/dev/null
+	@command -v jq >/dev/null
 	@echo "Required tools are available."
 
 requirements:

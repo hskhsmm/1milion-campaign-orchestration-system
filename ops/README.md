@@ -55,9 +55,9 @@ make redis-exporter
 
 | 명령 | 설명 | 실제 변경 |
 | --- | --- | --- |
-| `make env-status` | ASG, EC2, RDS, Redis, SSM 상태를 읽기 전용으로 조회 | 없음 |
-| `make env-down` | 비용 절감을 위해 테스트 환경 종료 | ASG 축소, EC2 stop, RDS stop과 Redis targeted destroy 병렬 진행 |
-| `make env-up` | 테스트 환경 기동 | RDS start와 Redis targeted apply 병렬 진행, EC2 start, redis-exporter 재기동, ASG 복구 |
+| `make env-status` | ASG, ALB, EC2, RDS, Redis, SSM 상태를 읽기 전용으로 조회 | 없음 |
+| `make env-down` | 비용 절감을 위해 테스트 환경 종료 | ASG 축소 후 ALB/Listener 제거, EC2 stop, RDS stop과 Redis targeted destroy 병렬 진행 |
+| `make env-up` | 테스트 환경 기동 | RDS start와 Redis targeted apply 병렬 진행, EC2 start, ALB/Listener 생성, redis-exporter 재기동, ASG 복구 |
 | `make redis-exporter` | `terraform-mcp`에서 redis-exporter 컨테이너 재기동 | Docker 컨테이너 교체 |
 
 ### 운영·증거 수집 스크립트 (`ops/scripts/`)
@@ -69,6 +69,7 @@ make redis-exporter
 | `capture-boot-containers.sh <instance>` | 새 인스턴스 부팅 시 현재 배포 이미지가 아닌 컨테이너의 메타·로그 저장 | 대상 인스턴스 `/tmp/boot-capture/` |
 | `rebuild-app-ami.sh` | 잔존 컨테이너·이미지 없는 앱 AMI 재생성. 기본은 계획만 출력 | `CONFIRM=yes`일 때 임시 EC2 기동→AMI 생성→종료 |
 | `close-stale-campaigns.sh` | DB에 OPEN으로 남은 과거 캠페인 조회 / CLOSED 처리 (`MAX_ID` 필수) | `CONFIRM=yes`일 때 DB UPDATE |
+| `terraform-alb.sh` | env-up/down에서 저장된 Terraform plan의 변경 대상을 검사한 뒤 적용 | ALB·Listener 생성/삭제, 기동 시 MCP의 ALB 조회 IAM 정책 생성 |
 
 배경: `docs/current/2026-09-28-150m-reproduction-set-removal-trace.md`, `docs/current/2026-10-03-ami-baked-container-remediation.md`
 
@@ -106,6 +107,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 | 대상 | AWS/Terraform 이름 | 운영 방식 |
 | --- | --- | --- |
 | App ASG | `batch-kafka-app-asg`, `aws_autoscaling_group.app` | 종료 시 `min/max/desired=0`, 기동 시 `min=2/max=3/desired=2` |
+| ALB/Listener | `alb-batch-kafka-api`, `aws_lb.main[0]`, `aws_lb_listener.http[0]` | 앱 ASG가 0대가 된 뒤 삭제, 앱 기동 전에 재생성 |
 | Kafka brokers | `kafka-1`, `kafka-2`, `kafka-3` | EC2 start/stop |
 | Monitoring/MCP | `terraform-mcp`, `aws_instance.terraform_mcp` | EC2 start/stop, SSM SendCommand로 redis-exporter 재기동 |
 | RDS MySQL | `batch-kafka-db`, `aws_db_instance.batch_kafka_db` | RDS start/stop |
@@ -121,12 +123,13 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 
 `env-up`과 `env-down`은 시작 전에 현재 AWS 계정 ID 및 `terraform-mcp` EC2의 VPC/서브넷 ID를 조회해 Terraform의 필수 입력값으로 전달한다. 따라서 로컬 `terraform.tfvars`나 `TF_VAR_*` 환경변수가 없어도 실행할 수 있다. Redis용 SSM Parameter Store 값은 Terraform 입력값이 아니라, Redis 생성 후 앱과 exporter에 전달할 endpoint다.
 
-1. App ASG를 `min=0`, `max=0`, `desired=0`으로 축소한다.
-2. `kafka-1`, `kafka-2`, `kafka-3` EC2를 중지한다.
-3. `terraform-mcp` EC2를 중지한다.
-4. `batch-kafka-db` RDS stop 요청을 보낸다.
-5. Redis/Valkey와 Redis 관련 SSM Parameter를 Terraform targeted destroy로 제거한다.
-6. RDS가 `stopped`가 될 때까지 확인한다.
+1. App ASG를 `min=0`, `max=0`, `desired=0`으로 축소하고 인스턴스가 0대인지 확인한다.
+2. ALB와 HTTP Listener만 저장된 Terraform plan으로 삭제한다. Target Group은 유지한다.
+3. `kafka-1`, `kafka-2`, `kafka-3` EC2를 중지한다.
+4. `terraform-mcp` EC2를 중지한다.
+5. `batch-kafka-db` RDS stop 요청을 보낸다.
+6. Redis/Valkey와 Redis 관련 SSM Parameter를 Terraform targeted destroy로 제거한다.
+7. RDS가 `stopped`가 될 때까지 확인한다.
 
 RDS stop과 Redis targeted destroy는 서로 의존하지 않는 장기 작업이므로 같은 구간에서 진행되게 구성했다. App ASG는 가장 먼저 내리고, Kafka와 `terraform-mcp`는 기존 순서를 유지한다.
 
@@ -148,8 +151,9 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 4. RDS가 `available`이 될 때까지 기다린다.
 5. Kafka broker EC2 3대를 시작하고 `running`이 될 때까지 기다린다.
 6. `terraform-mcp`를 시작하고 SSM Agent가 `Online`이 될 때까지 기다린다.
-7. `terraform-mcp`에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
-8. App ASG를 `min=2`, `max=3`, `desired=2`로 복구하고 인스턴스가 `InService`가 될 때까지 기다린다.
+7. ALB와 HTTP Listener만 저장된 Terraform plan으로 생성하고 새 `alb_base_url`을 출력한다.
+8. `terraform-mcp`에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
+9. App ASG를 `min=2`, `max=3`, `desired=2`로 복구하고 인스턴스가 `InService`가 될 때까지 기다린다.
 
 RDS start와 Redis targeted apply는 서로 의존하지 않는 장기 작업이므로 같은 구간에서 진행되게 구성했다. Kafka와 `terraform-mcp`는 기존 순서를 유지하고, App ASG는 모든 의존 리소스와 redis-exporter가 준비된 뒤 마지막에 복구한다.
 
@@ -178,7 +182,9 @@ redis-exporter는 App ASG 인스턴스마다 띄우지 않고 `terraform-mcp`에
 - `env-up`은 `confirm_env_up=true` 없이는 실행되지 않는다.
 - Redis는 ElastiCache 특성상 stop이 불가능하므로 Terraform targeted destroy/apply만 수행한다.
 - ASG 용량은 Terraform에서 `ignore_changes`로 운영 중 조정이 허용되어 있어 Ansible이 on/off 용량을 바꿔도 Terraform drift로 되돌리지 않는다.
-- ALB는 stop/start가 불가능하고 삭제하면 DNS, listener, target group, CodeDeploy 연결 영향이 크므로 현재 자동화 범위에서 제외한다.
+- ALB는 stop/start가 불가능하므로 ALB와 Listener만 재생성한다. Target Group ARN과 ASG 연결은 유지한다.
+- ALB 작업은 Redis Terraform 작업과 순차 실행하며, 저장된 plan에 ALB·Listener 및 기동 시 MCP 읽기 전용 IAM 정책 이외의 변경이나 교체가 있으면 적용 전에 중단한다. `-target`은 전체 drift 검사를 대신하지 않는다.
+- ALB가 재생성되면 DNS가 바뀐다. `stress-test/resolve-base-url.sh`와 새 버전의 `mcp-monitor`는 현재 ALB를 매번 조회한다. `terraform_mcp_alb_describe` IAM 정책을 적용하고 MCP 이미지를 새 코드로 한 번 재배포해야 한다. 기존 컨테이너는 여전히 예전 `BATCH_API_URL`을 사용할 수 있다.
 
 ## 문제 해결
 

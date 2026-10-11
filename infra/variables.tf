@@ -30,3 +30,9 @@ variable "app_ami_id" {
   type        = string
   default     = "ami-04256089838fb06c8" # 2026-10-04 재생성, 격리 부팅에서 컨테이너·이미지 0개 검증
 }
+
+variable "alb_enabled" {
+  description = "테스트 환경의 ALB와 HTTP Listener 생성 여부. Target Group과 ASG 연결은 유지한다."
+  type        = bool
+  default     = true
+}
