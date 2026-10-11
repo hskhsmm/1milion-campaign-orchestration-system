@@ -35,7 +35,8 @@ export const options = {
   },
 };
 
-const BASE_URL = __ENV.BASE_URL || 'http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com';
+const BASE_URL = __ENV.BASE_URL;
+if (!BASE_URL) throw new Error('BASE_URL이 필요합니다. run-test.sh를 사용하거나 -e BASE_URL=...을 전달하세요.');
 const CAMPAIGN_ID = __ENV.CAMPAIGN_ID || 1;
 
 export default function () {

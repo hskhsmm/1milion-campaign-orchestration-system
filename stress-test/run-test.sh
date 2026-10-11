@@ -21,11 +21,32 @@ ENV=${1:-"local"}
 MODE=${2:-"integrity"}
 
 # 환경별 BASE_URL
-if [ "$ENV" = "prod" ]; then
-  BASE_URL="http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com"
-else
-  BASE_URL="http://localhost:8080"
+case "$ENV" in
+  prod)
+    if [[ -n "${BASE_URL:-}" ]]; then
+      if [[ "${CONFIRM_BASE_URL_OVERRIDE:-}" != "true" ]]; then
+        echo "prod에서 BASE_URL을 직접 지정하려면 CONFIRM_BASE_URL_OVERRIDE=true가 필요합니다." >&2
+        exit 2
+      fi
+      echo "주의: 확인된 수동 BASE_URL을 사용합니다. 현재 ALB 주소인지 다시 확인하세요." >&2
+    else
+      BASE_URL=$(bash "$(dirname "$0")/resolve-base-url.sh")
+    fi
+    ;;
+  local)
+    BASE_URL=${BASE_URL:-http://localhost:8080}
+    ;;
+  *)
+    echo "Unknown environment: $ENV (expected: local or prod)" >&2
+    exit 2
+    ;;
+esac
+
+if [[ ! "$BASE_URL" =~ ^https?://[^[:space:]]+$ ]]; then
+  echo "유효하지 않은 BASE_URL: $BASE_URL" >&2
+  exit 2
 fi
+BASE_URL=${BASE_URL%/}
 
 case "$MODE" in
   integrity)

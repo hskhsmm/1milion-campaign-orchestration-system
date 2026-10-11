@@ -5,10 +5,7 @@ PROMETHEUS_URL    = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 AWS_REGION        = os.environ.get("AWS_REGION", "ap-northeast-2")
 ASG_NAME          = os.environ.get("ASG_NAME", "batch-kafka-app-asg")
 RDS_ID            = os.environ.get("RDS_ID", "batch-kafka-db")
-BATCH_API_URL     = os.environ.get(
-    "BATCH_API_URL",
-    "http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com",
-)
+BATCH_API_URL     = os.environ.get("BATCH_API_URL", "").strip().rstrip("/")
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
 CONSISTENCY_POLL_INTERVAL_SECONDS = float(os.environ.get("CONSISTENCY_POLL_INTERVAL_SECONDS", "1"))
 CONSISTENCY_POLL_TIMEOUT_SECONDS  = int(os.environ.get("CONSISTENCY_POLL_TIMEOUT_SECONDS", "30"))

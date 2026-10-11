@@ -5,12 +5,30 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("SLACK_WEBHOOK_URL", "https://example.invalid/slack")
+os.environ.setdefault("BATCH_API_URL", "http://example.invalid")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from detectors import p1_detector  # noqa: E402
 
 
 class ConsistencyDetectorTest(unittest.TestCase):
+
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=True)
+    @patch.object(p1_detector.requests, "post")
+    def test_rejects_missing_base_url_before_calling_api(self, post, check_and_record, send_alert):
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61), \
+                patch.object(p1_detector.config, "BATCH_API_URL", ""):
+            result = p1_detector.check_consistency()
+
+        self.assertEqual("error", result["status"])
+        self.assertIn("BATCH_API_URL 미설정", result["reason"])
+        post.assert_not_called()
+        check_and_record.assert_called_once_with(
+            "consistency_check_failed",
+            p1_detector.config.COOLDOWN_SECONDS,
+        )
+        send_alert.assert_called_once()
 
     @patch.object(p1_detector, "send_alert")
     @patch.object(p1_detector, "check_and_record", return_value=True)

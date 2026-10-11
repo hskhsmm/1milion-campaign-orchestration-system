@@ -20,6 +20,7 @@
 | 파일 | 현재 용도 |
 | --- | --- |
 | `run-test.sh` | 환경과 테스트 모드를 선택하는 공통 진입점 |
+| `resolve-base-url.sh` | 현재 AWS 계정의 active ALB DNS를 조회. ALB가 없으면 실패 |
 | `k6-load-test.js` | 정확한 요청 수 기반 Spike/정합성 테스트 |
 | `k6-tps-test.js` | 단일 목표 또는 단계별 arrival-rate 용량 테스트 |
 | `k6-verify-test.js` | 로컬 소규모 확인용 |
@@ -72,7 +73,7 @@ aws elbv2 describe-target-health \
 ### 3.3 API와 비동기 경로 Smoke test
 
 ```bash
-BASE_URL=http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com
+BASE_URL=$(bash ../stress-test/resolve-base-url.sh)
 
 curl -fsS "$BASE_URL/actuator/health"
 
@@ -99,7 +100,8 @@ echo "$SMOKE_RESPONSE"
 ### 4.1 캠페인 생성
 
 ```bash
-BASE_URL=http://alb-batch-kafka-api-1351817547.ap-northeast-2.elb.amazonaws.com
+# 3.3에서 조회한 BASE_URL을 같은 셸에서 재사용한다.
+test -n "$BASE_URL"
 
 curl -fsS -X POST "$BASE_URL/api/admin/campaigns" \
   -H 'Content-Type: application/json' \
@@ -120,9 +122,16 @@ aws ssm start-session \
 cd ~/1milion-campaign-orchestration-system/stress-test
 ```
 
+SSM 세션은 로컬 셸의 `BASE_URL`을 자동으로 전달하지 않는다. 현재 `terraform-mcp` EC2 역할에는
+ALB 조회 권한이 없으므로, 3.3에서 운영 PC로 조회한 URL을 원격 세션의 `BASE_URL`에 명시적으로 넣는다.
+향후 `env-up`에서 주소 주입을 자동화하기 전까지 이 단계가 필요하다. 오래된 ALB 주소를 재사용하지 않는다.
+
 ### 4.3 실행
 
 ```bash
+read -r -p '운영 PC에서 방금 조회한 BASE_URL 입력: ' BASE_URL
+export BASE_URL
+export CONFIRM_BASE_URL_OVERRIDE=true
 CAMPAIGN_ID=<id> \
 TOTAL_REQUESTS=1500000 \
 MAX_VUS=3000 \

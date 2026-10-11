@@ -121,6 +121,12 @@ def check_consistency() -> dict:
         logger.info("BATCH_CAMPAIGN_ID 미설정 — 정합성 검사 스킵")
         return {"status": "skipped", "reason": "BATCH_CAMPAIGN_ID 미설정"}
 
+    if not config.BATCH_API_URL:
+        reason = "BATCH_API_URL 미설정 — 현재 ALB 주소를 주입해야 합니다"
+        logger.error(reason)
+        _notify_consistency_check_failure(reason)
+        return {"status": "error", "reason": reason}
+
     base_url = f"{config.BATCH_API_URL}/api/admin/consistency-recovery"
     try:
         resp = requests.post(
