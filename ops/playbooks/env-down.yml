@@ -37,6 +37,12 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
+    - name: Ensure AWS account is the test environment account
+      ansible.builtin.assert:
+        that:
+          - caller_identity.Account == aws_account_id
+        fail_msg: "AWS 계정이 예상과 다릅니다: {{ caller_identity.Account }}"
+
     - name: Resolve required Terraform inputs before changing resources
       ansible.builtin.include_tasks: terraform-inputs.yml
 
@@ -64,6 +70,22 @@
     - name: Save app ASG down status
       ansible.builtin.set_fact:
         asg_down_status: "{{ asg_down_status_cmd.stdout | from_json }}"
+
+    # App 인스턴스가 완전히 사라진 뒤 ALB만 별도 plan으로 삭제한다.
+    # 같은 Terraform state를 쓰는 Redis destroy와 겹치지 않도록 순차 실행한다.
+    - name: Destroy ALB and HTTP listener after app ASG scales down
+      ansible.builtin.command:
+        argv:
+          - bash
+          - "{{ playbook_dir }}/../scripts/terraform-alb.sh"
+          - down
+          - "{{ terraform_dir }}"
+          - "{{ aws_account_id }}"
+          - "{{ terraform_mcp_network_instances[0].VpcId }}"
+          - "{{ terraform_mcp_network_instances[0].SubnetId }}"
+          - "{{ aws_region }}"
+      register: terraform_destroy_alb_cmd
+      changed_when: true
 
     # Kafka는 app 트래픽을 제거한 뒤 중지한다.
     # 이미 stopped인 broker는 다시 stop하지 않고, running/pending broker만 stop 대상에 넣는다.
@@ -216,6 +238,9 @@
             region: "{{ aws_region }}"
             profile: "{{ aws_profile | default('default', true) }}"
           app_asg: "{{ asg_down_status }}"
+          alb:
+            name: "{{ alb.name }}"
+            terraform_stdout: "{{ terraform_destroy_alb_cmd.stdout_lines | default([]) }}"
           kafka:
             requested_stop_instance_ids: "{{ kafka_instance_ids_to_stop }}"
             final_states: "{{ kafka_stopped_states }}"

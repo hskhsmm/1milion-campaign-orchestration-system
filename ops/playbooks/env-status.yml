@@ -49,6 +49,17 @@
       ansible.builtin.set_fact:
         asg_status: "{{ asg_status_cmd.stdout | from_json }}"
 
+    - name: Read ALB status
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['elbv2', 'describe-load-balancers', '--names', alb.name, '--region', aws_region, '--query', 'LoadBalancers[0].{Arn:LoadBalancerArn,DNS:DNSName,State:State.Code}', '--output', 'json'] }}"
+      register: alb_status_cmd
+      changed_when: false
+      failed_when: alb_status_cmd.rc != 0 and 'LoadBalancerNotFound' not in alb_status_cmd.stderr
+
+    - name: Parse ALB status
+      ansible.builtin.set_fact:
+        alb_status: "{{ alb_status_cmd.stdout | from_json if alb_status_cmd.rc == 0 else {'Name': alb.name, 'State': 'not-found-or-destroyed'} }}"
+
     - name: Read Kafka and monitoring EC2 states
       # Kafka broker와 terraform-mcp는 고정 Name tag를 가진 EC2라서 tag:Name 기준으로 조회한다.
       ansible.builtin.command:
@@ -127,6 +138,7 @@
             region: "{{ aws_region }}"
             profile: "{{ aws_profile | default('default', true) }}"
           app_asg: "{{ asg_status }}"
+          alb: "{{ alb_status }}"
           ec2: "{{ ec2_status }}"
           rds: "{{ rds_status }}"
           redis: "{{ redis_status }}"

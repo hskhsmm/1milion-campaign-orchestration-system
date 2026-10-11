@@ -1,5 +1,6 @@
 ---
 aws_region: ap-northeast-2
+aws_account_id: "631124976154"
 
 # AWS 인증은 로컬 AWS CLI 설정을 그대로 사용한다.
 # AWS_PROFILE을 바꾸면 같은 playbook을 다른 profile로 실행할 수 있다.
@@ -29,6 +30,9 @@ ec2_instances:
 
 rds:
   db_instance_identifier: batch-kafka-db
+
+alb:
+  name: alb-batch-kafka-api
 
 redis:
   replication_group_id: batch-kafka-redis

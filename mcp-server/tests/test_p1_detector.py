@@ -5,7 +5,6 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 
 os.environ.setdefault("SLACK_WEBHOOK_URL", "https://example.invalid/slack")
-os.environ.setdefault("BATCH_API_URL", "http://example.invalid")
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from detectors import p1_detector  # noqa: E402
@@ -13,16 +12,23 @@ from detectors import p1_detector  # noqa: E402
 
 class ConsistencyDetectorTest(unittest.TestCase):
 
+    def setUp(self):
+        alb_patcher = patch.object(
+            p1_detector, "current_batch_api_url", return_value="http://example.invalid"
+        )
+        self.current_batch_api_url = alb_patcher.start()
+        self.addCleanup(alb_patcher.stop)
+
     @patch.object(p1_detector, "send_alert")
     @patch.object(p1_detector, "check_and_record", return_value=True)
     @patch.object(p1_detector.requests, "post")
-    def test_rejects_missing_base_url_before_calling_api(self, post, check_and_record, send_alert):
-        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61), \
-                patch.object(p1_detector.config, "BATCH_API_URL", ""):
+    def test_reports_alb_lookup_failure_before_calling_api(self, post, check_and_record, send_alert):
+        self.current_batch_api_url.side_effect = RuntimeError("ALB 없음")
+        with patch.object(p1_detector.config, "BATCH_CAMPAIGN_ID", 61):
             result = p1_detector.check_consistency()
 
         self.assertEqual("error", result["status"])
-        self.assertIn("BATCH_API_URL 미설정", result["reason"])
+        self.assertIn("현재 ALB 주소 조회 실패", result["reason"])
         post.assert_not_called()
         check_and_record.assert_called_once_with(
             "consistency_check_failed",
@@ -74,7 +80,7 @@ class ConsistencyDetectorTest(unittest.TestCase):
         self.assertEqual(77, result["executionId"])
         self.assertEqual(2, result["anomalyCount"])
         post.assert_called_once_with(
-            f"{p1_detector.config.BATCH_API_URL}/api/admin/consistency-recovery",
+            "http://example.invalid/api/admin/consistency-recovery",
             json={
                 "requestedBy": "mcp-monitor",
                 "dryRun": True,
@@ -85,7 +91,7 @@ class ConsistencyDetectorTest(unittest.TestCase):
             timeout=10,
         )
         get.assert_called_once_with(
-            f"{p1_detector.config.BATCH_API_URL}/api/admin/consistency-recovery/executions/77",
+            "http://example.invalid/api/admin/consistency-recovery/executions/77",
             timeout=10,
         )
         check_and_record.assert_called_once_with(

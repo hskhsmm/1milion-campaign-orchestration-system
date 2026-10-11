@@ -122,22 +122,25 @@ aws ssm start-session \
 cd ~/1milion-campaign-orchestration-system/stress-test
 ```
 
-SSM 세션은 로컬 셸의 `BASE_URL`을 자동으로 전달하지 않는다. 현재 `terraform-mcp` EC2 역할에는
-ALB 조회 권한이 없으므로, 3.3에서 운영 PC로 조회한 URL을 원격 세션의 `BASE_URL`에 명시적으로 넣는다.
-향후 `env-up`에서 주소 주입을 자동화하기 전까지 이 단계가 필요하다. 오래된 ALB 주소를 재사용하지 않는다.
+SSM 세션은 로컬 셸의 `BASE_URL`을 자동으로 전달하지 않는다. `terraform-mcp` EC2 역할에
+`terraform_mcp_alb_describe` IAM 정책을 적용했다면 원격 `run-test.sh prod`가 현재 ALB 주소를
+직접 조회한다. 정책 적용 전에는 3.3에서 운영 PC로 조회한 URL을 원격 세션의 `BASE_URL`에 명시한다.
+오래된 ALB 주소를 재사용하지 않는다.
 
 ### 4.3 실행
 
 ```bash
-read -r -p '운영 PC에서 방금 조회한 BASE_URL 입력: ' BASE_URL
-export BASE_URL
-export CONFIRM_BASE_URL_OVERRIDE=true
+# ALB 조회 IAM 정책이 적용된 terraform-mcp에서는 BASE_URL을 지정하지 않는다.
+unset BASE_URL CONFIRM_BASE_URL_OVERRIDE
 CAMPAIGN_ID=<id> \
 TOTAL_REQUESTS=1500000 \
 MAX_VUS=3000 \
 DURATION=3600 \
 bash ./run-test.sh prod integrity
 ```
+
+ALB 조회 IAM 정책을 아직 적용하지 못했다면, 위 실행 전에 운영 PC에서 확인한 새 주소를
+`BASE_URL`로 입력하고 `CONFIRM_BASE_URL_OVERRIDE=true`를 설정한다.
 
 `DURATION`은 도착률을 제어하지 않는다. `k6-load-test.js`에서는 `maxDuration=DURATION*2` 계산에만 사용된다. 실제 요청 속도는 VU 수와 응답시간에 의해 결정된다.
 

@@ -37,6 +37,21 @@ resource "aws_iam_role_policy" "terraform_mcp_ec2_describe" {
   })
 }
 
+# 부하 테스트와 MCP 정합성 검사가 재생성된 ALB 주소를 읽기 전용으로 찾는다.
+resource "aws_iam_role_policy" "terraform_mcp_alb_describe" {
+  name = "ALBDescribe-for-monitoring"
+  role = aws_iam_role.terraform_mcp.name
+
+  policy = jsonencode({
+    Version = "2012-10-17"
+    Statement = [{
+      Effect   = "Allow"
+      Action   = ["elasticloadbalancing:DescribeLoadBalancers"]
+      Resource = "*"
+    }]
+  })
+}
+
 # MCP 모니터링 서버용 — CloudWatch 읽기 (ASG CPU, RDS CPU)
 resource "aws_iam_role_policy" "terraform_mcp_cloudwatch_read" {
   name = "CloudWatchRead-for-mcp"

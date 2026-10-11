@@ -5,6 +5,7 @@ import time
 import requests
 
 import config
+from alb import current_batch_api_url
 from slack import send_alert
 from state import check_and_record, reset_alert
 
@@ -121,13 +122,14 @@ def check_consistency() -> dict:
         logger.info("BATCH_CAMPAIGN_ID 미설정 — 정합성 검사 스킵")
         return {"status": "skipped", "reason": "BATCH_CAMPAIGN_ID 미설정"}
 
-    if not config.BATCH_API_URL:
-        reason = "BATCH_API_URL 미설정 — 현재 ALB 주소를 주입해야 합니다"
+    try:
+        base_url = f"{current_batch_api_url()}/api/admin/consistency-recovery"
+    except Exception as e:
+        reason = f"현재 ALB 주소 조회 실패: {e}"
         logger.error(reason)
         _notify_consistency_check_failure(reason)
         return {"status": "error", "reason": reason}
 
-    base_url = f"{config.BATCH_API_URL}/api/admin/consistency-recovery"
     try:
         resp = requests.post(
             base_url,

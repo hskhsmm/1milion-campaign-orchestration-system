@@ -82,15 +82,16 @@ PROMETHEUS_URL    = os.environ.get("PROMETHEUS_URL", "http://prometheus:9090")
 AWS_REGION        = os.environ.get("AWS_REGION", "ap-northeast-2")
 ASG_NAME          = os.environ.get("ASG_NAME", "batch-kafka-app-asg")
 RDS_ID            = os.environ.get("RDS_ID", "batch-kafka-db")
-BATCH_API_URL     = os.environ.get("BATCH_API_URL", "").strip().rstrip("/")
+ALB_NAME          = os.environ.get("ALB_NAME", "alb-batch-kafka-api")
 BATCH_CAMPAIGN_ID = int(os.environ.get("BATCH_CAMPAIGN_ID", "0"))
 CONSISTENCY_POLL_INTERVAL_SECONDS = float(os.environ.get("CONSISTENCY_POLL_INTERVAL_SECONDS", "1"))
 CONSISTENCY_POLL_TIMEOUT_SECONDS  = int(os.environ.get("CONSISTENCY_POLL_TIMEOUT_SECONDS", "30"))
 ```
 
 `SLACK_WEBHOOK_URL`은 기동 필수값이다. `BATCH_CAMPAIGN_ID`를 지정해 정합성 검사를 실행할 때는
-현재 ALB 주소를 `BATCH_API_URL`로 반드시 주입해야 한다. 주소가 비어 있으면 검사에서 실패 알림을
-발송하며, 이전 ALB DNS로 대체하지 않는다.
+MCP가 매번 AWS ELBv2 API에서 `ALB_NAME`의 현재 DNS를 조회한다. 조회 실패나 ALB 비활성 상태는
+실패 알림으로 처리하며, 이전 ALB DNS로 대체하지 않는다. `terraform-mcp` EC2 역할에
+`elasticloadbalancing:DescribeLoadBalancers` 읽기 권한이 적용되어 있어야 한다.
 
 ---
 
@@ -425,12 +426,7 @@ monitoring 네트워크
 ### 빌드 및 실행
 
 ```bash
-# 운영 PC에서 현재 ALB URL 조회 (AWS CLI 권한 필요)
-bash stress-test/resolve-base-url.sh
-
-# 출력된 URL을 terraform-mcp EC2에 전달한다. 현재 이 EC2 역할에는 ALB 조회 권한이 없다.
-# ALB가 재생성되면 새 URL로 mcp-monitor 컨테이너를 다시 만들어야 한다.
-# terraform-mcp EC2에서 실행
+# terraform-mcp EC2에서 실행. Terraform의 ALB 조회 IAM 정책을 먼저 적용한다.
 
 # 1. 레포 클론 (또는 pull)
 cd ~/1milion-campaign-orchestration-system
@@ -439,7 +435,6 @@ cd ~/1milion-campaign-orchestration-system
 sudo docker build -t mcp-monitor ./mcp-server
 
 # 3. 컨테이너 실행
-read -r -p '운영 PC에서 방금 조회한 BATCH_API_URL 입력: ' BATCH_API_URL
 sudo docker run -d \
   --name mcp-monitor \
   --restart unless-stopped \
@@ -450,7 +445,7 @@ sudo docker run -d \
   -e AWS_REGION="ap-northeast-2" \
   -e ASG_NAME="batch-kafka-app-asg" \
   -e RDS_ID="batch-kafka-db" \
-  -e BATCH_API_URL="$BATCH_API_URL" \
+  -e ALB_NAME="alb-batch-kafka-api" \
   -e BATCH_CAMPAIGN_ID="1" \
   mcp-monitor
 
