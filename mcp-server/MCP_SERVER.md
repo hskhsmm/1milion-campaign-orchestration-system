@@ -435,7 +435,7 @@ cd ~/1milion-campaign-orchestration-system
 # 2. 이미지 빌드
 sudo docker build -t mcp-server:latest ./mcp-server
 
-# 3. 컨테이너 실행
+# 3. 최초 설치 시에만 컨테이너 실행 (기존 mcp-server가 있으면 아래 교체 절차 사용)
 sudo docker run -d \
   --name mcp-server \
   --restart unless-stopped \
@@ -459,6 +459,56 @@ curl http://localhost:8000/health
 
 # 6. 로그 확인
 sudo docker logs mcp-server --follow
+```
+
+기존 `mcp-server`가 있는 서버에서는 위 `docker run`을 그대로 다시 실행하면 이름 충돌이 난다.
+다음은 현재 운영 구성(`monitoring` 네트워크, 호스트 8000 포트, 마운트 없음,
+`unless-stopped`)을 유지하면서 교체하는 절차다. 실행 전에 새 이미지를 빌드하고,
+아래 검사에서 기존 옵션이 다르면 중단해 실제 옵션을 반영한다. 비밀 환경변수는
+터미널에 출력하거나 명령 인자로 다시 입력하지 않고 권한 600 임시 파일로 전달한다.
+
+```bash
+set -euo pipefail
+backup_name="mcp-server-rollback-$(date +%Y%m%d%H%M%S)"
+env_file="$(sudo mktemp /tmp/mcp-server-env.XXXXXX)"
+trap 'sudo rm -f "$env_file"' EXIT
+sudo chmod 600 "$env_file"
+
+# 현재 운영 컨테이너의 실행 옵션과 비밀 환경변수를 보존한다.
+test "$(sudo docker inspect -f '{{.HostConfig.NetworkMode}}' mcp-server)" = monitoring
+test "$(sudo docker inspect -f '{{.HostConfig.RestartPolicy.Name}}' mcp-server)" = unless-stopped
+test "$(sudo docker inspect -f '{{len .Mounts}}' mcp-server)" = 0
+test "$(sudo docker inspect -f '{{len .HostConfig.PortBindings}}' mcp-server)" = 1
+sudo docker port mcp-server 8000/tcp | grep -q ':8000$'
+sudo docker inspect --format '{{range .Config.Env}}{{println .}}{{end}}' mcp-server \
+  | sudo tee "$env_file" >/dev/null
+
+sudo docker stop mcp-server
+sudo docker rename mcp-server "$backup_name"
+
+if ! sudo docker run -d \
+  --name mcp-server \
+  --restart unless-stopped \
+  --network monitoring \
+  -p 8000:8000 \
+  --env-file "$env_file" \
+  mcp-server:latest; then
+  sudo docker rm -f mcp-server 2>/dev/null || true
+  sudo docker rename "$backup_name" mcp-server
+  sudo docker start mcp-server
+  exit 1
+fi
+
+if ! curl -fsS --retry 12 --retry-delay 2 http://localhost:8000/health; then
+  sudo docker rm -f mcp-server
+  sudo docker rename "$backup_name" mcp-server
+  sudo docker start mcp-server
+  exit 1
+fi
+
+# 이전 컨테이너는 롤백용으로 정지 상태로 남겨둔다. 임시 비밀 파일은 즉시 삭제한다.
+sudo rm -f "$env_file"
+trap - EXIT
 ```
 
 ### AWS IAM 권한 설정

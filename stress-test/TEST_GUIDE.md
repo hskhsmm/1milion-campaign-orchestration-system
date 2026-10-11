@@ -155,6 +155,9 @@ ALB 조회 IAM 정책을 아직 적용하지 못했다면, 위 실행 전에 운
 | 정합성 | campaign-user 중복 0, sequence 중복 0 |
 
 ```bash
+if [[ -z "${BASE_URL:-}" ]]; then
+  BASE_URL="$(bash ./resolve-base-url.sh)"
+fi
 curl -fsS "$BASE_URL/api/campaigns/<id>/status" | python3 -m json.tool
 ```
 
