@@ -427,16 +427,17 @@ monitoring 네트워크
 
 ```bash
 # terraform-mcp EC2에서 실행. Terraform의 ALB 조회 IAM 정책을 먼저 적용한다.
+# 기존 운영 컨테이너 이름은 mcp-server이며, 교체 전 실행 옵션과 비밀 환경변수를 안전하게 보존한다.
 
 # 1. 레포 클론 (또는 pull)
 cd ~/1milion-campaign-orchestration-system
 
 # 2. 이미지 빌드
-sudo docker build -t mcp-monitor ./mcp-server
+sudo docker build -t mcp-server:latest ./mcp-server
 
 # 3. 컨테이너 실행
 sudo docker run -d \
-  --name mcp-monitor \
+  --name mcp-server \
   --restart unless-stopped \
   --network monitoring \
   -p 8000:8000 \
@@ -447,17 +448,17 @@ sudo docker run -d \
   -e RDS_ID="batch-kafka-db" \
   -e ALB_NAME="alb-batch-kafka-api" \
   -e BATCH_CAMPAIGN_ID="1" \
-  mcp-monitor
+  mcp-server:latest
 
 # 4. monitoring 네트워크 연결 (run 시 --network로 이미 연결됨, 확인용)
-sudo docker network inspect monitoring | grep mcp-monitor
+sudo docker network inspect monitoring | grep mcp-server
 
 # 5. 기동 확인
 curl http://localhost:8000/health
 # → {"status": "ok"}
 
 # 6. 로그 확인
-sudo docker logs mcp-monitor --follow
+sudo docker logs mcp-server --follow
 ```
 
 ### AWS IAM 권한 설정

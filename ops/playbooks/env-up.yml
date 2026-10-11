@@ -288,10 +288,10 @@
           redis:
             status: "{{ redis_available_status }}"
             ssm_parameters: "{{ redis_ssm_params }}"
-            terraform_stdout: "{{ terraform_apply_redis_cmd.stdout_lines | default([]) }}"
+            terraform_exit_code: "{{ terraform_apply_redis_cmd.rc }}"
           alb:
             base_url: "{{ alb_base_url }}"
-            terraform_stdout: "{{ terraform_apply_alb_cmd.stdout_lines | default([]) }}"
+            terraform_exit_code: "{{ terraform_apply_alb_cmd.rc }}"
           rds:
             before: "{{ rds_status_before_start }}"
             after: "{{ rds_available_status }}"
