@@ -30,6 +30,11 @@ resource "aws_launch_template" "app" {
     name = aws_iam_instance_profile.batch_kafka_app.name
   }
 
+  # 상세 모니터링: EC2 CPU를 1분 단위로 발행 (기본 5분 → 알람 평가가 수 분 지연됨)
+  monitoring {
+    enabled = true
+  }
+
   network_interfaces {
     associate_public_ip_address = true
     security_groups             = [aws_security_group.app.id]
@@ -65,6 +70,7 @@ resource "aws_autoscaling_group" "app" {
 
   health_check_type         = "ELB"
   health_check_grace_period = 180 # 앱 기동 시간 여유 (초)
+  default_instance_warmup   = 150 # 부팅+배포 약 2분 반 동안 신규 인스턴스 CPU를 평균에서 제외
   metrics_granularity       = "1Minute"
   enabled_metrics = [
     "GroupAndWarmPoolDesiredCapacity",

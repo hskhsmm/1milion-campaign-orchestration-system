@@ -39,10 +39,10 @@ resource "aws_lb_target_group" "api_8080" {
     path                = "/actuator/health"
     protocol            = "HTTP"
     port                = "traffic-port"
-    interval            = 30
+    interval            = 10 # healthy 판정 10s x 2 = 20초 (기존 30s x 5 = 150초)
     timeout             = 5
-    healthy_threshold   = 5
-    unhealthy_threshold = 2
+    healthy_threshold   = 2
+    unhealthy_threshold = 5 # unhealthy 판정 약 50초 유지 (기존 60초) — 고부하 시 오탐 교체 방지
     matcher             = "200"
   }
 
