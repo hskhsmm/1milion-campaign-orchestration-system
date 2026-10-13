@@ -7,7 +7,6 @@
 
 # k6 binary
 stress-test/k6.exe
-stress-test/harness/runs/
 
 # Terraform
 infra/.terraform/

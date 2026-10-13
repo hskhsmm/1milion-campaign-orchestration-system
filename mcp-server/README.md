@@ -7,6 +7,6 @@
 
 이 둘은 같은 프로세스에 있으므로, Claude 또는 Codex에서 MCP 도구를 더 이상 쓰지 않는다는 이유만으로 서버를 중단하면 알림 기능도 중단될 수 있다.
 
-**현재 확인이 필요한 불일치:** `config.py`의 Redis Queue 경고·위험 임계값 설명은 150만 건 상한을 기준으로 하지만, 앱 `RedisStockService`의 `MAX_QUEUE_SIZE`는 250만 건이다. 알림의 의미를 검증하기 전에는 이를 합격·실패 판정 기준으로 사용하지 않는다. MCP 도구와 알림의 분리·대체는 [하네스 계획](../docs/plans/performance-harness.md)에 따라 별도로 결정한다.
+Redis Queue 알림은 앱 `RedisStockService`의 `MAX_QUEUE_SIZE` 250만 건을 기준으로 70%·85%에서 발생하도록 맞췄다. 상한에 도달하면 신규 참여가 거절되는 것이지, 이 임계값만으로 데이터 유실이 발생했다고 판정하지 않는다. 실환경 알림 발송과 Prometheus 메트릭은 별도로 확인해야 한다. MCP 도구와 알림의 분리·대체는 [하네스 계획](../docs/plans/performance-harness.md)에 따라 별도로 결정한다.
 
 2026-05 당시의 상세 설명은 [보관 문서](../docs/archive/2026-05-mcp-monitor-notes.md)에 있다. 그 문서의 임계값, ALB 주소, 운영 명령은 현행 절차가 아니다.

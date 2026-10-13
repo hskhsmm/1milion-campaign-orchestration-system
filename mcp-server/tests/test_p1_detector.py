@@ -10,6 +10,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from detectors import p1_detector  # noqa: E402
 
 
+class RedisQueueThresholdTest(unittest.TestCase):
+
+    def test_thresholds_match_app_queue_limit(self):
+        self.assertEqual(1_750_000, p1_detector.config.REDIS_QUEUE_WARNING)
+        self.assertEqual(2_125_000, p1_detector.config.REDIS_QUEUE_CRITICAL)
+
+    @patch.object(p1_detector, "reset_alert")
+    @patch.object(p1_detector, "send_alert")
+    @patch.object(p1_detector, "check_and_record", return_value=True)
+    @patch.object(p1_detector, "_query_prometheus", return_value=2_125_000)
+    def test_critical_alert_describes_rejection_not_data_loss(
+        self, query, check_and_record, send_alert, reset_alert
+    ):
+        p1_detector._check_redis_queue()
+
+        check_and_record.assert_called_once_with(
+            "redis_queue_critical", p1_detector.config.COOLDOWN_SECONDS
+        )
+        self.assertIn("신규 참여 접수 거부", send_alert.call_args.args[2])
+
+
 class ConsistencyDetectorTest(unittest.TestCase):
 
     def setUp(self):

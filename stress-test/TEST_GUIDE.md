@@ -27,7 +27,16 @@
 | `k6-sync-test.js` | 제거된 v1 동기 API 비교용 보관 스크립트, 실행 금지 |
 | `k6-bulk-test.js` | 제거된 v1 bulk API 비교용 보관 스크립트, 실행 금지 |
 
-실험 조건을 기록하거나 기존 k6 JSON 요약을 로컬에서 읽을 때는 [하네스 안내](harness/README.md)를 참고한다. 현재 하네스는 부하를 실행하지 않고, 후단 증거가 없어 성공 판정도 하지 않는다.
+실험 조건과 결과는 기존 `run-test.sh` 실행 절차에 맞춰 보관한다. k6 요약 JSON이 필요하면 실행 전에 `evidence/<실행 ID>/`를 만들고, k6 기본 제공 환경변수를 사용한다.
+
+```bash
+mkdir -p evidence/<실행 ID>
+K6_SUMMARY_EXPORT=evidence/<실행 ID>/k6-summary.json \
+K6_SUMMARY_TREND_STATS='avg,min,med,max,p(90),p(95),p(99)' \
+bash ./run-test.sh local integrity
+```
+
+`evidence/`는 Git에서 제외된다. 이 JSON은 실행 전체의 k6 집계이며 안정 구간만의 지연이나 Redis Queue·Kafka lag·DB 정합성을 대신하지 않는다. 실환경 테스트는 아래 사전 점검을 거쳐 별도로 시작한다.
 
 ## 3. 공통 사전 점검
 

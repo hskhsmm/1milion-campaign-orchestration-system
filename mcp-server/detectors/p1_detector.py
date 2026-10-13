@@ -78,7 +78,7 @@ def _check_redis_queue() -> None:
                 "P1",
                 "Redis Queue CRITICAL",
                 f"Queue 적재량 *{queue_size:,}* (임계값 {config.REDIS_QUEUE_CRITICAL:,} / 85%)\n"
-                f"데이터 유실 위험 — MAX_QUEUE_SIZE 초과 임박",
+                f"Queue 상한 도달 시 신규 참여 접수 거부 임박",
             )
             logger.warning("P1 redis_queue CRITICAL size=%d", queue_size)
         reset_alert("redis_queue_warning")
