@@ -1,6 +1,6 @@
 # 코드 심층 분석 — 면접 대비
 
-> **2026-05 시점 기록:** 현재 제거된 `PendingRecoveryJobConfig`와 초기 모니터링 구성을 포함한다. 현행 구조는 루트 `ARCHITECTURE.md`, `docs/current/reliability-improvements.md`, 최신 날짜별 검증 보고서를 기준으로 한다.
+> **2026-05 시점 기록:** 현재 제거된 `PendingRecoveryJobConfig`와 초기 모니터링 구성을 포함한다. 구조는 루트 `ARCHITECTURE.md`와 현재 코드를 기준으로 확인한다. 후속 개선·검증 기록은 `docs/README.md`에서 찾을 수 있다.
 >
 > 이 문서는 1Million Campaign Orchestration System의 핵심 코드를 컴포넌트별로 분석한 면접 준비 자료입니다.
 > 실제 코드를 기반으로 "왜 이렇게 구현했는가"를 설명할 수 있도록 정리했습니다.

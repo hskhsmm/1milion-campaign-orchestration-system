@@ -3,7 +3,7 @@
 #
 # 배경: 기존 AMI(ami-01c64e7a84a57e681)에 restart=unless-stopped인 구버전 앱 컨테이너가 구워져 있어
 # 새 인스턴스 부팅 시 자동 기동되고 active:campaigns를 조작했다
-# (docs/current/2026-09-28-150m-reproduction-set-removal-trace.md).
+# (docs/reports/2026-09-28-zombie-container-root-cause.md).
 #
 # 절차:
 #   1. Launch Template(batch-kafka-app-lt, $Latest)에 boothook이 들어 있는지 확인

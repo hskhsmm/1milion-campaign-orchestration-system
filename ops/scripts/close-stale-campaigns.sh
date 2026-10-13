@@ -3,7 +3,7 @@
 #
 # 배경: 과거 테스트 캠페인(1,2,3,8,9,13~19,25~54 등)이 DB에 OPEN으로 남아 있어, AMI 구버전 컨테이너의
 # StockRecoveryScheduler가 부팅마다 Redis 재고·active Set을 되살렸다
-# (docs/current/2026-09-28-150m-reproduction-set-removal-trace.md §5.3). 구버전 제거와 별개로
+# (docs/reports/2026-09-28-zombie-container-root-cause.md §5.3). 구버전 제거와 별개로
 # 정합성 검사 대상·Set 순회 비용을 줄이기 위해 정리한다. 재고(current_stock)는 기록 보존을 위해 건드리지 않는다.
 #
 # 실행 위치: 앱 ASG 인스턴스 1대 (RDS 접근 가능한 SG). SSM으로 mysql:8.4 컨테이너를 띄워 실행한다.

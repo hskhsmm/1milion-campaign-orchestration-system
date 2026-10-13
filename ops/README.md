@@ -71,7 +71,7 @@ make redis-exporter
 | `close-stale-campaigns.sh` | DB에 OPEN으로 남은 과거 캠페인 조회 / CLOSED 처리 (`MAX_ID` 필수) | `CONFIRM=yes`일 때 DB UPDATE |
 | `terraform-alb.sh` | env-up/down에서 저장된 Terraform plan의 변경 대상을 검사한 뒤 적용 | ALB·Listener 생성/삭제, 기동 시 MCP의 ALB 조회 IAM 정책 생성 |
 
-배경: `docs/current/2026-09-28-150m-reproduction-set-removal-trace.md`, `docs/current/2026-10-03-ami-baked-container-remediation.md`
+배경: `docs/reports/2026-09-28-zombie-container-root-cause.md`, `docs/reports/2026-10-03-ami-container-remediation.md`
 
 ## CodeDeploy 애플리케이션 배포 흐름
 

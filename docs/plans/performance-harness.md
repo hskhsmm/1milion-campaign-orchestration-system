@@ -18,7 +18,7 @@
 
 | 층 | 역할 | 우선 재사용할 자산 |
 | --- | --- | --- |
-| 작업 계약 | 에이전트·개발자가 같은 원칙과 안전 경계를 따름 | 저장소 루트의 짧은 `AGENTS.md`(추가 예정), `ARCHITECTURE.md`, 이 문서 |
+| 작업 계약 | 에이전트·개발자가 같은 원칙과 안전 경계를 따름 | 저장소 루트의 짧은 `AGENTS.md`, `docs/README.md`, `ARCHITECTURE.md`, 이 문서 |
 | 실행 | 환경 점검, smoke, 부하, drain, 정합성 순서를 고정 | `ops/Makefile`, `stress-test/run-test.sh`, `stress-test/TEST_GUIDE.md` |
 | 증거 | k6·Prometheus·CloudWatch·AWS 상태를 같은 시간축으로 수집 | Grafana 대시보드, Prometheus, AWS CLI/SSM |
 | 판정 | 수치와 실패 이유를 남기고 이전 실행과 비교 | 실행별 manifest·요약 리포트·raw artifact(추가 예정) |
@@ -173,7 +173,7 @@ Kafka는 **전혀 Terraform에 없는 상태가 아니다.** `infra/ec2.tf`가 �
 ## 참고
 
 - 프로젝트 [이슈 #95](https://github.com/hskhsmm/1milion-campaign-orchestration-system/issues/95)
-- `docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md`
+- `docs/reports/2026-09-20-aws-recovery-150m-validation.md`
 - `stress-test/TEST_GUIDE.md`, `stress-test/run-test.sh`
 - `ops/README.md`, `infra/asg.tf`
 - `infra/ec2.tf`, `ops/playbooks/env-up.yml`, `ops/playbooks/env-down.yml`
