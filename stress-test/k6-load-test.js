@@ -6,6 +6,7 @@ import exec from 'k6/execution';
 // 커스텀 메트릭
 const successCount = new Counter('participation_success');
 const failCount = new Counter('participation_fail');
+const serverErrorCount = new Counter('participation_5xx');
 
 // 환경변수로부터 설정 읽기
 const DURATION = parseInt(__ENV.DURATION) || 10;     // 테스트 지속 시간 (초)
@@ -32,6 +33,7 @@ export const options = {
     http_req_duration: ['p(95)<1000'],        // p95 1초 미만
     participation_success: [`count==${TOTAL_REQUESTS}`],
     participation_fail: ['count==0'],
+    participation_5xx: ['count==0'],
   },
 };
 
@@ -72,6 +74,8 @@ export default function () {
   } else {
     failCount.add(1);
   }
+  // Counter에 0도 기록해야 5xx가 없는 실행에서 지표와 threshold가 생성된다.
+  serverErrorCount.add(response.status >= 500 && response.status <= 599 ? 1 : 0);
 
   // 과도한 stdout I/O가 부하 발생기 처리량을 왜곡하지 않도록 드물게 샘플링한다.
   if (LOG_EVERY > 0 && exec.scenario.iterationInTest % LOG_EVERY === 0) {

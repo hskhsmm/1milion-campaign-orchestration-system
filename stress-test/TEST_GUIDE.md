@@ -159,7 +159,7 @@ ALB 조회 IAM 정책을 아직 적용하지 못했다면, 위 실행 전에 운
 
 | 구간 | 통과 조건 |
 | --- | --- |
-| API | 202 성공 1,500,000건, 5xx 0건 |
+| API | `participation_success=1,500,000`, `participation_5xx=0`, `participation_fail=0` |
 | Redis | 재고 0, 실제 Queue LLEN 0 |
 | Bridge/Kafka | publish 종료 후 consumer lag 0 |
 | DB | `successCount=1,500,000`, `failCount=0` |
@@ -231,7 +231,7 @@ bash ./run-test.sh prod capacity
 다음 조건을 모두 만족하는 가장 높은 목표 RPS를 운영 가능 처리량으로 본다.
 
 1. `dropped_iterations=0`
-2. 5xx 비율 `< 1%`
+2. 참여 API의 `participation_5xx=0` (별도로 전체 HTTP `http_req_failed` 비율도 확인)
 3. API p95 `< 1초` 또는 별도로 정한 SLO 충족
 4. 정상 상태 CPU가 목표 상한 이내이며 scale-out 후 다시 안정화
 5. Redis Queue 기울기가 steady 구간에서 계속 증가하지 않음

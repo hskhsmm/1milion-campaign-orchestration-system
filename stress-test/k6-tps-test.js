@@ -32,6 +32,7 @@ const acceptedCount = new Counter('participation_accepted_202');
 const rejectedCount = new Counter('participation_rejected_400');
 const rateLimitCount = new Counter('participation_rate_limited_429');
 const errorCount   = new Counter('participation_error');
+const serverErrorCount = new Counter('participation_5xx');
 const apiDuration  = new Trend('api_duration_ms', true);
 
 // 환경변수
@@ -95,6 +96,7 @@ export const options = {
     http_req_failed: [`rate<${MAX_FAIL_RATE}`],
     dropped_iterations: ['count==0'],
     participation_accepted_202: ['count>0'],
+    participation_5xx: ['count==0'],
   },
 };
 
@@ -132,6 +134,8 @@ export default function (data) {
   apiDuration.add(Date.now() - start);
 
   check(res, { '202 Accepted': (r) => r.status === 202 });
+  // setup/teardown 요청을 제외한 참여 API의 5xx만 별도로 센다.
+  serverErrorCount.add(res.status >= 500 && res.status <= 599 ? 1 : 0);
 
   if      (res.status === 202) acceptedCount.add(1);
   else if (res.status === 400) rejectedCount.add(1);
