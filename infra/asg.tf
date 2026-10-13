@@ -127,3 +127,41 @@ resource "aws_autoscaling_policy" "cpu_target_tracking" {
     disable_scale_in = true # 스케일인 비활성화 — 수동으로만 축소
   }
 }
+
+# ──────────────────────────────────────────
+# Step Scaling (CPU 80% 2분 연속 → +1)
+# ──────────────────────────────────────────
+# Target Tracking 알람은 1분 데이터 3개 연속(실측 감지 약 5분 47초)으로 고정이라 순간 폭주를 못 따라간다.
+# 1분 평균 80% 이상이 2번 연속이면 일시 피크가 아닌 지속 부하로 보고 즉시 1대 증설한다.
+resource "aws_autoscaling_policy" "cpu_spike_step" {
+  name                    = "batch-kafka-app-cpu-spike-step"
+  autoscaling_group_name  = aws_autoscaling_group.app.name
+  policy_type             = "StepScaling"
+  adjustment_type         = "ChangeInCapacity"
+  metric_aggregation_type = "Average"
+
+  step_adjustment {
+    scaling_adjustment          = 1
+    metric_interval_lower_bound = 0
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "app_cpu_spike" {
+  alarm_name          = "batch-kafka-app-cpu-spike"
+  alarm_description   = "앱 ASG 평균 CPU 80% 이상 2분 연속 → Step Scaling +1"
+  namespace           = "AWS/EC2"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 80
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "missing"
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.app.name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.cpu_spike_step.arn]
+}
