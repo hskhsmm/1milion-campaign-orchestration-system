@@ -39,7 +39,7 @@ resource "aws_lb_target_group" "api_8080" {
     path                = "/actuator/health"
     protocol            = "HTTP"
     port                = "traffic-port"
-    interval            = 10 # healthy 판정 10s x 2 = 20초 (기존 30s x 5 = 150초)
+    interval            = 10 # 헬스 체크 간격. 신규 타깃은 첫 성공 체크 후 트래픽 대상이 되며, unhealthy 타깃 복구에는 연속 성공 체크 2회가 필요
     timeout             = 5
     healthy_threshold   = 2
     unhealthy_threshold = 5 # unhealthy 판정 약 50초 유지 (기존 60초) — 고부하 시 오탐 교체 방지

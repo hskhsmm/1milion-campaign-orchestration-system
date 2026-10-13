@@ -16,7 +16,7 @@
 |---|---|
 | Launch Template에 상세 모니터링이 없어 EC2 CPU가 **5분 단위**로만 발행 | `asg.tf` (`monitoring` 블록 없음) |
 | Target Tracking 알람은 **1분 데이터 3개 연속** 초과가 고정 조건 | 알람 `Period=60, EvaluationPeriods=3` |
-| 타깃 그룹 healthy 판정 `interval 30 × healthy_threshold 5` = **150초** | `alb.tf` |
+| 타깃 그룹 헬스 체크 간격 **30초**. 신규 타깃은 첫 성공 체크 후 트래픽 대상이 됨 | `alb.tf` |
 
 ---
 
@@ -25,7 +25,7 @@
 | 커밋 | 변경 | 기대 효과 |
 |---|---|---|
 | `2c99bff` | Launch Template `monitoring { enabled = true }` | CPU 지표 5분 → 1분 |
-| `2c99bff` | TG health check `interval 10`, `healthy_threshold 2` | healthy 판정 150초 → 20초 |
+| `2c99bff` | TG health check `interval 10`, `healthy_threshold 2` | 신규 타깃은 첫 성공 체크 후 트래픽 대상이 되므로 첫 체크까지 대기가 최대 30초 → 10초. unhealthy 타깃 복구에는 10초 간격의 연속 성공 체크 2회 필요 |
 | `2c99bff` | TG `unhealthy_threshold 2 → 5` | unhealthy 판정 60초 → 50초로 유지. interval만 줄이면 20초가 되어 고부하 시 `/actuator/health` 지연으로 오탐 교체될 위험이 있어 같이 조정 |
 | `2c99bff` | ASG `default_instance_warmup = 150` | 부팅·배포 중 신규 인스턴스 CPU를 평균에서 제외 |
 | `040bc34` | Step Scaling 정책 + 알람 `batch-kafka-app-cpu-spike` (ASG 평균 CPU **≥80%, 1분 × 2회 연속** → +1) | 순간 폭주 감지 단축. 기존 Target Tracking(60%)은 유지 |
@@ -75,7 +75,7 @@ Step Scaling 기준을 "60% 1회"가 아닌 "80% 2회 연속"으로 정한 이�
 - 2차는 1차보다 **2분 26초 빨리 투입**됐다. [확정]
 - 1차는 종료 약 30초 전에 투입돼 사실상 효과가 없었고, 2차는 약 2분 반 동안 부하를 나눠 받았다. [확정]
 - 2차에서 TT 알람은 끝까지 OK였다. Step이 먼저 증설해 desired=max가 됐기 때문이다. [확정]
-- healthy 판정 단축 효과: 알람 → healthy가 약 2분 32초에서 1분 38~48초로 줄었다. [확정]
+- 관측된 알람 → InService 및 TG healthy 시간: 약 2분 32초에서 1분 38~48초로 줄었다. [확정] 이 중 health check 변경 몫은 최대 20초 수준이고, 나머지는 CodeDeploy 시간 차이(9/25 약 2분 반, 이번 1분 25초)로 보인다. 1차에서 CodeDeploy 완료(11:06:32) 4초 뒤 이미 healthy였다. [추정]
 
 ### 3.2 ASG 평균 CPU (CloudWatch 1분, %)
 
