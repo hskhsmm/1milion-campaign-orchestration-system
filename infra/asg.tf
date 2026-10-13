@@ -30,6 +30,11 @@ resource "aws_launch_template" "app" {
     name = aws_iam_instance_profile.batch_kafka_app.name
   }
 
+  # 상세 모니터링: EC2 CPU를 1분 단위로 발행 (기본 5분 → 알람 평가가 수 분 지연됨)
+  monitoring {
+    enabled = true
+  }
+
   network_interfaces {
     associate_public_ip_address = true
     security_groups             = [aws_security_group.app.id]
@@ -65,6 +70,7 @@ resource "aws_autoscaling_group" "app" {
 
   health_check_type         = "ELB"
   health_check_grace_period = 180 # 앱 기동 시간 여유 (초)
+  default_instance_warmup   = 150 # 부팅+배포 약 2분 반 동안 신규 인스턴스 CPU를 평균에서 제외
   metrics_granularity       = "1Minute"
   enabled_metrics = [
     "GroupAndWarmPoolDesiredCapacity",
@@ -120,4 +126,42 @@ resource "aws_autoscaling_policy" "cpu_target_tracking" {
     target_value     = 60.0
     disable_scale_in = true # 스케일인 비활성화 — 수동으로만 축소
   }
+}
+
+# ──────────────────────────────────────────
+# Step Scaling (CPU 80% 2분 연속 → +1)
+# ──────────────────────────────────────────
+# Target Tracking 알람은 1분 데이터 3개 연속(실측 감지 약 5분 47초)으로 고정이라 순간 폭주를 못 따라간다.
+# 1분 평균 80% 이상이 2번 연속이면 일시 피크가 아닌 지속 부하로 보고 즉시 1대 증설한다.
+resource "aws_autoscaling_policy" "cpu_spike_step" {
+  name                    = "batch-kafka-app-cpu-spike-step"
+  autoscaling_group_name  = aws_autoscaling_group.app.name
+  policy_type             = "StepScaling"
+  adjustment_type         = "ChangeInCapacity"
+  metric_aggregation_type = "Average"
+
+  step_adjustment {
+    scaling_adjustment          = 1
+    metric_interval_lower_bound = 0
+  }
+}
+
+resource "aws_cloudwatch_metric_alarm" "app_cpu_spike" {
+  alarm_name          = "batch-kafka-app-cpu-spike"
+  alarm_description   = "앱 ASG 평균 CPU 80% 이상 2분 연속 → Step Scaling +1"
+  namespace           = "AWS/EC2"
+  metric_name         = "CPUUtilization"
+  statistic           = "Average"
+  period              = 60
+  evaluation_periods  = 2
+  datapoints_to_alarm = 2
+  threshold           = 80
+  comparison_operator = "GreaterThanOrEqualToThreshold"
+  treat_missing_data  = "missing"
+
+  dimensions = {
+    AutoScalingGroupName = aws_autoscaling_group.app.name
+  }
+
+  alarm_actions = [aws_autoscaling_policy.cpu_spike_step.arn]
 }
