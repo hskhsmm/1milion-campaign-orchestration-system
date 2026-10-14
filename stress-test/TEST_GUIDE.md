@@ -27,11 +27,12 @@
 | `k6-sync-test.js` | 제거된 v1 동기 API 비교용 보관 스크립트, 실행 금지 |
 | `k6-bulk-test.js` | 제거된 v1 bulk API 비교용 보관 스크립트, 실행 금지 |
 
-실험 조건과 결과는 기존 `run-test.sh` 실행 절차에 맞춰 보관한다. k6 요약 JSON이 필요하면 실행 전에 `evidence/<실행 ID>/`를 만들고, k6 기본 제공 환경변수를 사용한다.
+실험 조건과 결과는 기존 `run-test.sh` 실행 절차에 맞춰 보관한다. k6 요약 JSON이 필요하면 실행마다 고유한 ID로 `evidence/` 아래 디렉터리를 만들고, k6 기본 제공 환경변수를 사용한다.
 
 ```bash
-mkdir -p evidence/<실행 ID>
-K6_SUMMARY_EXPORT=evidence/<실행 ID>/k6-summary.json \
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "evidence/$RUN_ID"
+K6_SUMMARY_EXPORT="evidence/$RUN_ID/k6-summary.json" \
 K6_SUMMARY_TREND_STATS='avg,min,med,max,p(90),p(95),p(99)' \
 bash ./run-test.sh local integrity
 ```
