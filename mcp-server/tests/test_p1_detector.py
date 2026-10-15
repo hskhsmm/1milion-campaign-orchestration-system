@@ -1,4 +1,5 @@
 import os
+import re
 import sys
 import unittest
 from pathlib import Path
@@ -9,12 +10,27 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from detectors import p1_detector  # noqa: E402
 
+REDIS_STOCK_SERVICE = (
+    Path(__file__).resolve().parents[2]
+    / "app/campaign-core/src/main/java/io/eventdriven/campaign/application/service/RedisStockService.java"
+)
+
+
+def read_app_max_queue_size():
+    source = REDIS_STOCK_SERVICE.read_text(encoding="utf-8")
+    match = re.search(r"\bMAX_QUEUE_SIZE\s*=\s*([\d_]+)L?\s*;", source)
+    if match is None:
+        raise AssertionError(f"MAX_QUEUE_SIZE 선언을 찾지 못함: {REDIS_STOCK_SERVICE}")
+    return int(match.group(1).replace("_", ""))
+
 
 class RedisQueueThresholdTest(unittest.TestCase):
 
     def test_thresholds_match_app_queue_limit(self):
-        self.assertEqual(1_750_000, p1_detector.config.REDIS_QUEUE_WARNING)
-        self.assertEqual(2_125_000, p1_detector.config.REDIS_QUEUE_CRITICAL)
+        max_queue_size = read_app_max_queue_size()
+
+        self.assertEqual(max_queue_size * 70 // 100, p1_detector.config.REDIS_QUEUE_WARNING)
+        self.assertEqual(max_queue_size * 85 // 100, p1_detector.config.REDIS_QUEUE_CRITICAL)
 
     @patch.object(p1_detector, "reset_alert")
     @patch.object(p1_detector, "send_alert")

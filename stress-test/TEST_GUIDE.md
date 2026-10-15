@@ -231,6 +231,8 @@ bash ./run-test.sh prod capacity
 
 탐색 단계에서는 각 목표 RPS의 실제 도착률, `dropped_iterations`, 참여 API의 `participation_5xx`와 타임아웃·연결 실패(`http_req_failed`), API p95/p99, Redis Queue 기울기·drain 시간, Kafka lag, DB commit TPS, CPU·Hikari pending을 **관측값**으로 남긴다. 부하 발생기가 목표를 못 냈다면 그 RPS에서 시스템이 성공 또는 실패했다고 단정하지 않는다. Queue가 계속 증가하거나 DB 반영률이 접수률을 따라가지 못하면 그 RPS를 지속 가능하다고 부르지 않는다.
 
+`participation_5xx`는 응답 상태 500~599만 센다. 타임아웃·연결 실패는 상태 0이라 포함되지 않으므로 5xx 0건이 오류 없음을 뜻하지 않는다. `http_req_failed`와 예상 밖 응답도 함께 확인한다.
+
 현재 스크립트의 `P95_MS=1000`, `MAX_FAIL_RATE=0.01`은 k6 실행용 기본 threshold이지 검증된 운영 SLO나 안전 한계가 아니다. `http_req_duration`은 참여 API의 202만 따로 집계한 값도 아니다. threshold 위반과 최종 시스템 판정을 동일시하지 않는다.
 
 "지속 가능한 처리량"을 확정하려면 먼저 목표 지연·오류율과 관측 구간을 합의한 뒤, 같은 조건에서 반복한다. 목표 부하가 실제로 생성되고(`dropped_iterations=0`), 합의한 지연·오류 기준을 지키며, 안정 구간의 Queue·lag가 발산하지 않고 DB 처리량이 접수량을 따라가고, 종료 후 drain·정합성이 확인된 **가장 높은 검증 RPS**만 그렇게 부른다. 이 조건이나 증거가 부족하면 `미확정`으로 남긴다. Redis Queue의 250만 건 상한 또는 70%·85% 알림값을 성능 합격선으로 사용하지 않는다.
