@@ -3,7 +3,7 @@
 #
 # 앱 AMI(ami-01c64e7a84a57e681)에는 restart=unless-stopped인 구버전 앱 컨테이너가 구워져 있어,
 # 새 인스턴스가 부팅하면 dockerd가 이 컨테이너를 자동 기동하고 CodeDeploy가 교체하기 전까지
-# prod Redis/DB에 붙어 active:campaigns를 조작한다 (docs/current/2026-09-28-150m-reproduction-set-removal-trace.md).
+# prod Redis/DB에 붙어 active:campaigns를 조작한다 (docs/reports/2026-09-28-zombie-container-root-cause.md).
 # dockerd가 뜨기 전에 남아 있는 컨테이너의 restart 정책을 "no"로 바꿔 자동 기동을 막는다.
 # 남은 컨테이너 삭제는 docker가 뜬 뒤 app-user-data.sh에서 한다.
 #

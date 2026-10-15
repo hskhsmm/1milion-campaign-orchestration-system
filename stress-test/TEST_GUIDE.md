@@ -27,6 +27,18 @@
 | `k6-sync-test.js` | 제거된 v1 동기 API 비교용 보관 스크립트, 실행 금지 |
 | `k6-bulk-test.js` | 제거된 v1 bulk API 비교용 보관 스크립트, 실행 금지 |
 
+실험 조건과 결과는 기존 `run-test.sh` 실행 절차에 맞춰 보관한다. k6 요약 JSON이 필요하면 실행마다 고유한 ID로 `evidence/` 아래 디렉터리를 만들고, k6 기본 제공 환경변수를 사용한다.
+
+```bash
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+mkdir -p "evidence/$RUN_ID"
+K6_SUMMARY_EXPORT="evidence/$RUN_ID/k6-summary.json" \
+K6_SUMMARY_TREND_STATS='avg,min,med,max,p(90),p(95),p(99)' \
+bash ./run-test.sh local integrity
+```
+
+`evidence/`는 Git에서 제외된다. 이 JSON은 실행 전체의 k6 집계이며 안정 구간만의 지연이나 Redis Queue·Kafka lag·DB 정합성을 대신하지 않는다. 실환경 테스트는 아래 사전 점검을 거쳐 별도로 시작한다.
+
 ## 3. 공통 사전 점검
 
 ### 3.1 환경 기동
@@ -148,7 +160,7 @@ ALB 조회 IAM 정책을 아직 적용하지 못했다면, 위 실행 전에 운
 
 | 구간 | 통과 조건 |
 | --- | --- |
-| API | 202 성공 1,500,000건, 5xx 0건 |
+| API | `participation_success=1,500,000`, `participation_5xx=0`, `participation_fail=0` |
 | Redis | 재고 0, 실제 Queue LLEN 0 |
 | Bridge/Kafka | publish 종료 후 consumer lag 0 |
 | DB | `successCount=1,500,000`, `failCount=0` |
@@ -220,7 +232,7 @@ bash ./run-test.sh prod capacity
 다음 조건을 모두 만족하는 가장 높은 목표 RPS를 운영 가능 처리량으로 본다.
 
 1. `dropped_iterations=0`
-2. 5xx 비율 `< 1%`
+2. 참여 API의 `participation_5xx=0` (별도로 전체 HTTP `http_req_failed` 비율도 확인)
 3. API p95 `< 1초` 또는 별도로 정한 SLO 충족
 4. 정상 상태 CPU가 목표 상한 이내이며 scale-out 후 다시 안정화
 5. Redis Queue 기울기가 steady 구간에서 계속 증가하지 않음

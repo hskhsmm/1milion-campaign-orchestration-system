@@ -11,6 +11,10 @@
 [![Terraform](https://img.shields.io/badge/Terraform-IaC-purple.svg)](https://www.terraform.io/)
 [![AWS](https://img.shields.io/badge/AWS-ASG%2FALB%2FRDS-orange.svg)](https://aws.amazon.com/)
 
+문서별 읽는 순서는 [문서 안내](docs/README.md)에서 찾을 수 있습니다.
+
+이 README에는 프로젝트 발전 과정의 실험·설계 기록도 포함됩니다. 현재 코드 구조는 [짧은 아키텍처 안내](ARCHITECTURE.md), 실제 운영 절차는 [운영 가이드](ops/README.md)를 기준으로 확인하세요.
+
 ---
 
 ## 목차
@@ -63,7 +67,7 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
 | v1 대비 TPS 향상 | **246 → 3,737 (약 15배)** |
 | 장애 테스트 | **7종 장애 시나리오 실행·복구 검증** |
 
-> 2026-09-20 ASG 3대 재검증에서는 API 1분 rate 피크 `5,336/s`, Bridge 피크 `4,546/s`, Consumer DB 성공 경로 피크 `4,518/s`를 각각 관측했다. 이는 서로 다른 시점의 피크이며 지속 가능한 end-to-end TPS를 의미하지 않는다. 상세 조건과 해석은 [`docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md`](docs/current/2026-09-20-aws-recovery-and-1.5m-validation.md)를 참조한다.
+> 2026-09-20 ASG 3대 재검증에서는 API 1분 rate 피크 `5,336/s`, Bridge 피크 `4,546/s`, Consumer DB 성공 경로 피크 `4,518/s`를 각각 관측했다. 이는 서로 다른 시점의 피크이며 지속 가능한 end-to-end TPS를 의미하지 않는다. 상세 조건과 해석은 [150만 건 AWS 복구·재검증 보고서](docs/reports/2026-09-20-aws-recovery-150m-validation.md)를 참조한다.
 
 ---
 
