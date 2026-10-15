@@ -37,7 +37,7 @@ K6_SUMMARY_TREND_STATS='avg,min,med,max,p(90),p(95),p(99)' \
 bash ./run-test.sh local integrity
 ```
 
-`evidence/`는 Git에서 제외된다. 이 JSON은 실행 전체의 k6 집계이며 안정 구간만의 지연이나 Redis Queue·Kafka lag·DB 정합성을 대신하지 않는다. 실환경 테스트는 아래 사전 점검을 거쳐 별도로 시작한다.
+`evidence/`는 Git에서 제외된다. 이 JSON은 실행 전체의 k6 집계이며 안정 구간만의 지연이나 Redis Queue·Kafka lag·DB 정합성을 대신하지 않는다. 실환경 실행에서 함께 모을 증거와 판정 규칙은 8장에 있다. 실환경 테스트는 아래 사전 점검을 거쳐 별도로 시작한다.
 
 ## 3. 공통 사전 점검
 
@@ -280,9 +280,100 @@ sum(rate(consumer_db_commit_batch_size_count[1m]))
 
 앱 EC2를 추가하면 API와 Bridge의 CPU 여유는 늘어날 가능성이 높다. 하지만 Kafka 파티션은 10개이므로 Consumer 병렬성과 DB 처리량은 선형으로 증가하지 않는다.
 
-## 8. 테스트 종료
+## 8. 실행 기록과 판정
 
-최종 Queue와 DB 정합성을 확인한 뒤 환경을 내린다.
+실환경 실행마다 조건과 증거를 운영 PC 저장소 루트의 `evidence/<RUN_ID>/` 하나에 모은다. 증거는 환경을 내리기 전에 모은다. `make env-down` 뒤에는 Redis 잔량, 최종 DB 건수, 앱 인스턴스 로그를 다시 확인할 수 없다.
+
+```bash
+# 운영 PC, 저장소 루트
+RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
+EVID="evidence/$RUN_ID"
+mkdir -p "$EVID"
+```
+
+부하 발생기(terraform-mcp)의 `run-test.sh`에도 같은 `RUN_ID`를 써서 `K6_SUMMARY_EXPORT`를 지정한다(2장).
+
+### 8.1 실행 조건
+
+`$EVID/manifest.md`에 아래 항목을 채운다. 두 실행을 비교할 때 이 파일끼리 대조한다.
+
+```text
+RUN_ID:
+시작·종료 시각(KST):
+모드: integrity | capacity        비교 대상 RUN_ID:
+바꾼 변수(한 가지):
+앱 이미지 태그(SSM /batch-kafka/prod/ECR_IMAGE), Launch Template 버전:
+부하 발생기 위치, k6 스크립트 커밋(git rev-parse HEAD):
+캠페인 ID, 재고, TOTAL_REQUESTS 또는 RPS 단계·유지 시간, VU:
+ASG min/desired/max, InService 수, 인스턴스 타입:
+Kafka 파티션 수, RDS·Redis 사양, 로그 수준:
+실행 중 변경(scale-out 시각, 배포, 설정 변경. 없으면 "없음"):
+```
+
+### 8.2 수집할 증거
+
+| 파일 | 내용 | 수집 방법 | integrity | capacity |
+| --- | --- | --- | --- | --- |
+| `manifest.md` | 실행 조건 | 8.1 | 필수 | 필수 |
+| `k6-summary.json`, `k6-run.log` | k6 집계와 콘솔 출력 | 부하 발생기에서 `K6_SUMMARY_EXPORT`, `run-test.sh ... 2>&1 \| tee` 후 운영 PC로 옮김 | 필수 | 필수 |
+| `status.json` | 상태 API의 `successCount`·`failCount`·재고 | 4.4의 status `curl` 출력 저장 | 필수 | 필수 |
+| `redis-watch.log` | `LLEN`, `SISMEMBER active:campaigns`, 재고의 1초 단위 기록 | 부하 전 `./ops/scripts/redis-watch-start.sh <id>`, drain 후 `./ops/scripts/redis-watch-fetch.sh --stop "$EVID"` | 필수 | 필수 |
+| `kafka-lag.json` | consumer group lag | Prometheus `sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})` 조회 결과 | 필수 | 필수 |
+| `db-counts.txt` | SUCCESS 건수, sequence·user 중복 | 4.4의 DB 직접 검증 SQL 결과 저장 | 필수 | 필수 |
+| `consistency.json` | 정합성 dry-run 결과(`anomalyCount`) | `POST /api/admin/consistency-recovery`(`dryRun=true`, `autoFix=false`, `campaignId`) 후 `GET .../executions/<id>` 응답 저장 | 필수 | 필수 |
+| `prometheus/*.json` | 안정 구간의 Queue size, lag, DB committed TPS, CPU 시계열 | Prometheus `query_range` 결과. 쿼리·구간·step을 파일에 같이 남김 | 선택 | 필수 |
+| `app-*.log`, `app-*.meta` | 인스턴스별 앱 로그, 컨테이너 이미지·시작 시각 | `./ops/scripts/collect-app-logs.sh "$EVID"` | 필수 | 필수 |
+| `verdict.md` | 판정, 근거 파일, 빠진 증거 | 8.3 | 필수 | 필수 |
+
+- Redis는 Grafana Gauge가 아니라 `redis-watch.log`의 원본 `LLEN`으로 판정한다(4.4).
+- DB 건수는 `consumer_db_committed_total`이 아니라 `participation_history` 직접 조회로 판정한다(6장).
+- 수치를 남길 때 원본 쿼리, 집계 구간, 단위, 인스턴스별·전역 집계 방식을 같이 적어 다시 계산할 수 있게 한다.
+- 비밀값, 접속 정보, 개인 식별자, 대량 원본 이벤트는 저장하지 않는다.
+
+### 8.3 판정
+
+`verdict.md`에는 PASS, FAIL, INCONCLUSIVE 중 하나와 근거 파일을 적는다.
+
+| 판정 | 조건 |
+| --- | --- |
+| FAIL | 수집한 증거 중 하나라도 4.4(integrity) 또는 5.2(capacity) 기준을 만족하지 않음 |
+| INCONCLUSIVE | 실패는 없지만 아래 중 하나에 해당 |
+| PASS | 8.2의 필수 증거가 모두 있고, 모두 기준을 만족 |
+
+INCONCLUSIVE 조건:
+
+- 필수 증거가 하나라도 없음. 특히 Redis·Kafka·DB·정합성 같은 후단 증거가 없음
+- 고정 용량 비교 실행인데 scale-out이 일어났거나, 실행 중 배포·설정이 바뀜
+- `dropped_iterations > 0`이거나 k6가 목표 요청 수·RPS를 내지 못함
+- 판정에 필요한 지표가 수집 구간에서 비어 있음
+
+규칙:
+
+- k6 결과만으로 PASS를 쓰지 않는다. `202`는 Redis Queue 적재까지만 보여 준다.
+- INCONCLUSIVE를 보고서에서 PASS나 FAIL로 바꿔 쓰지 않는다. 결론이 필요하면 조건을 맞춰 다시 실행한다.
+- `k6-summary.json`의 threshold 값은 `true`가 기준 위반이다.
+
+### 8.4 두 실행 비교
+
+1. 두 `manifest.md`를 대조한다. 의도한 변수 하나 외에 다른 조건이 다르면 비교하지 않는다.
+2. 두 실행 모두 비교에 쓸 지표의 증거가 있어야 한다. 어느 한쪽이 INCONCLUSIVE이면 그 사유가 비교 지표와 무관할 때만 비교한다.
+3. 같은 조건을 두 번 이상 반복해 변동폭을 확인한다. 두 실행의 차이가 변동폭 안이면 "차이 없음"으로 기록한다.
+4. 같은 길이의 안정 구간끼리 비교한다. 서로 다른 시점의 peak를 합쳐 하나의 처리량으로 쓰지 않는다.
+5. 결과는 아래 표로 남긴다. 모든 값에 출처 파일을 적는다.
+
+| 지표 | 실행 A | 실행 B | 차이 | 출처 |
+| --- | --- | --- | --- | --- |
+| 안정 구간 202 p95 / p99 | | | | `k6-summary.json` 또는 `prometheus/` |
+| `dropped_iterations`, `participation_5xx`, `http_req_failed` | | | | `k6-summary.json` |
+| Redis Queue 최대값, 안정 구간 기울기, drain 완료 시각 | | | | `redis-watch.log`, `prometheus/` |
+| Kafka lag 최대값 | | | | `kafka-lag.json`, `prometheus/` |
+| DB committed TPS(안정 구간) | | | | `prometheus/` |
+| 앱 CPU(인스턴스별) | | | | `prometheus/` |
+| 최종 DB 건수, 중복, `anomalyCount` | | | | `db-counts.txt`, `consistency.json` |
+
+## 9. 테스트 종료
+
+8장의 증거 수집과 판정을 마친 뒤 환경을 내린다.
 
 ```bash
 cd /mnt/c/Users/user/Desktop/1milion-campaign-orchestration-system/ops
