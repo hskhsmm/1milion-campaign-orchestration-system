@@ -233,6 +233,7 @@ bash ./run-test.sh prod capacity
 
 1. `dropped_iterations=0`
 2. 참여 API의 `participation_5xx=0` (별도로 전체 HTTP `http_req_failed` 비율도 확인)
+   - `participation_5xx`는 응답 상태 500~599만 센다. 타임아웃·연결 실패는 상태 0이라 포함되지 않으므로 5xx 0건이 오류 없음을 뜻하지 않는다.
 3. API p95 `< 1초` 또는 별도로 정한 SLO 충족
 4. 정상 상태 CPU가 목표 상한 이내이며 scale-out 후 다시 안정화
 5. Redis Queue 기울기가 steady 구간에서 계속 증가하지 않음
