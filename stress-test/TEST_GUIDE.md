@@ -293,6 +293,20 @@ mkdir -p "$EVID"
 
 부하 발생기(terraform-mcp)의 `run-test.sh`에도 같은 `RUN_ID`를 써서 `K6_SUMMARY_EXPORT`를 지정한다(2장).
 
+실행 전 부하 발생기의 저장소가 테스트할 커밋과 같은지 확인한다. 부하 발생기 저장소는 자동으로 갱신되지 않아서 구버전 k6 스크립트로 실행될 수 있다.
+
+```bash
+# 운영 PC, 저장소 루트
+source ops/scripts/lib-ssm.sh
+ssm_run "$(mcp_instance_id)" 'd=/home/ssm-user/1milion-campaign-orchestration-system
+git -c safe.directory="$d" -C "$d" log --oneline -1
+md5sum "$d/stress-test/k6-load-test.js" "$d/stress-test/k6-tps-test.js" "$d/stress-test/run-test.sh"'
+md5 stress-test/k6-load-test.js stress-test/k6-tps-test.js stress-test/run-test.sh   # 로컬과 비교
+
+# 다르면 fast-forward로 맞춘다 (파일 소유자를 바꾸지 않도록 ssm-user로 실행)
+ssm_run "$(mcp_instance_id)" 'cd /home/ssm-user/1milion-campaign-orchestration-system && sudo -u ssm-user git pull --ff-only origin main'
+```
+
 ### 8.1 실행 조건
 
 `$EVID/manifest.md`에 아래 항목을 채운다. 두 실행을 비교할 때 이 파일끼리 대조한다.
@@ -330,6 +344,24 @@ Kafka 파티션 수, RDS·Redis 사양, 로그 수준:
 - 수치를 남길 때 원본 쿼리, 집계 구간, 단위, 인스턴스별·전역 집계 방식을 같이 적어 다시 계산할 수 있게 한다.
 - 비밀값, 접속 정보, 개인 식별자, 대량 원본 이벤트는 저장하지 않는다.
 
+수집 명령 (운영 PC, 저장소 루트, `source ops/scripts/lib-ssm.sh` 이후):
+
+```bash
+MCP=$(mcp_instance_id)
+R=/home/ssm-user/1milion-campaign-orchestration-system/stress-test/evidence/$RUN_ID
+
+# k6 결과: 부하 발생기에서 운영 PC로 가져온다.
+ssm_fetch "$MCP" "cat $R/k6-summary.json" "$EVID/k6-summary.json"
+ssm_fetch "$MCP" "cat $R/k6-run.log" "$EVID/k6-run.log"
+
+# Kafka lag: Prometheus는 terraform-mcp의 localhost:9090에 있다.
+LAG='sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})'
+ssm_run "$MCP" "curl -s -G localhost:9090/api/v1/query --data-urlencode 'query=$LAG'" > "$EVID/kafka-lag.json"
+# 구간 조회는 query_range에 start·end(UTC epoch)·step을 넣고, 같은 값을 prometheus/README.txt에 적는다.
+```
+
+DB 직접 조회는 전용 스크립트가 없다. `ops/scripts/close-stale-campaigns.sh`와 같은 방식으로 앱 인스턴스에서 `mysql:8.4` 컨테이너를 띄워 4.4의 SELECT만 실행하고, 실행 시각·인스턴스·SQL을 출력과 함께 `db-counts.txt`에 남긴다. 이 스크립트의 `CONFIRM=yes` 경로는 데이터를 바꾸므로 재사용하지 않는다.
+
 ### 8.3 판정
 
 `verdict.md`에는 PASS, FAIL, INCONCLUSIVE 중 하나와 근거 파일을 적는다.
@@ -352,6 +384,7 @@ INCONCLUSIVE 조건:
 - k6 결과만으로 PASS를 쓰지 않는다. `202`는 Redis Queue 적재까지만 보여 준다.
 - INCONCLUSIVE를 보고서에서 PASS나 FAIL로 바꿔 쓰지 않는다. 결론이 필요하면 조건을 맞춰 다시 실행한다.
 - `k6-summary.json`의 threshold 값은 `true`가 기준 위반이다.
+- `consistency.json`의 `anomalyCount`는 4.4 통과 조건에 포함되지 않는다. 이상이 있으면 유형(`anomalyType`)과 심각도(`severity`)를 `verdict.md`에 따로 적는다.
 
 ### 8.4 두 실행 비교
 
