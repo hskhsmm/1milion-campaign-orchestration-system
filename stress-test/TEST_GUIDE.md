@@ -352,7 +352,7 @@ Kafka 파티션 수, RDS·Redis 사양, 로그 수준:
 | `db-counts.txt` | SUCCESS 건수, sequence·user 중복 | 4.4의 DB 직접 검증 SQL 결과 저장 | 정합성 비교 시 필수 | 필수 |
 | `consistency.json` | 정합성 dry-run 결과(`anomalyCount`) | `POST /api/admin/consistency-recovery`(`dryRun=true`, `autoFix=false`, `campaignId`) 후 `GET .../executions/<id>` 응답 저장 | 필요 시 | 필수 |
 | `prometheus/*.json` | 안정 구간의 Queue size, DB committed TPS, CPU 등 시계열 | Prometheus `query_range` 결과. 쿼리·구간·step을 함께 기록 | 해당 지표 비교 시 필수 | capacity 검증 시 필수 |
-| `app-*.log`, `app-*.meta` | 인스턴스별 앱 로그, 컨테이너 이미지·시작 시각 | `./ops/scripts/collect-app-logs.sh "$EVID"` | 문제 분석 시 | 필수 |
+| `app-*.log`, `app-*.meta` | 인스턴스별 앱 로그, 컨테이너 이미지·시작 시각 | `./ops/scripts/collect-app-logs.sh "$EVID"` (하네스는 SSM 전송 시간 때문에 테스트 구간 ERROR/WARN/Exception만 `app-*.errwarn.log`로 수집한다. 전체 로그가 필요하면 이 스크립트를 따로 실행) | 문제 분석 시 | 필수 |
 | `verdict.md` | 판정, 근거 파일, 빠진 증거 | 8.3 | 필요 없음 | 필수 |
 
 - Redis는 Grafana Gauge가 아니라 `redis-watch.log`의 원본 `LLEN`으로 판정한다(4.4).

@@ -22,12 +22,12 @@
 
 ## 로컬 시험
 
-`python3 -m unittest discover -s stress-test/harness/tests` — 37개 통과 (Python 3.9.6).
+`python3 -m unittest discover -s stress-test/harness/tests` — 40개 통과 (Python 3.9.6).
 
 | 구분 | 시험 | 기대 |
 | --- | --- | --- |
 | 정상 | 10-17 capacity 500·750·1,000 RPS 실제 증거 | VALID, FAIL·INCONCLUSIVE 항목 0 |
-| 정상 | 10-17 `run.sh` integrity 1만 건 실제 증거 | PASS |
+| 정상 | 10-17 `run.sh` integrity 1만 건 실제 증거 (정합성 dry-run 포함) | PASS |
 | 과거 사건 | 부하 발생기 구버전 스크립트 (10-15 #105 검증) | FAIL (`pre_version`) |
 | 과거 사건 | AMI에 남은 구버전 컨테이너 ([AMI 후속 조치](2026-10-03-ami-container-remediation.md)) | FAIL (`pre_containers`) |
 | 과거 사건 | Gauge 0인데 실제 Queue 130만 건 고립 ([좀비 컨테이너](2026-09-28-zombie-container-root-cause.md), 재구성) | FAIL (`queue_final`) |
@@ -122,6 +122,26 @@ B와 D는 처음 실행할 때 장애 표시 기능이 없었다. 기능을 추�
 10-17 보고서 두 편은 증거를 손으로 계산해 썼다. 매번 같은 수치를 옮겨 적는 작업이 반복되고 옮겨 적기 오류 위험이 있어, 증거에서 수치 표를 만드는 `report.py`를 추가했다. `run.sh`가 판정 뒤 `report-draft.md`를 만든다. 해석·결론·한계는 쓰지 않는다.
 
 1,250 RPS 실행(H)으로 확인한 결과, 안정 구간 처리율(1,250.0 / 1,250.0 / 1,249.9건/s), 서버 p95/p99(5.4 / 11.8 ms), `LLEN` 평균·최대·기울기(60 / 793 / −0.021건/s), lag 최대(118)가 손으로 계산한 값과 같았다.
+
+## 새 에이전트 시험: 하네스를 스스로 찾아 쓰는가
+
+머지 후 "부하 테스트 해 줘" 요청에서 하네스가 실제로 쓰이는지 확인하려고, 하네스를 언급하지 않고 새 에이전트에게 "integrity 1만 건을 저장소 지침대로 실행하고 보고서를 써 달라"고만 요청했다(커밋·데이터 수정·env-down 금지).
+
+- 읽은 순서: `AGENTS.md` → `docs/README.md` → TEST_GUIDE 4.3·8장 → 하네스 README → 스크립트. `run.sh`로 실행했고 `run-test.sh`를 직접 실행하지 않았다.
+- 결과: PASS (RUN_ID `20261017T130330Z-integrity`, 캠페인 84). 1만 건 일치, 중복 0, drain 11초. 보고서 수치는 `report-draft.md` 표를 그대로 옮겼다(직접 계산 없음).
+- 비용: 약 10.5만 토큰, 도구 20회, 5분 30초.
+
+에이전트가 찾은 문제와 조치:
+
+| 문제 | 조치 |
+| --- | --- |
+| TEST_GUIDE 8.2는 최종 검증에 정합성 dry-run을 필수로 두는데 하네스는 없이 PASS를 냄 | `collect.sh`에 dry-run 수집 추가, 최종 검증에서 없으면 INCONCLUSIVE. 실환경 확인: `20261017T131338Z-harness-integrity-consistency` PASS, `anomalyCount 1`(`CLOSED_REDIS_RESIDUE`, WARNING)을 NOTE로 기록 |
+| 짧은 integrity(실제 부하 3초)에서 "안정 구간" 처리율·p95가 1분 평균으로 희석되고 Bridge 발행률이 0으로 나옴 | 구간이 60초 미만이면 `report.py`가 Prometheus 표를 만들지 않고 이유를 적음 |
+| 하네스를 실행한 커밋이 기록되지 않음 | `run.json`에 `harness_commit`, `harness_dirty` 기록 |
+| TEST_GUIDE 8.2의 앱 로그 전체 필수와 하네스 수집(ERROR/WARN만)이 다름 | 8.2에 하네스 수집 범위와 전체 로그가 필요할 때의 방법을 적음 |
+| 문서의 WSL 경로 전제(운영 PC는 macOS) | 이번 범위 밖. 후속 과제 |
+
+`CLOSED_REDIS_RESIDUE`는 10-15 #105 검증(캠페인 72)과 이번 실행에서 모두 정상 종료 캠페인에 나왔다. 의도된 동작인지 확인이 필요하다.
 
 ## 검증 상태
 

@@ -59,7 +59,7 @@ class NormalRunsTest(unittest.TestCase):
                 self.assertEqual([], bad)
 
     def test_normal_integrity_run_passes(self):
-        # 2026-10-17 run.sh로 실행한 integrity 1만 건(캠페인 79)의 실제 증거.
+        # 2026-10-17 run.sh로 실행한 integrity 1만 건의 실제 증거 (정합성 dry-run 포함).
         result = Run(FIXTURES / "normal-integrity-10k").judge()
         self.assertEqual("PASS", result["verdict"], result["checks"])
 
@@ -200,8 +200,21 @@ class FaultScenarioTest(unittest.TestCase):
     def test_final_capacity_with_met_criteria_passes(self):
         r = Run()
         r.edit_json("run.json", lambda d: d.update(purpose="final"))
+        # capacity 정상 fixture에는 정합성 dry-run이 없어 integrity fixture의 결과를 빌려 쓴다(판정 형식 확인용).
+        shutil.copy(FIXTURES / "normal-integrity-10k" / "consistency.json", r.dir / "consistency.json")
         (r.dir / "criteria.json").write_text('{"p95_ms": 1000, "max_fail_rate": 0.01}')
         self.assertEqual("PASS", r.judge()["verdict"])
+
+    def test_final_without_consistency_is_inconclusive(self):
+        # TEST_GUIDE 8.2: 최종 검증은 정합성 dry-run 결과가 필수 (10-17 에이전트 시험에서 빠진 것을 발견)
+        r = Run(FIXTURES / "normal-integrity-10k")
+        (r.dir / "consistency.json").unlink()
+        result = r.judge()
+        self.assertEqual("INCONCLUSIVE", result["verdict"])
+        self.assertEqual("INCONCLUSIVE", status_of(result, "consistency"))
+
+    def test_explore_does_not_require_consistency(self):
+        self.assertIsNone(status_of(Run().judge(), "consistency"))
 
     def test_final_capacity_with_missed_criteria_fails(self):
         r = Run()
@@ -302,6 +315,15 @@ class ReportTest(unittest.TestCase):
         r.tmp.cleanup()
         self.assertIn("**PASS**", text)
         self.assertIn("| participation_fail | 0 |", text)
+
+    def test_short_load_skips_prometheus_table(self):
+        import report
+        r = Run(FIXTURES / "normal-integrity-10k")
+        text = report.build(r.dir)
+        r.tmp.cleanup()
+        self.assertIn("짧아 Prometheus 처리율·지연 표를 만들지 않는다", text)
+        self.assertNotIn("| API 202 (건/s) |", text)
+        self.assertIn("정합성 dry-run", text)
 
     def test_report_survives_missing_evidence(self):
         import report

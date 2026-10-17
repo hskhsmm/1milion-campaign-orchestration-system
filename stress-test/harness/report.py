@@ -151,29 +151,36 @@ def build(evid, args=()):
 
     w(f"## 안정 구간 처리율·지연 ({hms(t0)} ~ {hms(t1)} KST, {how})")
     w("")
-    w("Prometheus 10초 step 표본의 평균 / 최소 / 최대. 쿼리 원문은 `prometheus/queries.tsv`.")
-    w("")
-    w("| 지표 | 평균 | 최소 | 최대 | 출처 |")
-    w("| --- | ---: | ---: | ---: | --- |")
-    labels = [("api_202_rps", "API 202 (건/s)"), ("bridge_published_rps", "Bridge 발행 (건/s)"),
-              ("db_committed_rps", "DB 성공 경로 (건/s)"), ("api_p95_ms", "서버 p95 (ms)"),
-              ("api_p99_ms", "서버 p99 (ms)"), ("queue_gauge", "Queue Gauge (건)"),
-              ("kafka_lag", "Kafka lag"), ("hikari_pending_max", "Hikari pending 최대"),
-              ("cpu_by_instance", "앱 CPU (호스트, 0~1)")]
-    any_prom = False
-    for name, label in labels:
-        series = prom_series(evid, name, t0, t1)
-        if series is None:
-            continue
-        any_prom = True
-        for inst, vals in series:
-            lab = label if inst == "전체" else f"{label} {inst}"
-            w(f"| {lab} | {num(st.mean(vals))} | {num(min(vals))} | {num(max(vals))} | `prometheus/{name}.json` |")
-    if not any_prom:
-        w("| (Prometheus 증거 없음) | | | | |")
-    w("")
-    w("`consumer_db_committed_total`(DB 성공 경로)은 물리 INSERT 수가 아니다. 최종 건수는 아래 DB 직접 조회를 본다.")
-    w("")
+    if t1 - t0 < 60:
+        # Prometheus 값은 rate(...[1m]) 1분 평균이고 10~15초마다 수집된다. 1분보다 짧은 구간은 실제보다 낮게 희석된다.
+        w(f"**구간이 {int(t1 - t0)}초로 짧아 Prometheus 처리율·지연 표를 만들지 않는다.** 이 값들은 `rate(...[1m])` 1분 평균이고 "
+          "10~15초마다 수집되므로, 1분보다 짧은 부하는 실제보다 낮게 희석된다. 캠페인별로 세는 Bridge 지표는 새 캠페인에서 "
+          "증가분이 잡히지 않아 0으로 나올 수 있다. 짧은 부하는 위 k6 결과, 아래 `LLEN` 1초 기록과 DB 직접 조회를 본다.")
+        w("")
+    else:
+        w("Prometheus 10초 step 표본의 평균 / 최소 / 최대. 쿼리 원문은 `prometheus/queries.tsv`.")
+        w("")
+        w("| 지표 | 평균 | 최소 | 최대 | 출처 |")
+        w("| --- | ---: | ---: | ---: | --- |")
+        labels = [("api_202_rps", "API 202 (건/s)"), ("bridge_published_rps", "Bridge 발행 (건/s)"),
+                  ("db_committed_rps", "DB 성공 경로 (건/s)"), ("api_p95_ms", "서버 p95 (ms)"),
+                  ("api_p99_ms", "서버 p99 (ms)"), ("queue_gauge", "Queue Gauge (건)"),
+                  ("kafka_lag", "Kafka lag"), ("hikari_pending_max", "Hikari pending 최대"),
+                  ("cpu_by_instance", "앱 CPU (호스트, 0~1)")]
+        any_prom = False
+        for name, label in labels:
+            series = prom_series(evid, name, t0, t1)
+            if series is None:
+                continue
+            any_prom = True
+            for inst, vals in series:
+                lab = label if inst == "전체" else f"{label} {inst}"
+                w(f"| {lab} | {num(st.mean(vals))} | {num(min(vals))} | {num(max(vals))} | `prometheus/{name}.json` |")
+        if not any_prom:
+            w("| (Prometheus 증거 없음) | | | | |")
+        w("")
+        w("`consumer_db_committed_total`(DB 성공 경로)은 물리 INSERT 수가 아니다. 최종 건수는 아래 DB 직접 조회를 본다.")
+        w("")
 
     w("## Queue (`redis-watch.log`, 1초 단위 직접 `LLEN`)")
     w("")
@@ -215,6 +222,11 @@ def build(evid, args=()):
         w(f"| sequence 중복 / user 중복 (그룹 수) | {db['dup_sequence_groups']} / {db['dup_user_groups']} | `db-counts.txt` |")
     except V.Missing as e:
         w(f"| DB | 없음 ({e}) | |")
+    cons = load(evid, "consistency.json")
+    if cons:
+        exe = cons["data"]["execution"]
+        kinds = sorted({f"{r.get('anomalyType')}({r.get('severity')})" for r in cons["data"].get("results", []) if r.get("anomalyType")})
+        w(f"| 정합성 dry-run | 실행 {exe.get('id')} {exe.get('status')}, anomalyCount {exe.get('anomalyCount')}{': ' + ', '.join(kinds) if kinds else ''} | `consistency.json` |")
     w("")
 
     logs = sorted(evid.glob("app-*.errwarn.log"))

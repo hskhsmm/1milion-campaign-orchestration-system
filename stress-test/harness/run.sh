@@ -107,6 +107,8 @@ trap on_exit EXIT
 trap 'exit 130' INT TERM
 
 set_run run_id="$RUN_ID" mode="$MODE" purpose="$PURPOSE" drain_timeout="$DRAIN_TIMEOUT"
+# 하네스 자체를 실행한 커밋 (부하 발생기 기준 커밋은 precheck.json의 expected_commit)
+set_run harness_commit="$(git rev-parse --short HEAD)" harness_dirty="$( [[ -n "$(git status --porcelain -- stress-test/harness)" ]] && echo true || echo false)"
 if [[ "$PURPOSE" == fault ]]; then
   set_run fault="$(python3 -c 'import json,sys; print(json.dumps({"description": sys.argv[1], "expected": dict(kv.split("=") for kv in sys.argv[2].split(","))}, ensure_ascii=False))' "$FAULT_DESC" "$FAULT_EXPECT")"
 fi

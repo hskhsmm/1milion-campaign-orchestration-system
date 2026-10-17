@@ -1,12 +1,14 @@
 {
-  "run_id": "20261017T114915Z-harness-normal-integrity-2",
+  "run_id": "20261017T131338Z-harness-integrity-consistency",
   "mode": "integrity",
   "purpose": "final",
   "drain_timeout": 600,
+  "harness_commit": "284bb31",
+  "harness_dirty": true,
   "total_requests": 10000,
   "max_vus": 200,
-  "campaign_id": 79,
-  "load_start_epoch": 1792237782,
-  "load_end_epoch": 1792237805,
-  "drain_end_epoch": 1792237815
+  "campaign_id": 85,
+  "load_start_epoch": 1792242845,
+  "load_end_epoch": 1792242867,
+  "drain_end_epoch": 1792242870
 }

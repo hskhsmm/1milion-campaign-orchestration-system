@@ -12,7 +12,7 @@
 | --- | --- | --- |
 | `run.sh` | 위 순서 전체를 실행 | 캠페인 생성, 부하 발생 |
 | `precheck.sh` | 부하 발생기 커밋·스크립트 md5, 앱 컨테이너 이미지, ASG·ALB, lag, Hikari, active Set 기록 | 읽기 전용 |
-| `collect.sh` | k6 결과, Redis 감시 기록, Prometheus 구간 조회, 상태 API, DB 직접 조회(SELECT), scaling activity, 앱 ERROR/WARN 로그 | 읽기 전용 (감시 컨테이너 종료) |
+| `collect.sh` | k6 결과, Redis 감시 기록, Prometheus 구간 조회, 상태 API, DB 직접 조회(SELECT), 정합성 dry-run, scaling activity, 앱 ERROR/WARN 로그 | 읽기 전용 (감시 컨테이너 종료, 정합성 Job 실행 기록 생성) |
 | `verdict.py` | 증거 디렉터리를 읽어 `verdict.json`, `verdict.md` 작성 | 없음 (로컬) |
 | `report.py` | 증거에서 보고서 수치 초안 `report-draft.md` 작성 (해석은 비워 둠) | 없음 (로컬) |
 | `tests/` | 판정기 시험: 실제 정상 실행 3건과 고장 시나리오 | 없음 (로컬) |
@@ -41,6 +41,7 @@ MODE=capacity PURPOSE=explore TARGET_RPS=1000 STEADY_SECONDS=600 \
 
 - 안정 구간 기본값: capacity는 워밍업 끝 + 60초(1분 rate 창) ~ 부하 끝 − 15초, integrity는 부하 전체
 - 다른 구간: `python3 stress-test/harness/report.py evidence/<RUN_ID> 21:20:30 21:29:30`
+- 구간이 60초보다 짧으면(예: integrity 1만 건은 수 초) Prometheus 처리율·지연 표를 만들지 않는다. `rate(...[1m])` 1분 평균이라 짧은 부하는 실제보다 낮게 희석되고, 캠페인별로 세는 Bridge 지표는 새 캠페인에서 0으로 나올 수 있다. 짧은 부하는 k6·`LLEN`·DB 값을 본다.
 - 10-17 1,250 RPS 실행으로 손으로 계산한 값과 같은지 확인했다.
 
 ## 판정
@@ -48,7 +49,7 @@ MODE=capacity PURPOSE=explore TARGET_RPS=1000 STEADY_SECONDS=600 \
 | 결과 | 조건 |
 | --- | --- |
 | FAIL | 부하 발생기 스크립트·앱 이미지 불일치, 종료 후 Queue `LLEN` 또는 Kafka lag 잔량, drain 시간 초과, k6 202·상태 API·DB 건수 불일치, DB 중복. integrity는 k6 실패·5xx·재고 잔량도 포함 |
-| INCONCLUSIVE | 필수 증거 누락·파싱 실패, 수집 오류, 실행 중 scaling activity, `dropped_iterations` > 0, Queue 감시가 늦게 시작, 부하 전 lag·Hikari·ALB 이상, 사전 점검 중단, capacity 최종 검증의 기준(`CRITERIA_FILE`) 없음 |
+| INCONCLUSIVE | 필수 증거 누락·파싱 실패, 수집 오류, 실행 중 scaling activity, `dropped_iterations` > 0, Queue 감시가 늦게 시작, 부하 전 lag·Hikari·ALB 이상, 사전 점검 중단, 최종 검증인데 정합성 dry-run(`consistency.json`) 없음, capacity 최종 검증의 기준(`CRITERIA_FILE`) 없음 |
 | PASS | 최종 검증(`PURPOSE=final`)에서 위에 해당하지 않음 |
 | VALID | 탐색(`PURPOSE=explore`)에서 위에 해당하지 않음. 관측값을 비교에 쓸 수 있다는 뜻이며 성능 합격이 아니다 |
 
@@ -73,6 +74,8 @@ FAULT_DESC="부하 중 앱 1대 35초 docker pause" FAULT_EXPECT="k6_errors=FAIL
 `verdict.md` 첫머리에 "장애 주입 실행"이 표시된다. 이 실행은 성능·정합성 기록이나 실행 간 비교에 쓰지 않는다.
 - capacity의 5xx·지연은 탐색에서 관측값(NOTE)으로만 남긴다. 최종 검증에서는 `CRITERIA_FILE`의 사전 합의 기준으로 판정한다.
 - 판정은 Grafana Gauge가 아니라 Redis 직접 `LLEN`, `consumer_db_committed_total`이 아니라 DB 직접 조회를 사용한다.
+- 정합성 dry-run(`dryRun=true`, `autoFix=false`)은 `collect.sh`가 실행한다. 데이터는 바꾸지 않고 정합성 Job 실행 기록만 남는다. `anomalyCount`는 TEST_GUIDE 4.4 기준이 아니므로 이상 유형을 NOTE로 기록한다(8.3).
+- `run.json`에 하네스를 실행한 커밋(`harness_commit`, 작업 트리 변경 여부 `harness_dirty`)을 남긴다. 부하 발생기 비교 기준은 `precheck.json`의 `expected_commit`(`origin/main`)이다.
 
 ## 시험
 

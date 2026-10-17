@@ -1,5 +1,5 @@
 {
-  "expected_commit": "89902c3",
+  "expected_commit": "3abfa1d",
   "loadgen_commit": "89902c3",
   "expected_md5": {
     "k6-load-test.js": "dfce35830ae17fd8710367afa6f23cd4",
@@ -29,6 +29,9 @@
   "active_campaigns": [
     75,
     76,
-    77
+    77,
+    80,
+    82,
+    83
   ]
 }

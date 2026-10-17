@@ -244,6 +244,21 @@ def evaluate(evid):
     except (Missing, KeyError) as e:
         add("db", INCONCLUSIVE, f"DB·상태 증거 누락: {e}", "db-counts.txt, status.json")
 
+    # ---- 정합성 dry-run (TEST_GUIDE 8.2: 최종 검증 필수). anomalyCount는 4.4 기준이 아니므로 유형만 기록한다(8.3). ----
+    try:
+        cons = load_json(evid, "consistency.json")["data"]
+        exe = cons["execution"]
+        if exe.get("status") != "COMPLETED":
+            add("consistency", INCONCLUSIVE, f"정합성 dry-run 상태 {exe.get('status')}", "consistency.json")
+        else:
+            kinds = sorted({f"{r.get('anomalyType')}({r.get('severity')})" for r in cons.get("results", []) if r.get("anomalyType")})
+            add("consistency", NOTE if exe.get("anomalyCount") else OK,
+                f"dry-run 실행 {exe.get('id')}, anomalyCount {exe.get('anomalyCount')}" + (f": {', '.join(kinds)}" if kinds else ""),
+                "consistency.json")
+    except (Missing, KeyError, TypeError) as e:
+        if purpose == "final":
+            add("consistency", INCONCLUSIVE, f"정합성 dry-run 결과 누락: {e}", "consistency.json")
+
     # ---- 실행 중 변경 ----
     try:
         acts = load_json(evid, "scaling.json")

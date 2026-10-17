@@ -83,6 +83,24 @@ EOF
 }
 step db-counts db_counts
 
+# 5-1. 정합성 dry-run (TEST_GUIDE 8.2). dryRun=true·autoFix=false라 데이터는 바꾸지 않고 실행 기록만 남는다.
+consistency() {
+  local base id status
+  base="$(bash "$HERE/../resolve-base-url.sh")/api/admin/consistency-recovery"
+  id=$(curl -fsS -X POST "$base" -H 'Content-Type: application/json' \
+    -d "{\"requestedBy\":\"harness-$RUN_ID\",\"dryRun\":true,\"autoFix\":false,\"campaignId\":$C,\"maxCampaigns\":1}" \
+    | python3 -c 'import json,sys; print(json.load(sys.stdin)["data"]["consistencyRecoveryExecutionId"])') || return 1
+  for _ in $(seq 1 60); do
+    curl -fsS "$base/executions/$id" > "$EVID/consistency.json" || return 1
+    status=$(python3 -c 'import json,sys; print(json.load(open(sys.argv[1]))["data"]["execution"]["status"])' "$EVID/consistency.json")
+    [[ "$status" == COMPLETED ]] && return 0
+    [[ "$status" == FAILED ]] && return 1
+    sleep 2
+  done
+  return 1
+}
+step consistency consistency
+
 # 6. ASG scaling activity (실행 중 변경 확인)
 scaling() {
   aws_ autoscaling describe-scaling-activities --auto-scaling-group-name batch-kafka-app-asg --max-items 20 \
