@@ -141,6 +141,8 @@ SSM 세션은 로컬 셸의 `BASE_URL`을 자동으로 전달하지 않는다. `
 
 ### 4.3 실행
 
+> 실환경 실행은 [하네스](harness/README.md)로 한다: `MODE=integrity PURPOSE=final TOTAL_REQUESTS=1500000 MAX_VUS=3000 DURATION=3600 bash stress-test/harness/run.sh` (운영 PC, 저장소 루트). 사전 점검·Queue 감시·drain 확인·증거 수집·판정까지 함께 수행한다. drain 대기 기본값은 600초이므로 Queue가 많이 쌓일 것으로 예상되면 `DRAIN_TIMEOUT`을 늘린다. 아래는 하네스가 부하 발생기에서 실행하는 명령이며, 하네스를 쓸 수 없을 때만 직접 실행하고 8장 절차로 증거를 모은다.
+
 ```bash
 # ALB 조회 IAM 정책이 적용된 terraform-mcp에서는 BASE_URL을 지정하지 않는다.
 unset BASE_URL CONFIRM_BASE_URL_OVERRIDE
@@ -205,6 +207,8 @@ Grafana Gauge만으로 최종 Queue 0을 판정하지 않는다. 애플리케이
 ## 5. 지속 가능한 처리량 테스트
 
 ### 5.1 단계별 탐색
+
+> 실환경 실행은 [하네스](harness/README.md)로 한다: 단일 목표는 `MODE=capacity PURPOSE=explore TARGET_RPS=<RPS> STEADY_SECONDS=600 bash stress-test/harness/run.sh`. 하네스는 현재 단일 목표 RPS만 지원하므로, 아래 `RPS_STAGES` 단계 실행은 직접 실행하고 8장 절차로 증거를 모은다.
 
 ```bash
 RPS_STAGES=1000,2000,3000,4000,5000 \
