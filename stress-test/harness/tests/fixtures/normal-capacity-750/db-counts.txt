@@ -1,0 +1,28 @@
+instance=i-04541fc79f81fd766
+sql=SELECT NOW(6) AS checked_at; SELECT COUNT(*) AS total_rows, SUM(status='SUCCESS') AS success_count FROM participation_history WHERE campaign_id=76; SELECT COUNT(*) AS dup_sequence_groups FROM (SELECT sequence FROM participation_history WHERE campaign_id=76 GROUP BY sequence HAVING COUNT(*)>1) t; SELECT COUNT(*) AS dup_user_groups FROM (SELECT user_id FROM participation_history WHERE campaign_id=76 GROUP BY user_id HAVING COUNT(*)>1) t; SELECT id,total_stock,current_stock,status FROM campaign WHERE id=76;
++----------------------------+
+| checked_at                 |
++----------------------------+
+| 2026-10-17 10:23:02.340387 |
++----------------------------+
++------------+---------------+
+| total_rows | success_count |
++------------+---------------+
+|     463874 |        463874 |
++------------+---------------+
++---------------------+
+| dup_sequence_groups |
++---------------------+
+|                   0 |
++---------------------+
++-----------------+
+| dup_user_groups |
++-----------------+
+|               0 |
++-----------------+
++----+-------------+---------------+--------+
+| id | total_stock | current_stock | status |
++----+-------------+---------------+--------+
+| 76 |     9999999 |       9999999 | OPEN   |
++----+-------------+---------------+--------+
+

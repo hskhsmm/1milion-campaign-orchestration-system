@@ -281,6 +281,16 @@ sum(rate(consumer_db_commit_batch_size_count[1m]))
 
 실환경 실행마다 조건과 증거를 운영 PC 저장소 루트의 `evidence/<RUN_ID>/` 하나에 모은다. **탐색·개선 A/B**에서는 필요한 지표만 측정하고 한계를 기록한다. **최종 정합성·지속 처리량 검증**에서만 사전에 합의한 기준으로 PASS/FAIL/INCONCLUSIVE를 판정한다. 증거는 환경을 내리기 전에 모은다. `make env-down` 뒤에는 Redis 잔량, 최종 DB 건수, 앱 인스턴스 로그를 다시 확인할 수 없다.
 
+**기본은 [하네스](harness/README.md)로 실행한다.** `stress-test/harness/run.sh`가 아래 절차(사전 점검 → Queue 감시 → k6 → drain 대기 → 증거 수집 → 판정)를 순서대로 실행하고 `verdict.md`를 남긴다. 부하 발생기 스크립트나 앱 이미지가 맞지 않으면 부하를 시작하지 않는다. 탐색에서 문제가 없으면 PASS 대신 `VALID`(관측값을 비교에 쓸 수 있음)를 낸다.
+
+```bash
+# 운영 PC, 저장소 루트 (git fetch origin 후)
+MODE=integrity PURPOSE=final TOTAL_REQUESTS=10000 MAX_VUS=200 DURATION=60 bash stress-test/harness/run.sh
+MODE=capacity PURPOSE=explore TARGET_RPS=1000 STEADY_SECONDS=600 bash stress-test/harness/run.sh
+```
+
+아래 수동 절차는 하네스가 하는 일의 기준이자, 하네스를 쓸 수 없을 때의 방법이다.
+
 ```bash
 # 운영 PC, 저장소 루트
 RUN_ID="$(date -u +%Y%m%dT%H%M%SZ)-$$"
@@ -367,7 +377,7 @@ ssm_run "$MCP" "curl -fsSG localhost:9090/api/v1/query --data-urlencode 'query=$
 # 쿼리·구간·step을 manifest.md에 적는다. 최대값은 구간 조회의 샘플 중 관측 최대값이다.
 ```
 
-DB 직접 조회는 전용 스크립트가 없다. `ops/scripts/close-stale-campaigns.sh`와 같은 방식으로 앱 인스턴스에서 `mysql:8.4` 컨테이너를 띄워 4.4의 SELECT만 실행하고, 실행 시각·인스턴스·SQL을 출력과 함께 `db-counts.txt`에 남긴다. 이 스크립트의 `CONFIRM=yes` 경로는 데이터를 바꾸므로 재사용하지 않는다.
+DB 직접 조회는 하네스의 `collect.sh`가 수행한다. 수동으로 할 때는 `ops/scripts/close-stale-campaigns.sh`와 같은 방식으로 앱 인스턴스에서 `mysql:8.4` 컨테이너를 띄워 4.4의 SELECT만 실행하고, 실행 시각·인스턴스·SQL을 출력과 함께 `db-counts.txt`에 남긴다. 이 스크립트의 `CONFIRM=yes` 경로는 데이터를 바꾸므로 재사용하지 않는다.
 
 ### 8.3 최종 검증 판정
 

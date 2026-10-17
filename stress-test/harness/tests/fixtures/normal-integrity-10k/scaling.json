@@ -1,0 +1,82 @@
+[
+    {
+        "StartTime": "2026-10-17T09:17:25.443000+00:00",
+        "Description": "Launching a new EC2 instance: i-082864e2c8afe630b"
+    },
+    {
+        "StartTime": "2026-10-17T09:17:25.376000+00:00",
+        "Description": "Launching a new EC2 instance: i-04541fc79f81fd766"
+    },
+    {
+        "StartTime": "2026-10-15T09:58:18.542000+00:00",
+        "Description": "Terminating EC2 instance: i-0ab538afa67e3dd4a"
+    },
+    {
+        "StartTime": "2026-10-15T09:58:18.438000+00:00",
+        "Description": "Terminating EC2 instance: i-05c8971bf196563b4"
+    },
+    {
+        "StartTime": "2026-10-15T09:58:18.370000+00:00",
+        "Description": "Terminating EC2 instance: i-0d748ffa159f105ef"
+    },
+    {
+        "StartTime": "2026-10-15T09:13:18.060000+00:00",
+        "Description": "Launching a new EC2 instance: i-0d748ffa159f105ef"
+    },
+    {
+        "StartTime": "2026-10-15T08:31:58.640000+00:00",
+        "Description": "Launching a new EC2 instance: i-05c8971bf196563b4"
+    },
+    {
+        "StartTime": "2026-10-15T08:31:58.538000+00:00",
+        "Description": "Launching a new EC2 instance: i-0ab538afa67e3dd4a"
+    },
+    {
+        "StartTime": "2026-10-15T06:30:12.906000+00:00",
+        "Description": "Terminating EC2 instance: i-0ff829322f48343a8"
+    },
+    {
+        "StartTime": "2026-10-15T06:30:12.821000+00:00",
+        "Description": "Terminating EC2 instance: i-06a7f53854a7b9c37"
+    },
+    {
+        "StartTime": "2026-10-15T01:37:06.394000+00:00",
+        "Description": "Launching a new EC2 instance: i-06a7f53854a7b9c37"
+    },
+    {
+        "StartTime": "2026-10-15T01:37:06.240000+00:00",
+        "Description": "Launching a new EC2 instance: i-0ff829322f48343a8"
+    },
+    {
+        "StartTime": "2026-10-13T06:44:37.733000+00:00",
+        "Description": "Terminating EC2 instance: i-0e452464a574e5a7c"
+    },
+    {
+        "StartTime": "2026-10-13T06:44:37.665000+00:00",
+        "Description": "Terminating EC2 instance: i-0986ea46d1d6d3791"
+    },
+    {
+        "StartTime": "2026-10-13T02:46:42.450000+00:00",
+        "Description": "Terminating EC2 instance: i-0a04268ebb5526d25"
+    },
+    {
+        "StartTime": "2026-10-13T02:36:11.723000+00:00",
+        "Description": "Launching a new EC2 instance: i-0986ea46d1d6d3791"
+    },
+    {
+        "StartTime": "2026-10-13T02:26:22.690000+00:00",
+        "Description": "Terminating EC2 instance: i-0ad72534d9e86c0aa"
+    },
+    {
+        "StartTime": "2026-10-13T02:05:02.427000+00:00",
+        "Description": "Launching a new EC2 instance: i-0ad72534d9e86c0aa"
+    },
+    {
+        "StartTime": "2026-10-13T01:52:30.020000+00:00",
+        "Description": "Launching a new EC2 instance: i-0a04268ebb5526d25"
+    },
+    {
+        "StartTime": "2026-10-13T01:52:29.790000+00:00",
+        "Description": "Launching a new EC2 instance: i-0e452464a574e5a7c"
+    }
+]

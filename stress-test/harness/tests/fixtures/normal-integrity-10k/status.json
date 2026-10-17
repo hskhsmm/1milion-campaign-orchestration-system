@@ -1,0 +1,1 @@
+{"success":true,"message":"요청이 성공했습니다.","errorCode":null,"data":{"totalParticipation":10000,"failCount":0,"campaignId":79,"totalStock":10000,"currentStock":0,"successCount":10000,"processingMetrics":{"recentProcessed":0,"avgLatencyMs":0.0,"actualTps":0.0},"stockUsageRate":"100.00%","campaignName":"harness-20261017T114915Z-harness-normal-integrity-2"}}

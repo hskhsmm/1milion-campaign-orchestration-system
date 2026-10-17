@@ -1,0 +1,14 @@
+{
+  "run_id": "20261017T104301Z-capacity-1000",
+  "mode": "capacity",
+  "purpose": "explore",
+  "campaign_id": 77,
+  "target_rps": 1000,
+  "warmup_seconds": 30,
+  "steady_seconds": 600,
+  "load_start_epoch": 1792233792,
+  "steady_start_epoch": 1792233822,
+  "load_end_epoch": 1792234427,
+  "drain_end_epoch": 1792234429,
+  "reconstructed": "2026-10-17 수동 실행의 manifest.md에서 재구성"
+}

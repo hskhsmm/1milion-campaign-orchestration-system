@@ -1,0 +1,1 @@
+{"success":true,"message":"요청이 성공했습니다.","errorCode":null,"data":{"totalParticipation":618249,"failCount":0,"campaignId":77,"totalStock":9999999,"currentStock":9381750,"successCount":618249,"processingMetrics":{"recentProcessed":0,"actualTps":0.0,"avgLatencyMs":0.0},"stockUsageRate":"6.18%","campaignName":"TPS-Test-1792233792059"}}

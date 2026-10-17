@@ -1,0 +1,7 @@
+{
+  "drained": true,
+  "waited_seconds": 2,
+  "last_llen": 0,
+  "last_lag": 0,
+  "reconstructed": "redis-watch.log 마지막 llen>0 시각에서 재구성"
+}

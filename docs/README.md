@@ -21,6 +21,7 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-10-17 | 실행·판정 하네스 정상 실행과 고장 시험 | [하네스 고장 시험](reports/2026-10-17-harness-fault-tests.md) |
 | 2026-10-17 | 500·750·1,000 RPS 10분 유지 평형점 탐색 | [지속 RPS 평형점 탐색](reports/2026-10-17-capacity-equilibrium.md) |
 | 2026-10-15 | 지속 RPS 기준선 탐색과 다음 측정 계획 | [지속 RPS 탐색](reports/2026-10-15-capacity-baseline.md) |
 | 2026-10-13 | ASG 증설 지연 단축과 실환경 검증 | [ASG 증설 검증](reports/2026-10-13-asg-scale-out-validation.md) |

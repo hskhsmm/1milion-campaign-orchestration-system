@@ -1,0 +1,23 @@
+instance=i-04541fc79f81fd766
+sql=SELECT NOW(6) AS checked_at; SELECT COUNT(*) AS total_rows, COALESCE(SUM(status='SUCCESS'),0) AS success_count FROM participation_history WHERE campaign_id=79; SELECT COUNT(*) AS dup_sequence_groups FROM (SELECT sequence FROM participation_history WHERE campaign_id=79 GROUP BY sequence HAVING COUNT(*)>1) t; SELECT COUNT(*) AS dup_user_groups FROM (SELECT user_id FROM participation_history WHERE campaign_id=79 GROUP BY user_id HAVING COUNT(*)>1) t;
++----------------------------+
+| checked_at                 |
++----------------------------+
+| 2026-10-17 11:51:56.228532 |
++----------------------------+
++------------+---------------+
+| total_rows | success_count |
++------------+---------------+
+|      10000 |         10000 |
++------------+---------------+
++---------------------+
+| dup_sequence_groups |
++---------------------+
+|                   0 |
++---------------------+
++-----------------+
+| dup_user_groups |
++-----------------+
+|               0 |
++-----------------+
+
