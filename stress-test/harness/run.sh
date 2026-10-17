@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # 실환경 부하 테스트 1회를 정해진 순서로 실행하고 판정까지 남긴다.
-#   사전 점검 → (실패 시 중단) → Queue 감시 시작 → k6 → drain 대기 → 증거 수집 → 판정
+#   사전 점검 → (실패 시 중단) → Queue 감시 시작 → k6 → drain 대기 → 증거 수집 → 판정 → 수치 초안
 #
 # 비용과 실환경 상태에 영향을 주는 명령이다. 대상 계정·리전·환경을 확인한 사람이 직접 실행한다.
 # 데이터 삭제, 배포, Terraform 변경, env-down은 하지 않는다.
@@ -81,7 +81,8 @@ finish() {
   local code=0
   FINISHED=true
   python3 "$HERE/verdict.py" "$EVID" || code=$?
-  echo "증거: $EVID (판정: $EVID/verdict.md)"
+  python3 "$HERE/report.py" "$EVID" >/dev/null || echo "보고서 초안 생성 실패" >&2
+  echo "증거: $EVID (판정: $EVID/verdict.md, 수치 초안: $EVID/report-draft.md)"
   exit "$code"
 }
 # 중간에 실패하거나 중단돼도 판정 없이 끝나지 않게 한다:
@@ -99,6 +100,7 @@ on_exit() {
     echo "주의: 부하 발생기의 k6가 아직 실행 중일 수 있다. 확인: ssm_run \$(mcp_instance_id) 'pgrep -af \"k6 run\"'" >&2
   fi
   python3 "$HERE/verdict.py" "$EVID" || true
+  python3 "$HERE/report.py" "$EVID" >/dev/null 2>&1 || true
   exit "$code"
 }
 trap on_exit EXIT

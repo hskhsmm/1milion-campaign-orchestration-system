@@ -22,7 +22,7 @@
 
 ## 로컬 시험
 
-`python3 -m unittest discover -s stress-test/harness/tests` — 34개 통과 (Python 3.9.6).
+`python3 -m unittest discover -s stress-test/harness/tests` — 37개 통과 (Python 3.9.6).
 
 | 구분 | 시험 | 기대 |
 | --- | --- | --- |
@@ -116,6 +116,12 @@ B와 D는 처음 실행할 때 장애 표시 기능이 없었다. 기능을 추�
 수정 뒤 A2를 처음부터 다시 실행해 수집 오류 없이 PASS를 확인했다.
 
 **F. capacity 경로**: k6 setup이 만든 캠페인 ID를 로그에서 읽어 setup 9초 뒤(워밍업 30초 안)에 Queue 감시를 시작했다. k6 202, 상태 API, DB SUCCESS가 모두 16,249건이었고 `dropped_iterations` 0, Queue 최대 22건, drain 3초였다.
+
+## 보고서 수치 초안 (`report.py`)
+
+10-17 보고서 두 편은 증거를 손으로 계산해 썼다. 매번 같은 수치를 옮겨 적는 작업이 반복되고 옮겨 적기 오류 위험이 있어, 증거에서 수치 표를 만드는 `report.py`를 추가했다. `run.sh`가 판정 뒤 `report-draft.md`를 만든다. 해석·결론·한계는 쓰지 않는다.
+
+1,250 RPS 실행(H)으로 확인한 결과, 안정 구간 처리율(1,250.0 / 1,250.0 / 1,249.9건/s), 서버 p95/p99(5.4 / 11.8 ms), `LLEN` 평균·최대·기울기(60 / 793 / −0.021건/s), lag 최대(118)가 손으로 계산한 값과 같았다.
 
 ## 검증 상태
 

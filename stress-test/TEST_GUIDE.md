@@ -285,7 +285,7 @@ sum(rate(consumer_db_commit_batch_size_count[1m]))
 
 실환경 실행마다 조건과 증거를 운영 PC 저장소 루트의 `evidence/<RUN_ID>/` 하나에 모은다. **탐색·개선 A/B**에서는 필요한 지표만 측정하고 한계를 기록한다. **최종 정합성·지속 처리량 검증**에서만 사전에 합의한 기준으로 PASS/FAIL/INCONCLUSIVE를 판정한다. 증거는 환경을 내리기 전에 모은다. `make env-down` 뒤에는 Redis 잔량, 최종 DB 건수, 앱 인스턴스 로그를 다시 확인할 수 없다.
 
-**기본은 [하네스](harness/README.md)로 실행한다.** `stress-test/harness/run.sh`가 아래 절차(사전 점검 → Queue 감시 → k6 → drain 대기 → 증거 수집 → 판정)를 순서대로 실행하고 `verdict.md`를 남긴다. 부하 발생기 스크립트나 앱 이미지가 맞지 않으면 부하를 시작하지 않는다. 탐색에서 문제가 없으면 PASS 대신 `VALID`(관측값을 비교에 쓸 수 있음)를 낸다.
+**기본은 [하네스](harness/README.md)로 실행한다.** `stress-test/harness/run.sh`가 아래 절차(사전 점검 → Queue 감시 → k6 → drain 대기 → 증거 수집 → 판정)를 순서대로 실행하고 `verdict.md`와 보고서 수치 초안 `report-draft.md`를 남긴다. 보고서를 쓸 때는 초안의 표를 그대로 쓰고 해석·한계만 덧붙인다. 부하 발생기 스크립트나 앱 이미지가 맞지 않으면 부하를 시작하지 않는다. 탐색에서 문제가 없으면 PASS 대신 `VALID`(관측값을 비교에 쓸 수 있음)를 낸다.
 
 ```bash
 # 운영 PC, 저장소 루트 (git fetch origin 후)

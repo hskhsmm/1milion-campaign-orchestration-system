@@ -3,7 +3,7 @@
 [부하 테스트 가이드](../TEST_GUIDE.md) 8장의 기록·판정 절차를 스크립트로 고정한 것이다. 사람이 순서를 기억하지 않아도 같은 순서로 실행되고, 증거가 빠지면 PASS가 나오지 않는다.
 
 ```text
-사전 점검 ─(버전·이미지 불일치면 중단)→ Queue 감시 시작 → k6 → drain 대기 → 증거 수집 → 판정
+사전 점검 ─(버전·이미지 불일치면 중단)→ Queue 감시 시작 → k6 → drain 대기 → 증거 수집 → 판정 → 수치 초안
 ```
 
 ## 구성
@@ -14,6 +14,7 @@
 | `precheck.sh` | 부하 발생기 커밋·스크립트 md5, 앱 컨테이너 이미지, ASG·ALB, lag, Hikari, active Set 기록 | 읽기 전용 |
 | `collect.sh` | k6 결과, Redis 감시 기록, Prometheus 구간 조회, 상태 API, DB 직접 조회(SELECT), scaling activity, 앱 ERROR/WARN 로그 | 읽기 전용 (감시 컨테이너 종료) |
 | `verdict.py` | 증거 디렉터리를 읽어 `verdict.json`, `verdict.md` 작성 | 없음 (로컬) |
+| `report.py` | 증거에서 보고서 수치 초안 `report-draft.md` 작성 (해석은 비워 둠) | 없음 (로컬) |
 | `tests/` | 판정기 시험: 실제 정상 실행 3건과 고장 시나리오 | 없음 (로컬) |
 
 `run.sh`는 데이터 삭제, 배포, Terraform 변경, `env-down`을 하지 않는다. 비용이 드는 실행이므로 대상 환경을 확인한 사람이 직접 시작한다.
@@ -33,6 +34,14 @@ MODE=capacity PURPOSE=explore TARGET_RPS=1000 STEADY_SECONDS=600 \
 ```
 
 결과는 `evidence/<RUN_ID>/`에 모인다(Git 제외). 종료 코드는 0(PASS·VALID·FAULT_DETECTED), 1(FAIL·FAULT_MISSED), 2(INCONCLUSIVE·FAULT_UNEXPECTED), 3(사전 점검 실패로 중단)이다. 수집이나 판정만 다시 하려면 `collect.sh <증거 디렉터리>`, `verdict.py <증거 디렉터리>`를 직접 실행한다.
+
+## 보고서 수치 초안
+
+`run.sh`는 판정 뒤 `report.py`로 `report-draft.md`를 만든다. 조건, k6, 안정 구간 처리율·p95/p99·Queue Gauge·lag·Hikari·CPU, 직접 `LLEN`의 평균·최대·기울기, drain, DB 직접 조회를 출처 파일과 함께 표로 쓴다. **해석·결론·한계·다음 계획은 쓰지 않는다.** 사람이나 에이전트가 표를 보고 `docs/reports/`에 보고서를 쓴다. 수치를 옮겨 적지 말고 초안의 표를 그대로 가져온다.
+
+- 안정 구간 기본값: capacity는 워밍업 끝 + 60초(1분 rate 창) ~ 부하 끝 − 15초, integrity는 부하 전체
+- 다른 구간: `python3 stress-test/harness/report.py evidence/<RUN_ID> 21:20:30 21:29:30`
+- 10-17 1,250 RPS 실행으로 손으로 계산한 값과 같은지 확인했다.
 
 ## 판정
 

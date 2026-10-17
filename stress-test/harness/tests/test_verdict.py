@@ -283,6 +283,38 @@ class FaultJudgeTest(unittest.TestCase):
         self.assertIn("장애 주입 실행", text)
 
 
+class ReportTest(unittest.TestCase):
+    """report.py: 증거 파일의 수치를 그대로 옮기고, 증거가 빠져도 멈추지 않는다."""
+
+    def test_capacity_report_has_source_numbers(self):
+        import report
+        r = Run()
+        text = report.build(r.dir)
+        r.tmp.cleanup()
+        self.assertIn("| 202 접수 | 618,249 |", text)
+        self.assertIn("| DB 전체 행 / SUCCESS | 618,249 / 618,249 |", text)
+        self.assertIn("## 해석 (작성 필요)", text)
+
+    def test_integrity_report(self):
+        import report
+        r = Run(FIXTURES / "normal-integrity-10k")
+        text = report.build(r.dir)
+        r.tmp.cleanup()
+        self.assertIn("**PASS**", text)
+        self.assertIn("| participation_fail | 0 |", text)
+
+    def test_report_survives_missing_evidence(self):
+        import report
+        r = Run()
+        for name in ("k6-summary.json", "redis-watch.log", "db-counts.txt", "status.json"):
+            (r.dir / name).unlink()
+        text = report.build(r.dir)
+        r.tmp.cleanup()
+        self.assertIn("k6 결과 없음", text)
+        self.assertIn("Queue 증거 없음", text)
+        self.assertIn("INCONCLUSIVE", text)
+
+
 class CliTest(unittest.TestCase):
 
     def test_exit_code_and_files(self):
