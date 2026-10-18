@@ -50,6 +50,7 @@ class ParticipationBridgeDeactivationTest {
                 redisTemplate,
                 kafkaTemplate,
                 bridgeQueueService,
+                Runnable::run,
                 redisStockService,
                 meterRegistry,
                 jsonMapper

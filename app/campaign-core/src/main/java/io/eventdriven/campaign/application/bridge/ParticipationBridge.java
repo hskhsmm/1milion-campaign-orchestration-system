@@ -10,6 +10,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
@@ -17,6 +18,7 @@ import java.net.InetAddress;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.Executor;
 
 @Slf4j
 @Component
@@ -29,6 +31,7 @@ public class ParticipationBridge {
     private final RedisTemplate<String, String> redisTemplate;
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final BridgeQueueService bridgeQueueService;
+    private final Executor ackExecutor;
     private final RedisStockService redisStockService;
     private final MeterRegistry meterRegistry;
     private final JsonMapper jsonMapper;
@@ -39,6 +42,7 @@ public class ParticipationBridge {
             RedisTemplate<String, String> redisTemplate,
             KafkaTemplate<String, String> kafkaTemplate,
             BridgeQueueService bridgeQueueService,
+            @Qualifier("bridgeAckExecutor") Executor ackExecutor,
             RedisStockService redisStockService,
             MeterRegistry meterRegistry,
             JsonMapper jsonMapper
@@ -46,6 +50,7 @@ public class ParticipationBridge {
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.bridgeQueueService = bridgeQueueService;
+        this.ackExecutor = ackExecutor;
         this.redisStockService = redisStockService;
         this.meterRegistry = meterRegistry;
         this.jsonMapper = jsonMapper;
@@ -145,7 +150,7 @@ public class ParticipationBridge {
         String partitionKey = extractUserIdKey(message, campaignId);
         try {
             kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message)
-                    .whenComplete((result, ex) -> {
+                    .whenCompleteAsync((result, ex) -> {
                         if (ex != null) {
                             log.warn("Kafka publish failed; claim retained for retry. campaignId={}", campaignId, ex);
                             return;
@@ -165,6 +170,13 @@ public class ParticipationBridge {
                                         .tag("campaignId", String.valueOf(id))
                                         .register(meterRegistry)
                         ).increment();
+                    }, ackExecutor)
+                    .exceptionally(ex -> {
+                        // A saturated/shutting-down executor leaves the claim for lease-based retry.
+                        meterRegistry.counter("bridge.claims.ack.rejected").increment();
+                        log.error("Kafka completion handler could not run; claim retained for retry. campaignId={}",
+                                campaignId, ex);
+                        return null;
                     });
         } catch (Exception e) {
             log.warn("Kafka publish failed before enqueue; claim retained for retry. campaignId={}", campaignId, e);
