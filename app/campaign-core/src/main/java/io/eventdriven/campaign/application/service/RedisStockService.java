@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.application.service;
 
+import io.eventdriven.campaign.application.bridge.BridgeQueueService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -95,7 +96,8 @@ public class RedisStockService {
         try {
             String queueKey = getQueueKey(campaignId);
             Long remaining = redisTemplate.opsForList().size(queueKey);
-            if (isActive(campaignId) || remaining == null || remaining > 0) {
+            Long inFlight = redisTemplate.opsForZSet().size(BridgeQueueService.inFlightKey(campaignId));
+            if (isActive(campaignId) || remaining == null || remaining > 0 || inFlight == null || inFlight > 0) {
                 return false;
             }
 
@@ -105,7 +107,9 @@ public class RedisStockService {
             // Queue writes are atomic within the campaign's Redis Cluster slot, but the
             // global active Set is in another slot. Restore its index if state changed.
             Long afterRemoval = redisTemplate.opsForList().size(queueKey);
-            if (isActive(campaignId) || afterRemoval == null || afterRemoval > 0) {
+            Long inFlightAfterRemoval = redisTemplate.opsForZSet().size(BridgeQueueService.inFlightKey(campaignId));
+            if (isActive(campaignId) || afterRemoval == null || afterRemoval > 0
+                    || inFlightAfterRemoval == null || inFlightAfterRemoval > 0) {
                 redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
                 return false;
             }
@@ -177,6 +181,11 @@ public class RedisStockService {
     }
 
     public void clearRuntimeState(Long campaignId) {
+        Long queueSize = redisTemplate.opsForList().size(getQueueKey(campaignId));
+        Long inFlight = redisTemplate.opsForZSet().size(BridgeQueueService.inFlightKey(campaignId));
+        if (queueSize == null || queueSize > 0 || inFlight == null || inFlight > 0) {
+            throw new IllegalStateException("Cannot clear Redis runtime while Bridge work remains. campaignId=" + campaignId);
+        }
         deleteStock(campaignId);
         deleteTotal(campaignId);
         deactivateCampaign(campaignId);

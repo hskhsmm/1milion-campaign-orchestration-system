@@ -8,6 +8,7 @@
 | --- | --- |
 | 전체 서비스 구조와 요청 흐름 | [아키텍처](../ARCHITECTURE.md) |
 | 하네스 구축과 성능 개선 순서 | [성능·관측 하네스 계획](plans/performance-harness.md) |
+| 202 접수 후 유실·중복 위험과 장애 검증 순서 | [202 이후 장애 검증 계획](plans/accepted-202-failure-verification.md) |
 | 부하 테스트 모드와 실행법 | [부하 테스트 가이드](../stress-test/TEST_GUIDE.md) |
 | AWS 테스트 환경 기동·종료 | [운영 가이드](../ops/README.md) |
 | MCP 지표 도구와 Slack 알림의 현재 관계 | [MCP 모니터링 코드 안내](../mcp-server/README.md) |

@@ -7,6 +7,7 @@
 #   inSet = SISMEMBER active:campaigns <id>   (Bridge 순회 대상 여부)
 #   flag  = EXISTS active:campaign:{id}       (신규 요청 차단 플래그)
 #   llen  = LLEN queue:campaign:{id}          (큐 잔량)
+#   inflight = ZCARD bridge:inflight:campaign:{id} (Kafka 확인 대기/재시도 대상)
 #   stock = GET stock:campaign:{id}
 #   set   = SMEMBERS active:campaigns
 # 결과는 redis-watch-fetch.sh로 가져온다.
@@ -26,9 +27,10 @@ LOOP='while true; do
   inset=$(redis-cli -c -h "$H" SISMEMBER active:campaigns "$C" 2>&1)
   flag=$(redis-cli -c -h "$H" EXISTS "active:campaign:{$C}" 2>&1)
   llen=$(redis-cli -c -h "$H" LLEN "queue:campaign:{$C}" 2>&1)
+  inflight=$(redis-cli -c -h "$H" ZCARD "bridge:inflight:campaign:{$C}" 2>&1)
   stock=$(redis-cli -c -h "$H" GET "stock:campaign:{$C}" 2>&1)
   members=$(redis-cli -c -h "$H" SMEMBERS active:campaigns 2>&1 | sort -n | tr "\n" "," )
-  echo "$ts inSet=$inset flag=$flag llen=$llen stock=$stock set=[$members]"
+  echo "$ts inSet=$inset flag=$flag llen=$llen inflight=$inflight stock=$stock set=[$members]"
   sleep 1
 done'
 

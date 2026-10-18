@@ -11,6 +11,7 @@ import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ValueOperations;
+import org.springframework.data.redis.core.ZSetOperations;
 import org.springframework.data.redis.core.script.DefaultRedisScript;
 
 import java.time.Duration;
@@ -24,6 +25,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
+import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,6 +44,7 @@ class RedisStockServiceStateTransitionTest {
     private static final String ACTIVE_SET = "active:campaigns";
     private static final String FLAG = "active:campaign:{62}";
     private static final String QUEUE = "queue:campaign:{62}";
+    private static final String IN_FLIGHT = "bridge:inflight:campaign:{62}";
     private static final String LOCK = "lock:campaign:{62}:state";
 
     @Mock private RedisTemplate<String, String> redisTemplate;
@@ -49,6 +52,7 @@ class RedisStockServiceStateTransitionTest {
     @Mock private ValueOperations<String, String> valueOperations;
     @Mock private SetOperations<String, String> setOperations;
     @Mock private ListOperations<String, String> listOperations;
+    @Mock private ZSetOperations<String, String> zSetOperations;
 
     private RedisStockService service;
 
@@ -107,6 +111,30 @@ class RedisStockServiceStateTransitionTest {
         assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
 
         verify(redisTemplate, never()).opsForSet();
+    }
+
+    @Test
+    @DisplayName("큐가 비어도 처리 중 claim이 있으면 Set을 유지한다")
+    void inFlightClaimKeepsSet() {
+        lockAcquired();
+        queueSizes(0L);
+        inFlightSizes(1L);
+        when(redisTemplate.hasKey(FLAG)).thenReturn(false);
+
+        assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
+
+        verify(redisTemplate, never()).opsForSet();
+    }
+
+    @Test
+    @DisplayName("정합성 복구도 처리 중 claim이 있으면 런타임 상태를 지우지 않는다")
+    void cleanupRejectsInFlightClaim() {
+        queueSizes(0L);
+        inFlightSizes(1L);
+
+        assertThrows(IllegalStateException.class, () -> service.clearRuntimeState(CAMPAIGN_ID));
+
+        verify(redisTemplate, never()).delete(anyString());
     }
 
     @Test
@@ -188,6 +216,7 @@ class RedisStockServiceStateTransitionTest {
             assertTrue(allowCleanup.await(5, TimeUnit.SECONDS));
             return 0L;
         });
+        inFlightSizes(0L, 0L);
         when(redisTemplate.hasKey(FLAG)).thenAnswer(invocation -> activeFlag.get());
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(setOperations.remove(ACTIVE_SET, "62")).thenAnswer(invocation -> {
@@ -229,5 +258,16 @@ class RedisStockServiceStateTransitionTest {
     private void queueSizes(Long... sizes) {
         when(redisTemplate.opsForList()).thenReturn(listOperations);
         when(listOperations.size(QUEUE)).thenReturn(sizes[0], java.util.Arrays.copyOfRange(sizes, 1, sizes.length));
+        if (sizes[0] != null && sizes[0] == 0L) {
+            inFlightSizes(0L, 0L);
+        } else {
+            when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+            when(zSetOperations.size(IN_FLIGHT)).thenReturn(0L);
+        }
+    }
+
+    private void inFlightSizes(Long... sizes) {
+        when(redisTemplate.opsForZSet()).thenReturn(zSetOperations);
+        when(zSetOperations.size(IN_FLIGHT)).thenReturn(sizes[0], java.util.Arrays.copyOfRange(sizes, 1, sizes.length));
     }
 }
