@@ -244,6 +244,7 @@
       ansible.builtin.slurp:
         src: "{{ deploy_env_file }}"
       register: deploy_env_file_slurp
+      no_log: true
       tags:
         - after_install
         - application_start
@@ -432,6 +433,7 @@
       ansible.builtin.slurp:
         src: "{{ deploy_env_file }}"
       register: deploy_validation_env_slurp
+      no_log: true
       tags:
         - validate_service
 

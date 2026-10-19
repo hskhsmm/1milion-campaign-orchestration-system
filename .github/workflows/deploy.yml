@@ -113,8 +113,36 @@ jobs:
           echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
 
       # 첫 전환 배포 실패 시 이전 번들이 읽는 SSM 값은 이전 정상 이미지로 남아 있어야 한다.
-      - name: Wait for successful deployment
-        run: aws deploy wait deployment-successful --deployment-id '${{ steps.codedeploy.outputs.deployment_id }}'
+      - name: Wait for terminal deployment result
+        timeout-minutes: 125
+        env:
+          DEPLOYMENT_ID: ${{ steps.codedeploy.outputs.deployment_id }}
+        run: |
+          deadline=$((SECONDS + 7200))
+          while (( SECONDS < deadline )); do
+            status=$(aws deploy get-deployment \
+              --deployment-id "$DEPLOYMENT_ID" \
+              --query 'deploymentInfo.status' \
+              --output text)
+            case "$status" in
+              Succeeded)
+                exit 0
+                ;;
+              Failed|Stopped)
+                echo "CodeDeploy deployment ended with status: $status" >&2
+                exit 1
+                ;;
+              Created|Queued|InProgress|Baking|Ready)
+                sleep 15
+                ;;
+              *)
+                echo "Unexpected CodeDeploy status: $status" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "CodeDeploy deployment did not finish within 120 minutes: $DEPLOYMENT_ID" >&2
+          exit 1
 
       # 구버전 배포 번들 및 진단 스크립트용 호환 포인터. 새 번들의 이미지 선택에는 사용하지 않는다.
       - name: Update last successful ECR image pointer
