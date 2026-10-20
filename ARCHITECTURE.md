@@ -11,7 +11,7 @@ POST /api/campaigns/{id}/participation
   → HTTP 202 Accepted
 
 Redis Queue
-  → ParticipationBridge: 활성 캠페인 순회, Queue pop, Kafka 발행
+  → ParticipationBridge: Queue → Redis in-flight 원자 이동, Kafka 확인 후 in-flight 제거
   → Kafka campaign-participation-topic
   → ParticipationEventConsumer: batch INSERT/단건 폴백, ack 또는 실패 처리
   → MySQL participation_history
@@ -26,7 +26,7 @@ Redis Queue
 | Redis → Kafka | [ParticipationBridge](app/campaign-core/src/main/java/io/eventdriven/campaign/application/bridge/ParticipationBridge.java), [KafkaConfig](app/campaign-core/src/main/java/io/eventdriven/campaign/config/KafkaConfig.java) |
 | Kafka → DB | [ParticipationEventConsumer](app/campaign-core/src/main/java/io/eventdriven/campaign/application/consumer/ParticipationEventConsumer.java) |
 
-Bridge는 각 실행 인스턴스에서 활성 캠페인 집합을 순회하며 캠페인별 Queue를 처리한다. 현재 코드에는 Redis pop 후 Kafka 발행 성공 전까지의 장애 창이 있으므로, 처리량을 높이는 변경은 유실·복구 설계와 함께 검증해야 한다.
+Bridge는 각 실행 인스턴스에서 활성 캠페인 집합을 순회한다. 캠페인별 Queue와 `bridge:inflight:campaign:{id}`는 같은 Redis Cluster 슬롯이며, Lua가 원자적으로 이동한다. Kafka 발행 성공 후 전용 제한 실행기에서 해당 claim을 제거한다. 실행기가 포화되거나 종료되어 ACK가 거부되면 claim을 남겨 만료 복구 대상으로 삼는다. 캠페인 비활성화·런타임 정리 판단도 두 키의 잔량 합을 단일 Lua 호출로 읽어 복구 중간 상태를 잘못 관측하지 않는다. 프로세스 종료·발행 실패로 남은 claim은 5분 뒤 다시 Queue로 돌아간다. 재시도로 Kafka 중복은 발생할 수 있어 DB의 `(campaign_id, user_id)` 고유 제약에 의존한다. Redis failover 직후의 202 영속성, Redis 자체 삭제, DLQ의 내구성은 이 변경으로 해결되지 않는다.
 
 ## 배치·DLQ·관측
 

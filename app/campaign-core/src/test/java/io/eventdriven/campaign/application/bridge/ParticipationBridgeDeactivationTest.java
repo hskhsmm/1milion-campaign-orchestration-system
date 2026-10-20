@@ -1,8 +1,6 @@
 package io.eventdriven.campaign.application.bridge;
 
-import io.eventdriven.campaign.application.service.DlqMessageService;
 import io.eventdriven.campaign.application.service.RedisStockService;
-import io.eventdriven.campaign.application.service.SlackNotificationService;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.simple.SimpleMeterRegistry;
 import org.junit.jupiter.api.BeforeEach;
@@ -37,9 +35,8 @@ class ParticipationBridgeDeactivationTest {
 
     @Mock private RedisTemplate<String, String> redisTemplate;
     @Mock private KafkaTemplate<String, String> kafkaTemplate;
+    @Mock private BridgeQueueService bridgeQueueService;
     @Mock private RedisStockService redisStockService;
-    @Mock private SlackNotificationService slackNotificationService;
-    @Mock private DlqMessageService dlqMessageService;
     @Mock private JsonMapper jsonMapper;
     @Mock private SetOperations<String, String> setOperations;
     @Mock private ListOperations<String, String> listOperations;
@@ -52,21 +49,20 @@ class ParticipationBridgeDeactivationTest {
         participationBridge = new ParticipationBridge(
                 redisTemplate,
                 kafkaTemplate,
+                bridgeQueueService,
+                Runnable::run,
                 redisStockService,
-                slackNotificationService,
                 meterRegistry,
-                jsonMapper,
-                dlqMessageService
+                jsonMapper
         );
 
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(setOperations.members(ACTIVE_CAMPAIGNS_KEY)).thenReturn(Set.of("62"));
         when(redisTemplate.opsForList()).thenReturn(listOperations);
-        when(listOperations.rightPop(QUEUE_KEY)).thenReturn(null);
     }
 
     @Test
-    @DisplayName("flag 없음 + RPOP null이면 잠금 기반 cleanup을 요청한다")
+    @DisplayName("flag 없음 + claim 없음이면 잠금 기반 cleanup을 요청한다")
     void drainQueues_inactiveAndEmpty_requestsCleanup() {
         when(listOperations.size(QUEUE_KEY)).thenReturn(0L);
         when(redisStockService.isActive(62L)).thenReturn(false);
@@ -85,6 +81,7 @@ class ParticipationBridgeDeactivationTest {
         participationBridge.drainQueues();
 
         verify(listOperations, never()).rightPop(LEGACY_QUEUE_KEY);
+        verify(bridgeQueueService).claim(62L);
     }
 
     @Test
