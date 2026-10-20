@@ -198,11 +198,9 @@ Redis 직접 검증:
 ```bash
 redis-cli -c -h <elasticache-configuration-endpoint> \
   LLEN 'queue:campaign:{<id>}'
-redis-cli -c -h <elasticache-configuration-endpoint> \
-  ZCARD 'bridge:inflight:campaign:{<id>}'
 ```
 
-최종 드레인은 Queue와 in-flight가 모두 0일 때만 판정한다. Grafana Gauge만으로 최종 Queue 0을 판정하지 않는다. 애플리케이션 버전이 Queue Gauge 종료 처리를 포함하지 않으면 마지막 non-zero 값이 남을 수 있다.
+Grafana Gauge만으로 최종 Queue 0을 판정하지 않는다. 애플리케이션 버전이 Queue Gauge 종료 처리를 포함하지 않으면 마지막 non-zero 값이 남을 수 있다.
 
 ## 5. 지속 가능한 처리량 테스트
 

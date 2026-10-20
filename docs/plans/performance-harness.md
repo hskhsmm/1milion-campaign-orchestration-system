@@ -126,7 +126,7 @@ API의 p95/p99를 낮추면서 Redis Queue가 계속 증가하거나 DB 반영�
 
 현재 앱은 각 ASG 인스턴스에서 API, Bridge, Consumer가 함께 실행되고, Kafka listener concurrency는 토픽 파티션 수를 기준으로 설정된다. API/Worker 분리는 **가장 유력한 구조적 개선 가설**이지만 아직 검증 결과가 아니다. 역할 분리 시 Worker의 헬스체크·배포·스케일링 기준을 API와 구분하고, Kafka 파티션 10개와 Redis hot campaign·RDS가 다음 병목이 될 가능성을 함께 본다.
 
-Redis batch pop은 처리량 개선 후보이지만, 단순 batch pop은 Kafka 확인 전 유실 범위를 키울 수 있다. Bridge의 in-flight claim·만료 복구 코드를 추가했더라도 Redis Cluster·Kafka 통합 및 종료 장애 주입 테스트가 아직 필요하다. 이 경계가 검증된 뒤에 batch pop을 별도 성능 변경으로 적용한다. 성능 개선보다 202 이후 수용된 이벤트의 복구 가능성을 우선한다.
+Redis batch pop은 처리량 개선 후보이지만, 기존에도 pop→Kafka 발행 사이에 프로세스 종료 시 유실 가능성이 있다. 단순 batch pop은 유실 범위를 키울 수 있으므로, 처리 중 목록/재시도 또는 동등한 복구 설계를 확정하고 장애 주입 테스트를 통과한 뒤 적용한다. 성능 개선보다 202 이후 수용된 이벤트의 복구 가능성을 우선한다.
 
 ## 8. 기존 MCP 모니터링은 어떻게 다룰까
 

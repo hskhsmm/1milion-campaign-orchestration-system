@@ -7,6 +7,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.data.redis.core.ListOperations;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.data.redis.core.SetOperations;
 import org.springframework.data.redis.core.ValueOperations;
@@ -23,7 +24,6 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.assertFalse;
-import static org.junit.jupiter.api.Assertions.assertThrows;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.any;
@@ -42,13 +42,13 @@ class RedisStockServiceStateTransitionTest {
     private static final String ACTIVE_SET = "active:campaigns";
     private static final String FLAG = "active:campaign:{62}";
     private static final String QUEUE = "queue:campaign:{62}";
-    private static final String IN_FLIGHT = "bridge:inflight:campaign:{62}";
     private static final String LOCK = "lock:campaign:{62}:state";
 
     @Mock private RedisTemplate<String, String> redisTemplate;
     @Mock private DefaultRedisScript<List> checkDecrEnqueueScript;
     @Mock private ValueOperations<String, String> valueOperations;
     @Mock private SetOperations<String, String> setOperations;
+    @Mock private ListOperations<String, String> listOperations;
 
     private RedisStockService service;
 
@@ -72,10 +72,10 @@ class RedisStockServiceStateTransitionTest {
     }
 
     @Test
-    @DisplayName("잠금 안에서 flag와 원자적 pending 조회가 비어 있으면 Set만 제거한다")
+    @DisplayName("잠금 안에서 flag와 LLEN이 비어 있으면 Set만 제거한다")
     void inactiveAndEmptyRemovesOnlySet() {
         lockAcquired();
-        pendingWorkSizes(0L, 0L);
+        queueSizes(0L, 0L);
         when(redisTemplate.hasKey(FLAG)).thenReturn(false);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
 
@@ -83,15 +83,13 @@ class RedisStockServiceStateTransitionTest {
 
         verify(setOperations).remove(ACTIVE_SET, "62");
         verify(redisTemplate, never()).delete(FLAG);
-        verify(redisTemplate, org.mockito.Mockito.times(2)).execute(
-                any(DefaultRedisScript.class), eq(List.of(QUEUE, IN_FLIGHT)));
     }
 
     @Test
     @DisplayName("잠금 대기 중 복구로 flag가 생기면 Set을 제거하지 않는다")
     void reactivatedBeforeCleanupKeepsSet() {
         lockAcquired();
-        pendingWorkSizes(0L);
+        queueSizes(0L);
         when(redisTemplate.hasKey(FLAG)).thenReturn(true);
 
         assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
@@ -103,7 +101,8 @@ class RedisStockServiceStateTransitionTest {
     @DisplayName("큐에 잔량이 있으면 Set을 제거하지 않는다")
     void nonEmptyQueueKeepsSet() {
         lockAcquired();
-        pendingWorkSizes(206_000L);
+        queueSizes(206_000L);
+        when(redisTemplate.hasKey(FLAG)).thenReturn(false);
 
         assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
 
@@ -111,31 +110,11 @@ class RedisStockServiceStateTransitionTest {
     }
 
     @Test
-    @DisplayName("큐가 비어도 처리 중 claim이 있으면 Set을 유지한다")
-    void inFlightClaimKeepsSet() {
-        lockAcquired();
-        pendingWorkSizes(1L);
-
-        assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
-
-        verify(redisTemplate, never()).opsForSet();
-    }
-
-    @Test
-    @DisplayName("정합성 복구도 처리 중 claim이 있으면 런타임 상태를 지우지 않는다")
-    void cleanupRejectsInFlightClaim() {
-        pendingWorkSizes(1L);
-
-        assertThrows(IllegalStateException.class, () -> service.clearRuntimeState(CAMPAIGN_ID));
-
-        verify(redisTemplate, never()).delete(anyString());
-    }
-
-    @Test
-    @DisplayName("pending 조회 결과가 불확실하면 Set을 제거하지 않는다")
+    @DisplayName("LLEN 결과가 불확실하면 Set을 제거하지 않는다")
     void unknownQueueSizeKeepsSet() {
         lockAcquired();
-        pendingWorkSizes((Long) null);
+        queueSizes((Long) null);
+        when(redisTemplate.hasKey(FLAG)).thenReturn(false);
 
         assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
 
@@ -146,7 +125,7 @@ class RedisStockServiceStateTransitionTest {
     @DisplayName("Set 제거 직후 큐가 다시 채워지면 Set을 복구한다")
     void queueChangedAfterRemovalRestoresSet() {
         lockAcquired();
-        pendingWorkSizes(0L, 1L);
+        queueSizes(0L, 1L);
         when(redisTemplate.hasKey(FLAG)).thenReturn(false);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
 
@@ -161,7 +140,7 @@ class RedisStockServiceStateTransitionTest {
     @DisplayName("Set 제거 후 active flag가 생기면 Set을 복구한다")
     void flagChangedAfterRemovalRestoresSet() {
         lockAcquired();
-        pendingWorkSizes(0L, 0L);
+        queueSizes(0L, 0L);
         when(redisTemplate.hasKey(FLAG)).thenReturn(false, true);
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
 
@@ -181,7 +160,7 @@ class RedisStockServiceStateTransitionTest {
         assertFalse(service.deactivateIfQueueEmpty(CAMPAIGN_ID));
 
         verify(redisTemplate, never()).opsForSet();
-        verify(redisTemplate, never()).execute(any(DefaultRedisScript.class), eq(List.of(QUEUE, IN_FLIGHT)));
+        verify(redisTemplate, never()).opsForList();
     }
 
     @Test
@@ -203,8 +182,8 @@ class RedisStockServiceStateTransitionTest {
                     }
                     return acquired;
                 });
-        when(redisTemplate.execute(any(DefaultRedisScript.class), eq(List.of(QUEUE, IN_FLIGHT))))
-                .thenAnswer(invocation -> {
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(listOperations.size(QUEUE)).thenAnswer(invocation -> {
             cleanupHoldingLock.countDown();
             assertTrue(allowCleanup.await(5, TimeUnit.SECONDS));
             return 0L;
@@ -247,11 +226,8 @@ class RedisStockServiceStateTransitionTest {
         when(valueOperations.setIfAbsent(eq(LOCK), anyString(), eq(Duration.ofSeconds(60)))).thenReturn(true);
     }
 
-    private void pendingWorkSizes(Long... sizes) {
-        org.mockito.stubbing.OngoingStubbing<Long> response = when(
-                (Long) redisTemplate.execute(any(DefaultRedisScript.class), eq(List.of(QUEUE, IN_FLIGHT))));
-        for (Long size : sizes) {
-            response = response.thenReturn(size);
-        }
+    private void queueSizes(Long... sizes) {
+        when(redisTemplate.opsForList()).thenReturn(listOperations);
+        when(listOperations.size(QUEUE)).thenReturn(sizes[0], java.util.Arrays.copyOfRange(sizes, 1, sizes.length));
     }
 }

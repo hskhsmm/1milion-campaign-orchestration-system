@@ -1,6 +1,5 @@
 package io.eventdriven.campaign.application.service;
 
-import io.eventdriven.campaign.application.bridge.BridgeQueueService;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
@@ -31,7 +30,6 @@ public class RedisStockService {
     private static final Duration STATE_LOCK_LEASE = Duration.ofSeconds(60);
     private static final long STATE_LOCK_WAIT_NANOS = Duration.ofSeconds(3).toNanos();
     private static final DefaultRedisScript<Long> RELEASE_STATE_LOCK_SCRIPT = releaseStateLockScript();
-    private static final DefaultRedisScript<Long> PENDING_BRIDGE_WORK_SCRIPT = pendingBridgeWorkScript();
     private static final long MAX_QUEUE_SIZE = 2_500_000;
     public static final Long INACTIVE_CAMPAIGN = -999L;
     public static final Long QUEUE_FULL = -998L;
@@ -95,17 +93,19 @@ public class RedisStockService {
         }
         boolean removed = false;
         try {
-            Long pending = pendingBridgeWork(campaignId);
-            if (pending == null || pending > 0 || isActive(campaignId)) {
+            String queueKey = getQueueKey(campaignId);
+            Long remaining = redisTemplate.opsForList().size(queueKey);
+            if (isActive(campaignId) || remaining == null || remaining > 0) {
                 return false;
             }
 
             redisTemplate.opsForSet().remove(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
             removed = true;
 
-            // The global active Set is in another slot. Restore its index if work appeared.
-            Long afterRemoval = pendingBridgeWork(campaignId);
-            if (afterRemoval == null || afterRemoval > 0 || isActive(campaignId)) {
+            // Queue writes are atomic within the campaign's Redis Cluster slot, but the
+            // global active Set is in another slot. Restore its index if state changed.
+            Long afterRemoval = redisTemplate.opsForList().size(queueKey);
+            if (isActive(campaignId) || afterRemoval == null || afterRemoval > 0) {
                 redisTemplate.opsForSet().add(ACTIVE_CAMPAIGNS_KEY, campaignId.toString());
                 return false;
             }
@@ -177,10 +177,6 @@ public class RedisStockService {
     }
 
     public void clearRuntimeState(Long campaignId) {
-        Long pending = pendingBridgeWork(campaignId);
-        if (pending == null || pending > 0) {
-            throw new IllegalStateException("Cannot clear Redis runtime while Bridge work remains. campaignId=" + campaignId);
-        }
         deleteStock(campaignId);
         deleteTotal(campaignId);
         deactivateCampaign(campaignId);
@@ -239,19 +235,6 @@ public class RedisStockService {
             // The lease expires even if release fails; do not mask the state transition result.
             log.error("Failed to release campaign state lock. campaignId={}", campaignId, e);
         }
-    }
-
-    /** Queue와 in-flight의 합을 같은 Redis Cluster 슬롯에서 한 시점에 읽는다. */
-    private Long pendingBridgeWork(Long campaignId) {
-        return redisTemplate.execute(PENDING_BRIDGE_WORK_SCRIPT,
-                List.of(getQueueKey(campaignId), BridgeQueueService.inFlightKey(campaignId)));
-    }
-
-    private static DefaultRedisScript<Long> pendingBridgeWorkScript() {
-        DefaultRedisScript<Long> script = new DefaultRedisScript<>();
-        script.setScriptText("return redis.call('LLEN', KEYS[1]) + redis.call('ZCARD', KEYS[2])");
-        script.setResultType(Long.class);
-        return script;
     }
 
     private static DefaultRedisScript<Long> releaseStateLockScript() {
