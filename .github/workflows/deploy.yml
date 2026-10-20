@@ -10,10 +10,10 @@ on:
       - 'stress-test/**'
       - '.github/workflows/**'
 
-# 배포 중 새 push 발생 시 기존 배포 취소하고 새 배포 실행
+# GitHub job 취소만으로 이미 시작된 CodeDeploy 배포는 중단되지 않는다. 중첩 배포를 막는다.
 concurrency:
   group: codedeploy-campaign-prod
-  cancel-in-progress: true
+  cancel-in-progress: false
 
 # OIDC 필수 권한
 permissions:
@@ -62,16 +62,19 @@ jobs:
           docker push \
             631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system:${{ github.sha }}
 
-      # 5. SSM에 최신 이미지 태그 저장
-      - name: Update SSM ECR_IMAGE parameter
+      # 배포 번들에 이미지 digest를 고정한다. 태그는 재지정될 수 있지만 digest는 이미지 내용을 가리킨다.
+      - name: Resolve pushed image digest
+        id: image
         run: |
-          aws ssm put-parameter \
-            --name "/batch-kafka/prod/ECR_IMAGE" \
-            --value "631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system:${{ github.sha }}" \
-            --type String \
-            --overwrite
+          digest=$(aws ecr describe-images \
+            --repository-name batch-kafka-system \
+            --image-ids imageTag=${{ github.sha }} \
+            --query 'imageDetails[0].imageDigest' \
+            --output text)
+          [[ "$digest" =~ ^sha256:[0-9a-f]{64}$ ]] || { echo "Invalid ECR digest: $digest" >&2; exit 1; }
+          echo "image_uri=631124976154.dkr.ecr.ap-northeast-2.amazonaws.com/batch-kafka-system@$digest" >> "$GITHUB_OUTPUT"
 
-      # 6. CodeDeploy 번들 zip 생성
+      # CodeDeploy revision과 실제 실행 이미지를 1:1로 묶는다.
       - name: Zip deployment bundle
         run: |
           rm -rf bundle deploy.zip
@@ -80,24 +83,72 @@ jobs:
           cp -r deploy bundle/
           cp -r ../../ops bundle/
           cp -r ../../stress-test bundle/
+          printf 'GIT_SHA=%s\nECR_IMAGE=%s\n' \
+            '${{ github.sha }}' '${{ steps.image.outputs.image_uri }}' \
+            > bundle/image-revision.env
           cd bundle
           zip -r ../deploy.zip \
             appspec.yml \
+            image-revision.env \
             deploy/ \
             ops/ \
             stress-test/
 
-      # 7. S3 업로드
+      # S3 업로드
       - name: Upload to S3
         run: |
           aws s3 cp deploy.zip \
-            s3://batch-kafka-deploy-631124976154/deploy-${{ github.sha }}.zip
+            s3://batch-kafka-deploy-631124976154/deploy-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}.zip
 
-      # 8. CodeDeploy 트리거
+      # CodeDeploy 트리거
       - name: Trigger CodeDeploy
+        id: codedeploy
         run: |
-          aws deploy create-deployment \
+          deployment_id=$(aws deploy create-deployment \
             --application-name batch-kafka-app \
             --deployment-group-name batch-kafka-prod-dg \
             --deployment-config-name CodeDeployDefault.OneAtATime \
-            --s3-location bucket=batch-kafka-deploy-631124976154,key=deploy-${{ github.sha }}.zip,bundleType=zip
+            --s3-location bucket=batch-kafka-deploy-631124976154,key=deploy-${{ github.sha }}-${{ github.run_id }}-${{ github.run_attempt }}.zip,bundleType=zip \
+            --query deploymentId --output text)
+          echo "deployment_id=$deployment_id" >> "$GITHUB_OUTPUT"
+
+      # 첫 전환 배포 실패 시 이전 번들이 읽는 SSM 값은 이전 정상 이미지로 남아 있어야 한다.
+      - name: Wait for terminal deployment result
+        timeout-minutes: 125
+        env:
+          DEPLOYMENT_ID: ${{ steps.codedeploy.outputs.deployment_id }}
+        run: |
+          deadline=$((SECONDS + 7200))
+          while (( SECONDS < deadline )); do
+            status=$(aws deploy get-deployment \
+              --deployment-id "$DEPLOYMENT_ID" \
+              --query 'deploymentInfo.status' \
+              --output text)
+            case "$status" in
+              Succeeded)
+                exit 0
+                ;;
+              Failed|Stopped)
+                echo "CodeDeploy deployment ended with status: $status" >&2
+                exit 1
+                ;;
+              Created|Queued|InProgress|Baking|Ready)
+                sleep 15
+                ;;
+              *)
+                echo "Unexpected CodeDeploy status: $status" >&2
+                exit 1
+                ;;
+            esac
+          done
+          echo "CodeDeploy deployment did not finish within 120 minutes: $DEPLOYMENT_ID" >&2
+          exit 1
+
+      # 구버전 배포 번들 및 진단 스크립트용 호환 포인터. 새 번들의 이미지 선택에는 사용하지 않는다.
+      - name: Update last successful ECR image pointer
+        run: |
+          aws ssm put-parameter \
+            --name "/batch-kafka/prod/ECR_IMAGE" \
+            --value '${{ steps.image.outputs.image_uri }}' \
+            --type String \
+            --overwrite

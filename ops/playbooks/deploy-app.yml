@@ -22,6 +22,7 @@
     deploy_log_dir: "{{ campaign_core_deploy.log_dir }}"
     deploy_stress_dir: "{{ campaign_core_deploy.stress_dir }}"
     deploy_compose_src: "{{ app_deploy_archive_dir }}/deploy/docker-compose.prod.yml"
+    deploy_revision_file: "{{ app_deploy_archive_dir }}/image-revision.env"
     deploy_stress_src: "{{ app_deploy_archive_dir }}/stress-test"
     deploy_health_url: "{{ campaign_core_deploy.health_url }}"
     deploy_ssm_parameters:
@@ -32,14 +33,12 @@
       SPRING_KAFKA_BOOTSTRAP_SERVERS: "/batch-kafka/prod/SPRING_KAFKA_BOOTSTRAP_SERVERS"
       SPRING_DATA_REDIS_CLUSTER_NODES: "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
       SLACK_WEBHOOK_URL: "/batch-kafka/prod/SLACK_WEBHOOK_URL"
-      ECR_IMAGE: "/batch-kafka/prod/ECR_IMAGE"
     deploy_required_env_keys:
       - SPRING_DATASOURCE_URL
       - SPRING_DATASOURCE_USERNAME
       - SPRING_DATASOURCE_PASSWORD
       - SPRING_KAFKA_BOOTSTRAP_SERVERS
       - SPRING_DATA_REDIS_CLUSTER_NODES
-      - ECR_IMAGE
 
   tasks:
     # 배포에 필요한 런타임 명령이 서버에 있는지 먼저 확인해서 실패 원인을 빠르게 드러낸다.
@@ -128,7 +127,7 @@
         - before_install
         - application_start
 
-    # Parameter Store 값을 모아 .env.prod를 재생성한다. 없는 값은 경고를 남기고, 필수값 검증에서 배포를 중단한다.
+    # Parameter Store에서는 비밀값과 환경 설정만 읽는다. 배포 이미지는 번들에 고정한다.
     - name: Fetch deployment parameters from SSM
       ansible.builtin.command:
         argv:
@@ -191,22 +190,51 @@
       tags:
         - before_install
 
+    - name: Read image revision pinned to this deployment bundle
+      ansible.builtin.slurp:
+        src: "{{ deploy_revision_file }}"
+      register: deploy_revision_file_slurp
+      tags:
+        - before_install
+
+    - name: Parse pinned image and Git SHA
+      ansible.builtin.set_fact:
+        deploy_pinned_image: "{{ ((deploy_revision_file_slurp.content | b64decode).splitlines() | select('match', '^ECR_IMAGE=') | list | first | default('')) | regex_replace('^ECR_IMAGE=', '') }}"
+        deploy_revision_sha: "{{ ((deploy_revision_file_slurp.content | b64decode).splitlines() | select('match', '^GIT_SHA=') | list | first | default('')) | regex_replace('^GIT_SHA=', '') }}"
+      tags:
+        - before_install
+
+    - name: Verify immutable image revision
+      ansible.builtin.assert:
+        that:
+          - deploy_revision_sha is match('^[0-9a-f]{40}$')
+          - deploy_pinned_image is match('^' ~ aws_account_id ~ '\.dkr\.ecr\.' ~ aws_region ~ '\.amazonaws\.com/batch-kafka-system@sha256:[0-9a-f]{64}$')
+        fail_msg: "Invalid image revision in {{ deploy_revision_file }}"
+      tags:
+        - before_install
+
+    - name: Show pinned deployment revision
+      ansible.builtin.debug:
+        msg: "Deploying Git {{ deploy_revision_sha }} with {{ deploy_pinned_image }}"
+      tags:
+        - before_install
+
     - name: Write deployment environment file
       ansible.builtin.copy:
         dest: "{{ deploy_env_file }}"
         owner: root
         group: root
         mode: "0600"
-        content: "{{ deploy_env_lines | join('\n') }}\n"
+        content: "{{ (deploy_env_lines + ['ECR_IMAGE=' ~ deploy_pinned_image]) | join('\n') }}\n"
       no_log: true
       tags:
         - before_install
 
     # 이미지 태그가 없으면 이후 단계의 실패 원인이 불명확해지므로 여기서 명확히 중단한다.
-    - name: Verify ECR_IMAGE parameter exists
+    - name: Verify pinned ECR_IMAGE was added to environment
       ansible.builtin.assert:
         that:
-          - "'ECR_IMAGE=' in (deploy_env_lines | join('\n'))"
+          - deploy_pinned_image | length > 0
         fail_msg: "ECR_IMAGE is missing from {{ deploy_env_file }}"
       tags:
         - before_install
@@ -216,6 +244,7 @@
       ansible.builtin.slurp:
         src: "{{ deploy_env_file }}"
       register: deploy_env_file_slurp
+      no_log: true
       tags:
         - after_install
         - application_start
@@ -396,5 +425,40 @@
     - name: Print application health result
       ansible.builtin.debug:
         msg: "Health OK: {{ deploy_health_check.json | default(deploy_health_check.content | default('')) }}"
+      tags:
+        - validate_service
+
+    # health=UP만으로는 실제 기동 이미지가 이 배포 번들의 이미지인지 확인할 수 없다.
+    - name: Read expected image for deployment validation
+      ansible.builtin.slurp:
+        src: "{{ deploy_env_file }}"
+      register: deploy_validation_env_slurp
+      no_log: true
+      tags:
+        - validate_service
+
+    - name: Parse expected image for deployment validation
+      ansible.builtin.set_fact:
+        deploy_expected_image: "{{ ((deploy_validation_env_slurp.content | b64decode).splitlines() | select('match', '^ECR_IMAGE=') | list | first | default('')) | regex_replace('^ECR_IMAGE=', '') }}"
+      tags:
+        - validate_service
+
+    - name: Inspect running application container
+      ansible.builtin.command:
+        argv:
+          - docker
+          - inspect
+          - campaign-core-app
+      register: deploy_running_container_inspect
+      changed_when: false
+      tags:
+        - validate_service
+
+    - name: Verify running container matches pinned image
+      ansible.builtin.assert:
+        that:
+          - deploy_expected_image | length > 0
+          - (deploy_running_container_inspect.stdout | from_json | first).Config.Image == deploy_expected_image
+        fail_msg: "Running container image does not match pinned deployment image"
       tags:
         - validate_service
