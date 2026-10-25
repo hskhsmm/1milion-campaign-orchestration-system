@@ -85,12 +85,16 @@ class ParticipationBridgeDeliveryWindowTest {
         CompletableFuture<SendResult<String, String>> failed = new CompletableFuture<>();
         when(kafkaTemplate.send(KafkaConfig.TOPIC_NAME, "7", MESSAGE)).thenReturn(failed);
 
+        SimpleMeterRegistry meterRegistry = new SimpleMeterRegistry();
         ParticipationBridge bridge = new ParticipationBridge(redisTemplate, kafkaTemplate,
-                bridgeQueueService, Runnable::run, redisStockService, new SimpleMeterRegistry(), jsonMapper);
+                bridgeQueueService, command -> { throw new RejectedExecutionException("full"); },
+                redisStockService, meterRegistry, jsonMapper);
         bridge.drainQueues();
         failed.completeExceptionally(new IllegalStateException("broker unavailable"));
 
         verify(bridgeQueueService, never()).acknowledge(claim);
+        assertThat(meterRegistry.find("bridge.claims.ack.rejected").counter()).isNull();
+        assertThat(meterRegistry.find("bridge.messages.published").counter()).isNull();
     }
 
     @Test
@@ -127,6 +131,7 @@ class ParticipationBridgeDeliveryWindowTest {
 
         verify(bridgeQueueService, never()).acknowledge(claim);
         assertThat(meterRegistry.counter("bridge.claims.ack.rejected").count()).isEqualTo(1);
+        assertThat(meterRegistry.counter("bridge.messages.published", "campaignId", "91").count()).isEqualTo(1);
     }
 
     private BridgeQueueService.Claim prepareClaim() throws Exception {
