@@ -19,6 +19,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executor;
+import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Component
@@ -150,33 +151,37 @@ public class ParticipationBridge {
         String partitionKey = extractUserIdKey(message, campaignId);
         try {
             kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message)
-                    .whenCompleteAsync((result, ex) -> {
+                    .whenComplete((result, ex) -> {
                         if (ex != null) {
                             log.warn("Kafka publish failed; claim retained for retry. campaignId={}", campaignId, ex);
                             return;
                         }
 
-                        try {
-                            if (!bridgeQueueService.acknowledge(claim)) {
-                                log.warn("Kafka succeeded after claim was reclaimed; duplicate may be retried. campaignId={}", campaignId);
-                            }
-                        } catch (Exception ackFailure) {
-                            log.error("Kafka succeeded but Redis claim ack failed; duplicate may be retried. campaignId={}",
-                                    campaignId, ackFailure);
-                        }
+                        // Kafka 성공과 Redis claim ACK는 별개다. ACK 실행기가 거부해도 발행 성공은 기록한다.
                         publishedCounters.computeIfAbsent(campaignId, id ->
                                 Counter.builder("bridge.messages.published")
                                         .description("Kafka messages published by bridge")
                                         .tag("campaignId", String.valueOf(id))
                                         .register(meterRegistry)
                         ).increment();
-                    }, ackExecutor)
-                    .exceptionally(ex -> {
-                        // A saturated/shutting-down executor leaves the claim for lease-based retry.
-                        meterRegistry.counter("bridge.claims.ack.rejected").increment();
-                        log.error("Kafka completion handler could not run; claim retained for retry. campaignId={}",
-                                campaignId, ex);
-                        return null;
+
+                        try {
+                            ackExecutor.execute(() -> {
+                                try {
+                                    if (!bridgeQueueService.acknowledge(claim)) {
+                                        log.warn("Kafka succeeded after claim was reclaimed; duplicate may be retried. campaignId={}", campaignId);
+                                    }
+                                } catch (Exception ackFailure) {
+                                    log.error("Kafka succeeded but Redis claim ack failed; duplicate may be retried. campaignId={}",
+                                            campaignId, ackFailure);
+                                }
+                            });
+                        } catch (RejectedExecutionException rejected) {
+                            // 전송 성공 이후 ACK만 거부된 경우에만 이 지표를 올린다.
+                            meterRegistry.counter("bridge.claims.ack.rejected").increment();
+                            log.error("Kafka succeeded but Redis claim ACK execution was rejected; claim retained for retry. campaignId={}",
+                                    campaignId, rejected);
+                        }
                     });
         } catch (Exception e) {
             log.warn("Kafka publish failed before enqueue; claim retained for retry. campaignId={}", campaignId, e);
