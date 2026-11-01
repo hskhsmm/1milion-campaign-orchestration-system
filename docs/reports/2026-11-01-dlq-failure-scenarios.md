@@ -164,7 +164,7 @@
 - [T06 재현 기록](2026-10-01-t06-consumer-redelivery-verification.md) — D1·D2·D4·Q1 재현과 후속 작업 (§10)
 - `docs/current/2026-10-01-participation-loss-holes.md` — A·B 구멍 정리 (B·6은 구버전, 로컬 미추적 기록)
 - `docs/current/2026-10-20-pr109-bridge-inflight-verification.md` — Bridge claim 방식 검증 (로컬 미추적 기록)
-- `docs/plans/accepted-202-failure-verification.md` — 202 접수 이후 장애 검증 계획
+- `docs/reports/2026-11-01-accepted-202-boundaries.md` — 202 접수 이후 장애 검증 계획
 - `app/campaign-core/repro/t06/` — DB 장애 주입 재현 환경 (로컬 미추적)
 
 ## 8. 변경 반영 상태 (`fix/consumer-dlq-retry-boundary`, 2026-11-01)
