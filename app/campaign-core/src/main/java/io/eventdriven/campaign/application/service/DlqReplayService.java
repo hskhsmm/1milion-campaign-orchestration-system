@@ -29,6 +29,9 @@ import java.util.Map;
 @Service
 public class DlqReplayService {
 
+    /** The tasklet can decide its next action without reloading the execution. */
+    public enum ProcessResult { CONTINUE, DONE, FAILED }
+
     private final DlqMessageRepository dlqMessageRepository;
     private final DlqReplayExecutionRepository dlqReplayExecutionRepository;
     private final DlqReplayExecutionItemRepository dlqReplayExecutionItemRepository;
@@ -110,26 +113,26 @@ public class DlqReplayService {
      * Broker success followed by DB rollback can republish, so Consumer remains idempotent.
      */
     @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
-    public boolean processNext(Long executionId) {
+    public ProcessResult processNext(Long executionId) {
         DlqReplayExecution execution = dlqReplayExecutionRepository.findLockedById(executionId)
                 .orElseThrow(() -> new IllegalArgumentException("Execution not found: " + executionId));
-        if (execution.getProcessedCount() >= execution.getMaxItems()) return false;
+        if (execution.getProcessedCount() >= execution.getMaxItems()) return ProcessResult.DONE;
         List<Long> ids = dlqMessageRepository.findReplayCandidateIds(
                 DlqMessageProcessingStatus.PENDING, execution.getLastMessageId(),
                 execution.getFilterCampaignId(), execution.getFilterReason(),
                 execution.getFilterFromTime(), execution.getFilterToTime(), PageRequest.of(0, 1));
-        if (ids.isEmpty()) return false;
+        if (ids.isEmpty()) return ProcessResult.DONE;
         DlqMessageRecord message = dlqMessageRepository.findLockedById(ids.get(0)).orElseThrow();
         // Re-read under lock; a competing execution may have finished while we waited.
         if (message.getProcessingStatus() == DlqMessageProcessingStatus.PENDING) {
             processSingleMessage(execution, message);
             // Commit the failure evidence, but keep the original and cursor for resume.
-            if (execution.getStatus() == DlqReplayExecutionStatus.FAILED) return false;
+            if (execution.getStatus() == DlqReplayExecutionStatus.FAILED) return ProcessResult.FAILED;
             execution.advance(message.getId());
         } else {
             execution.moveCursor(message.getId());
         }
-        return true;
+        return ProcessResult.CONTINUE;
     }
 
     @Transactional(readOnly = true)

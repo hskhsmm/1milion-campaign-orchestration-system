@@ -4,7 +4,7 @@
 
 접수 시 확정한 campaignId/userId/sequence를 유지한 채 실패 원본을 다시 Kafka로 보낸다. 재고를 다시 차감하거나 새 순번을 만들지 않는다. 일시 DB 장애는 Consumer nack이 처리하며, Replay는 운영자가 원인을 확인·해결한 격리 메시지를 대상으로 실행한다.
 
-`dlqReplayJob`은 Start → Process → Finish의 Spring Batch Job이다. Process Tasklet은 한 번 호출할 때 한 건만 독립 트랜잭션(`REQUIRES_NEW`)으로 처리하고 커밋한 뒤 CONTINUABLE로 이어간다. 단순히 for-loop 안에서 100건씩 조회하는 방식과 달리 처리 결과·cursor·실행 건수가 매 항목 함께 커밋된다.
+`dlqReplayJob`은 Start → Process → Finish의 Spring Batch Job이다. Process Tasklet은 한 번 호출할 때 한 건만 독립 트랜잭션(`REQUIRES_NEW`)으로 처리하고 커밋한 뒤 CONTINUABLE로 이어간다. 단순히 for-loop 안에서 100건씩 조회하는 방식과 달리 처리 결과·cursor·실행 건수가 매 항목 함께 커밋된다. `processNext`가 `CONTINUE`(반복), `DONE`(종료), `FAILED`(Step 실패)를 직접 반환하므로 Tasklet이 처리 후 실행 상태를 다시 조회하지 않는다.
 
 | 표시 | 의미 |
 | --- | --- |

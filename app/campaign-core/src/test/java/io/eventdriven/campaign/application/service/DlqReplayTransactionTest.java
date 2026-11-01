@@ -70,8 +70,8 @@ class DlqReplayTransactionTest {
     @Test void checkpointSurvivesNewInvocationAndPreventsRepeat(){
         var m=seed();decision();when(kafka.send(anyString(),anyString(),anyString())).thenReturn(CompletableFuture.completedFuture(null));
         var e=service.createExecution("test",false,null,null,null,null,10);
-        assertThat(service.processNext(e.getId())).isTrue();
-        assertThat(service.processNext(e.getId())).isFalse();
+        assertThat(service.processNext(e.getId())).isEqualTo(DlqReplayService.ProcessResult.CONTINUE);
+        assertThat(service.processNext(e.getId())).isEqualTo(DlqReplayService.ProcessResult.DONE);
         assertThat(executions.findById(e.getId()).orElseThrow().getProcessedCount()).isEqualTo(1);
         assertThat(messages.findById(m.getId()).orElseThrow().getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.REPLAYED);
         verify(kafka,times(1)).send(anyString(),anyString(),anyString());

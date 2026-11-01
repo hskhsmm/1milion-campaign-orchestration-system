@@ -31,7 +31,7 @@ class DlqReplayServiceTest {
         when(kafka.send(anyString(),anyString(),anyString())).thenReturn(CompletableFuture.completedFuture(null));
     }
     @Test void publishAndCheckpoint(){
-        assertThat(service.processNext(1L)).isTrue();
+        assertThat(service.processNext(1L)).isEqualTo(DlqReplayService.ProcessResult.CONTINUE);
         verify(kafka).send(anyString(),eq("42"),eq("sequence100"));
         assertThat(execution.getLastMessageId()).isEqualTo(7);
         assertThat(execution.getProcessedCount()).isEqualTo(1);
@@ -49,9 +49,9 @@ class DlqReplayServiceTest {
     }
     @Test void repeatedBrokerOutagesNeverInvalidateNormalMessage(){
         when(kafka.send(anyString(),anyString(),anyString())).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("offline")));
-        service.processNext(1L);
-        assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.PENDING);
-        service.processNext(1L);service.processNext(1L);
+        for (int attempt=0; attempt<3; attempt++) {
+            assertThat(service.processNext(1L)).isEqualTo(DlqReplayService.ProcessResult.FAILED);
+        }
         assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.PENDING);
         assertThat(execution.getFinalFailedCount()).isZero();
         assertThat(execution.getStatus()).isEqualTo(DlqReplayExecutionStatus.FAILED);
@@ -64,8 +64,13 @@ class DlqReplayServiceTest {
         assertThat(execution.getLastMessageId()).isZero();
         assertThat(execution.getPublishFailedCount()).isZero();
     }
+    @Test void noCandidateFinishesWithoutPublishing() {
+        when(messages.findReplayCandidateIds(any(),anyLong(),any(),any(),any(),any(),any())).thenReturn(List.of());
+        assertThat(service.processNext(1L)).isEqualTo(DlqReplayService.ProcessResult.DONE);
+        verifyNoInteractions(kafka,policy);
+    }
     @Test void stopsAtLimit(){
         ReflectionTestUtils.setField(execution,"processedCount",10);
-        assertThat(service.processNext(1L)).isFalse();verifyNoInteractions(kafka,policy);
+        assertThat(service.processNext(1L)).isEqualTo(DlqReplayService.ProcessResult.DONE);verifyNoInteractions(kafka,policy);
     }
 }

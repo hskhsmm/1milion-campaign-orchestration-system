@@ -79,3 +79,11 @@ DLQ_BATCH_MYSQL_URL='jdbc:mysql://127.0.0.1:<임시포트>/dlq_batch_test?allowP
 - 배치 실행을 멈춘 상태에서 V8~V10 적용 → 배포 소량 smoke → 150만 기준선 → API/워커 자원 경쟁·드레인 병목 개선 → 200만 총량 검증 순서로 진행한다.
 
 운영 명령과 판단 기준은 [배치 운영 가이드](../runbooks/dlq-replay.md)를 따른다. 전체 프로젝트 README는 이번 수정에서 변경하지 않았다.
+
+## 추가 리뷰 반영: 항목별 상태 재조회 제거 (2026-11-02)
+
+`108e381` 이후 CodeRabbit의 추가 지적을 반영했다. `processNext`의 boolean을 `ProcessResult.CONTINUE / DONE / FAILED`로 바꾸고 Tasklet의 후속 `getExecution` 호출을 제거했다. 결과는 독립 트랜잭션 커밋 뒤 호출자에게 반환되므로 실패 기록 보존과 FAILED Job 종료 경계는 유지한다. 일반 참여 API나 Bridge 경로는 변경하지 않았다.
+
+같은 로컬 전용 MySQL·단일 KRaft 연동 테스트를 포함해 전체 재실행: **80건 중 실패 0·오류 0·건너뜀 1, 실제 79건 통과.** DB 연동 10건 모두 통과했다. 대상 없음·상한 도달은 DONE, 정상 처리는 CONTINUE, Kafka 실패는 FAILED인 반환 계약을 확인했고 실제 Job의 실패 후 재개 및 5건의 최종 DB 결과를 다시 확인했다.
+
+변경 효과는 Tasklet의 항목별 상태 재조회 호출 제거다. API p95/p99나 전체 처리량 향상은 측정하지 않았다. AWS·150만 성능 검증 및 위에 기재한 미검증 범위는 그대로 남는다.
