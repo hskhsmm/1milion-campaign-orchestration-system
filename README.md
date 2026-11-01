@@ -573,7 +573,7 @@ terraform-mcp EC2
 | Consumer DB 일시 실패율 | `consumer_db_transient_failures_total` |
 | Consumer DB commit batch size (전역 가중 평균) | `consumer_db_commit_batch_size` |
 
-**커스텀 메트릭 9종** (Micrometer 기반)
+**커스텀 메트릭 13종** (Micrometer 기반)
 - `bridge.drain.duration` — Bridge drainQueues() 소요시간
 - `bridge.messages.published` — Kafka 발행 성공 건수
 - `consumer.pending_to_success.latency` — Consumer batch 시작 → DB 처리 완료 지연 (legacy metric name)
@@ -670,7 +670,7 @@ MCP 도구로 지표와 테스트 결과를 조회하고, AI를 활용해 원인
 | **Container** | Docker, Amazon ECR | 이미지 버전 관리, 배포 표준화 |
 | **CI/CD** | GitHub Actions + CodeDeploy + Ansible | OIDC 인증, ASG 순차 무중단 배포, 서버 내부 배포 절차 playbook화 |
 | **Load Test** | k6 (shared-iterations, ramping-arrival-rate) | 정확한 총량 정합성 검증과 지속 가능 처리량 탐색 분리 |
-| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
+| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 13종, 16패널 대시보드 |
 | **운영 보조** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림, 지표 조회 |
 | **Cloud** | AWS (EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy, SSM) | 실제 운영 환경 |
 

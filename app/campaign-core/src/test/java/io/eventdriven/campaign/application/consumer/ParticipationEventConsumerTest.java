@@ -156,6 +156,23 @@ class ParticipationEventConsumerTest {
     }
 
     @Test
+    @DisplayName("실제 null value는 NULL_VALUE로 보관하고 뒤따르는 정상 메시지와 함께 ACK한다")
+    void nullRecordValue_isIsolatedAndBatchAcked() throws Exception {
+        when(jsonMapper.readValue("valid", ParticipationEvent.class)).thenReturn(new ParticipationEvent(61L, 1L, 1L));
+        List<ConsumerRecord<String, String>> records = List.of(record("1", null), record("2", "valid"));
+        givenDlqPayloads();
+
+        consumer.consumeParticipationEvent(records, acknowledgment);
+
+        verify(dlqMessageService).createConsumerPayload(eq("1"), isNull(), eq("NULL_VALUE"), isNull());
+        verify(jsonMapper, never()).readValue((String) isNull(), eq(ParticipationEvent.class));
+        verify(jdbcTemplate).batchUpdate(anyString(), anyList());
+        verify(dlqMessageService).publishAndStore(any());
+        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).nack(anyInt(), any(Duration.class));
+    }
+
+    @Test
     @DisplayName("필수 값이 없거나 0 이하인 메시지는 DB 저장을 시도하지 않고 INVALID_PAYLOAD로 보관한다")
     void invalidPayloads_skipDbAndGoToDlq() throws Exception {
         List<ConsumerRecord<String, String>> records = List.of(

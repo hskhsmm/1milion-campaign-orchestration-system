@@ -208,6 +208,12 @@ public class ParticipationEventConsumer {
             List<DlqEventPayload> dlqPayloads
     ) {
         for (ConsumerRecord<String, String> record : records) {
+            // 실제 null value(tombstone)는 JSON 문자열 "null"(INVALID_PAYLOAD)과 사유로 구별해 보관한다.
+            if (record.value() == null) {
+                log.warn("Null participation record value. Sending to DLQ. key={}", record.key());
+                dlqPayloads.add(createDlqPayload(record.key(), null, "NULL_VALUE", null));
+                continue;
+            }
             ParticipationEvent event;
             try {
                 event = jsonMapper.readValue(record.value(), ParticipationEvent.class);
