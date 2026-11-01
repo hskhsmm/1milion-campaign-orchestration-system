@@ -295,7 +295,7 @@ C3·C4는 [추정]에서 **[확정 재현]**으로 바뀌었다. 추가로, `mai
 | V7 적용 | `original_message` = `mediumtext`, 앱이 `ddl-auto: validate`를 통과해 기동 |
 | L1 기존 유형 | §8.5와 같음 (참여 2행, DLQ 6, 잘못된 행 0, 재전달 중복 없음) |
 | L3 DLQ 저장 실패 (`reject` 60s) | 정상 200/200, 불량 20/20, DLQ 중복 없음, nack `db_failure` 20·`dlq_store_failure` 6 |
-| L2 `reject 150` 회귀 | 진행 중 (결과는 후속 커밋으로 기록) |
+| L2 `reject 150` 회귀 | 발행 54,000, DB 54,000, 유실 0, 중복 0, DLQ 0, nack `db_failure` 60, 재할당·poll 간격 초과 0 |
 | 1,001자 오류 설명 | 앱 경로로는 자연스럽게 만들 수 없어 단위 테스트로만 확인 |
 
 **남는 위험:** 예상하지 못한 다른 컬럼 제약으로 DLQ 저장이 실패하면 여전히 같은 배치가 `nack`된다. `dlq.db.store.failed` 지표로 탐지해야 한다.
