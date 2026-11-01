@@ -91,10 +91,19 @@ public class DlqReplayController {
 
     /** Resume the same persisted cursor; a new execution would start from the beginning. */
     @PostMapping("/executions/{executionId}/resume")
-    public ResponseEntity<ApiResponse<?>> resume(@PathVariable Long executionId) throws Exception {
-        DlqReplayExecution execution = dlqReplayService.getExecution(executionId);
+    public ResponseEntity<ApiResponse<?>> resume(@PathVariable Long executionId,
+            @RequestParam(defaultValue="false") boolean confirmStopped) throws Exception {
+        DlqReplayExecution execution;
+        try {
+            execution = dlqReplayService.getExecution(executionId);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.fail(e.getMessage()));
+        }
         if (execution.getStatus() == io.eventdriven.campaign.domain.entity.DlqReplayExecutionStatus.COMPLETED) {
             return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.fail("Execution already completed"));
+        }
+        if (execution.getStatus() == io.eventdriven.campaign.domain.entity.DlqReplayExecutionStatus.RUNNING && !confirmStopped) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.fail("Execution is RUNNING; confirm the old worker stopped before resuming"));
         }
         JobParameters params = new JobParametersBuilder()
                 .addLong("replayExecutionId", executionId).addString("attempt", java.util.UUID.randomUUID().toString())
@@ -106,7 +115,11 @@ public class DlqReplayController {
     @GetMapping("/executions/{executionId}/verification")
     public ResponseEntity<ApiResponse<?>> verification(@PathVariable long executionId,
             @RequestParam(defaultValue="0") long afterId, @RequestParam(defaultValue="100") int size) {
-        dlqReplayService.getExecution(executionId);
+        try {
+            dlqReplayService.getExecution(executionId);
+        } catch (IllegalArgumentException e) {
+            return ResponseEntity.status(HttpStatus.NOT_FOUND).body(ApiResponse.fail(e.getMessage()));
+        }
         return ResponseEntity.ok(ApiResponse.success(verificationService.verify(executionId, afterId, size)));
     }
 

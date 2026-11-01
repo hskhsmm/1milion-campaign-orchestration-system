@@ -70,7 +70,13 @@ public class DlqReplayJobConfig {
     public Tasklet dlqReplayProcessTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext().getJobParameters().get("replayExecutionId");
-            if (!dlqReplayService.processNext(executionId)) return RepeatStatus.FINISHED;
+            boolean more = dlqReplayService.processNext(executionId);
+            // processNext committed independently; throwing now fails the Step without losing evidence.
+            if (dlqReplayService.getExecution(executionId).getStatus()
+                    == io.eventdriven.campaign.domain.entity.DlqReplayExecutionStatus.FAILED) {
+                throw new IllegalStateException("Replay publish failed; restore Kafka and resume this execution");
+            }
+            if (!more) return RepeatStatus.FINISHED;
             contribution.incrementReadCount();
             return RepeatStatus.CONTINUABLE;
         };

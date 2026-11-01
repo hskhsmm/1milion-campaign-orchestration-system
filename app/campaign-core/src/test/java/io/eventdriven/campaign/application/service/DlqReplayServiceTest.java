@@ -47,13 +47,16 @@ class DlqReplayServiceTest {
         message.markReplayed(java.time.LocalDateTime.now());service.processNext(1L);
         verifyNoInteractions(kafka,policy);
     }
-    @Test void exhaustedPublishAttemptsRemainStoredForInvestigation(){
+    @Test void repeatedBrokerOutagesNeverInvalidateNormalMessage(){
         when(kafka.send(anyString(),anyString(),anyString())).thenReturn(CompletableFuture.failedFuture(new IllegalStateException("offline")));
         service.processNext(1L);
         assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.PENDING);
         service.processNext(1L);service.processNext(1L);
-        assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.FINAL_FAILED);
-        assertThat(execution.getFinalFailedCount()).isEqualTo(1);
+        assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.PENDING);
+        assertThat(execution.getFinalFailedCount()).isZero();
+        assertThat(execution.getStatus()).isEqualTo(DlqReplayExecutionStatus.FAILED);
+        assertThat(execution.getLastMessageId()).isZero();
+        assertThat(execution.getProcessedCount()).isZero();
     }
     @Test void resultStorageFailureMustRollBack(){
         when(items.save(any())).thenThrow(new IllegalStateException("database unavailable"));

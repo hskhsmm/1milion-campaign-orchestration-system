@@ -14,7 +14,6 @@ import io.eventdriven.campaign.domain.repository.DlqReplayExecutionItemRepositor
 import io.eventdriven.campaign.domain.repository.DlqReplayExecutionRepository;
 import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
-import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.domain.PageRequest;
 import org.springframework.kafka.core.KafkaTemplate;
@@ -28,7 +27,6 @@ import java.util.Map;
 
 @Slf4j
 @Service
-@RequiredArgsConstructor
 public class DlqReplayService {
 
     private final DlqMessageRepository dlqMessageRepository;
@@ -38,6 +36,19 @@ public class DlqReplayService {
     private final KafkaTemplate<String, String> kafkaTemplate;
     private final BatchProperties batchProperties;
     private final MeterRegistry meterRegistry;
+
+    public DlqReplayService(DlqMessageRepository messages, DlqReplayExecutionRepository executions,
+            DlqReplayExecutionItemRepository items, DlqReplayPolicyService policy,
+            @org.springframework.beans.factory.annotation.Qualifier("dlqReplayKafkaTemplate") KafkaTemplate<String,String> kafka,
+            BatchProperties properties, MeterRegistry registry) {
+        this.dlqMessageRepository = messages;
+        this.dlqReplayExecutionRepository = executions;
+        this.dlqReplayExecutionItemRepository = items;
+        this.dlqReplayPolicyService = policy;
+        this.kafkaTemplate = kafka;
+        this.batchProperties = properties;
+        this.meterRegistry = registry;
+    }
 
     @Transactional
     public DlqReplayExecution createExecution(
@@ -94,10 +105,11 @@ public class DlqReplayService {
     }
 
     /** One tasklet invocation = one committed item. Cursor and item outcome commit together.
-     * A row lock serializes competing executions; future wait is bounded to five seconds (send itself uses producer max.block.ms).
+     * A row lock serializes competing executions; replay send blocks up to 1s, then future wait up to 5s.
+     * REQUIRES_NEW preserves failure evidence when the surrounding Tasklet transaction rolls back.
      * Broker success followed by DB rollback can republish, so Consumer remains idempotent.
      */
-    @Transactional
+    @Transactional(propagation = org.springframework.transaction.annotation.Propagation.REQUIRES_NEW)
     public boolean processNext(Long executionId) {
         DlqReplayExecution execution = dlqReplayExecutionRepository.findLockedById(executionId)
                 .orElseThrow(() -> new IllegalArgumentException("Execution not found: " + executionId));
@@ -111,6 +123,8 @@ public class DlqReplayService {
         // Re-read under lock; a competing execution may have finished while we waited.
         if (message.getProcessingStatus() == DlqMessageProcessingStatus.PENDING) {
             processSingleMessage(execution, message);
+            // Commit the failure evidence, but keep the original and cursor for resume.
+            if (execution.getStatus() == DlqReplayExecutionStatus.FAILED) return false;
             execution.advance(message.getId());
         } else {
             execution.moveCursor(message.getId());
@@ -209,19 +223,8 @@ public class DlqReplayService {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             message.incrementReplayAttempt();
             execution.incrementPublishFailed();
-            if (message.getReplayAttemptCount() >= 3) {
-                message.markFinalFailed("PUBLISH_ATTEMPTS_EXHAUSTED");
-                execution.incrementFinalFailed();
-            }
-            dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
-                    execution,
-                    message,
-                    decision.reason(),
-                    DlqReplayAction.REPLAY,
-                    DlqReplayItemResult.FAILED,
-                    e.getMessage(),
-                    now
-            ));
+            execution.markFailed(now);
+            recordItem(execution, message, decision, DlqReplayItemResult.FAILED, e.getMessage());
             counterForFailure().increment();
             log.warn(
                     "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}, error={}",
@@ -240,15 +243,7 @@ public class DlqReplayService {
         message.incrementReplayAttempt();
         message.markReplayed(now);
         execution.incrementReplayed();
-        dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
-                execution,
-                message,
-                decision.reason(),
-                DlqReplayAction.REPLAY,
-                DlqReplayItemResult.SUCCESS,
-                decision.detail(),
-                now
-        ));
+        recordItem(execution, message, decision, DlqReplayItemResult.SUCCESS, decision.detail());
         counterFor(DlqReplayAction.REPLAY, false).increment();
         log.info(
                 "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
@@ -316,15 +311,12 @@ public class DlqReplayService {
             DlqReplayItemResult result,
             String detail
     ) {
-        dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
-                execution,
-                message,
-                decision.reason(),
-                decision.action(),
-                result,
-                detail,
-                LocalDateTime.now()
-        ));
+        DlqReplayExecutionItem item = dlqReplayExecutionItemRepository
+                .findByExecutionIdAndDlqMessageId(execution.getId(), message.getId())
+                .orElseGet(() -> new DlqReplayExecutionItem(execution, message, decision.reason(),
+                        decision.action(), result, detail, LocalDateTime.now()));
+        item.recordOutcome(decision.reason(), decision.action(), result, detail, LocalDateTime.now());
+        dlqReplayExecutionItemRepository.save(item);
     }
 
     private void incrementExecutionCounter(DlqReplayExecution execution, DlqReplayAction action) {
