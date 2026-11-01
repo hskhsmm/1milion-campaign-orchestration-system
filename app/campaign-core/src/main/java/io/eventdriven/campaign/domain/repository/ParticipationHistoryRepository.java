@@ -3,10 +3,8 @@ package io.eventdriven.campaign.domain.repository;
 import io.eventdriven.campaign.domain.entity.ParticipationHistory;
 import io.eventdriven.campaign.domain.entity.ParticipationStatus;
 import org.springframework.data.jpa.repository.JpaRepository;
-import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
 import org.springframework.data.repository.query.Param;
-import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.List;
@@ -38,23 +36,6 @@ public interface ParticipationHistoryRepository extends JpaRepository<Participat
         WHERE ph.campaign.id = :campaignId AND ph.status = 'FAIL'
     """)
     Long countFailByCampaignId(@Param("campaignId") Long campaignId);
-
-    /**
-     * v3 — Consumer 직접 INSERT SUCCESS (PENDING 없음)
-     * UNIQUE(campaign_id, user_id) 중복 시 무시 → 멱등성 보장
-     */
-    @Modifying
-    @Transactional
-    @Query(value = """
-        INSERT IGNORE INTO participation_history
-            (campaign_id, user_id, sequence, status, created_at)
-        VALUES (:campaignId, :userId, :sequence, 'SUCCESS', NOW())
-        """, nativeQuery = true)
-    void insertSuccess(
-        @Param("campaignId") Long campaignId,
-        @Param("userId")     Long userId,
-        @Param("sequence")   Long sequence
-    );
 
     /**
      * PollingController DB fallback 및 중복 참여 확인용
