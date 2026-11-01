@@ -22,10 +22,12 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-01 | Consumer·DLQ 실패 시나리오, ACK 경계 수정과 로컬 장애 주입 검증 | [DLQ 실패 시나리오](reports/2026-11-01-dlq-failure-scenarios.md) |
 | 2026-10-17 | 500·750·1,000 RPS 10분 유지 평형점 탐색 | [지속 RPS 평형점 탐색](reports/2026-10-17-capacity-equilibrium.md) |
 | 2026-10-15 | 지속 RPS 기준선 탐색과 다음 측정 계획 | [지속 RPS 탐색](reports/2026-10-15-capacity-baseline.md) |
 | 2026-10-13 | ASG 증설 지연 단축과 실환경 검증 | [ASG 증설 검증](reports/2026-10-13-asg-scale-out-validation.md) |
 | 2026-10-03 | AMI에 남은 앱 컨테이너 제거·재생성 조치 | [AMI 컨테이너 후속 조치](reports/2026-10-03-ami-container-remediation.md) |
+| 2026-10-01 | RDS 장애 시 Consumer ack 보류만으로는 재전달되지 않음 재현 | [T06 Consumer 재처리 검증](reports/2026-10-01-t06-consumer-redelivery-verification.md) |
 | 2026-09-28 | 150만 재현 중 active Set 제거 원인 추적 | [좀비 컨테이너 원인 분석](reports/2026-09-28-zombie-container-root-cause.md) |
 | 2026-09-20 | AWS 환경 복구와 150만 건 재검증 | [150만 건 복구·재검증](reports/2026-09-20-aws-recovery-150m-validation.md) |
 

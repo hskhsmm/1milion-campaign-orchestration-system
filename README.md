@@ -121,8 +121,8 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
          v
 [ParticipationBridge — @Scheduled 100ms]
   SMEMBERS active:campaigns
-  RPOP queue:campaign:{id}  (동적 batchSize: 500/1000/2000)
-  Kafka publish (userId 파티션 키)
+  Lua로 queue → bridge:inflight claim 원자 이동 (동적 batchSize: 500/1000/2000)
+  Kafka publish (userId 파티션 키) → 성공 시 claim 제거, 실패·종료 시 5분 뒤 Queue 복귀
          |
          v
 [Kafka — campaign-participation-topic]
@@ -131,8 +131,10 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
          |
          v
 [ParticipationEventConsumer — concurrency 파티션 수 자동 감지 (파티션 10개 = concurrency 10)]
-  jdbcTemplate.batchUpdate() INSERT IGNORE
-  배치 실패 시 단건 폴백 + DLQ
+  jdbcTemplate.batchUpdate() INSERT … ON DUPLICATE KEY UPDATE (중복만 무시)
+  필수 값 누락·파싱 실패 → DLQ(dlq_message) 보관
+  무결성 위반 → 건별 처리로 문제 행만 DLQ, DB 장애 → 배치 전체 nack 후 재처리
+  참여 이력 또는 DLQ에 모두 저장된 뒤에만 ACK
          |
          v
 [MySQL RDS — batch-kafka-db]
@@ -454,7 +456,7 @@ RDS Security Group 3306 포트 삭제로 장애 주입 → 5xx 발생 → 복구
 1. `remaining==0` 시 동기 DB 호출이 남아있어 RDS 장애 시 500 전파 → `try-catch`로 수정
 2. T06 당시 `actuator/health`가 DB 상태를 포함해 ALB TG가 unhealthy로 판정되면서 Redis-first API에도 5xx가 발생했습니다. 이후 DB·Kafka health indicator를 비활성화해 접수 API의 health 판정에서 제외했습니다.
 
-**자동 복구 확인**: Consumer `hasTransientFailure` ack 보류 → SG 복구 후 Kafka 재전달로 자동 재처리.
+**복구 결과**: 해당 캠페인 diff=0. 다만 ack 보류만으로는 Kafka가 재전달하지 않는다는 것을 이후 로컬 재현으로 확인했다(리밸런싱이 없으면 150초 DB 장애에서 54,000건 중 60건 유실). T06의 재처리는 DB 헬스 포함 → unhealthy → 인스턴스 교체로 파티션이 재할당된 결과로 추정한다 ([검증 기록](docs/reports/2026-10-01-t06-consumer-redelivery-verification.md)). 이후 Consumer는 DB 장애 시 배치 전체를 nack해 다시 받도록 수정했다. 같은 로컬 조건(54,000건, DB 150초 연결 거부·무응답)에서 수정 전 60건 유실 → 수정 후 유실 0을 확인했다. 실환경 재검증은 아직 하지 않았다 ([시나리오 목록](docs/reports/2026-11-01-dlq-failure-scenarios.md)).
 
 ![T06 장애주입 및 복구](docs/images/t06-5xx-recovery.png)
 
@@ -571,15 +573,18 @@ terraform-mcp EC2
 | Consumer DB 일시 실패율 | `consumer_db_transient_failures_total` |
 | Consumer DB commit batch size (전역 가중 평균) | `consumer_db_commit_batch_size` |
 
-**커스텀 메트릭 9종** (Micrometer 기반)
+**커스텀 메트릭 13종** (Micrometer 기반)
 - `bridge.drain.duration` — Bridge drainQueues() 소요시간
 - `bridge.messages.published` — Kafka 발행 성공 건수
 - `consumer.pending_to_success.latency` — Consumer batch 시작 → DB 처리 완료 지연 (legacy metric name)
 - `redis.queue.size` — Redis Queue 현재 적재량 (Gauge)
 - `consumer.kafka.records.polled` — Kafka Consumer poll 건수
 - `consumer.events.parsed` — 정상 payload 파싱 건수
-- `consumer.db.committed` — DB 성공 처리 경로까지 반영한 이벤트 수
-- `consumer.db.transient.failures` — DB 장애 등으로 ack 보류가 필요한 일시 실패 수
+- `consumer.db.committed` — 참여 이력에 저장됐거나 이미 있던 이벤트 수. 중복과 재전달 재처리를 포함하므로 신규 INSERT 수가 아니다 (신규 행 수는 DB에서 직접 센다)
+- `consumer.db.transient.failures` — DB 장애로 nack 재처리된 배치에 들어 있던 이벤트 수
+- `consumer.batch.retried{reason=db_failure|dlq_store_failure}` — nack으로 다시 받은 배치 수
+- `dlq.db.stored` / `dlq.db.store.failed` — dlq_message 저장 성공·실패 건수
+- `dlq.topic.publish.failed` — DLQ 토픽(보조 기록) 발행 실패 건수
 - `consumer.db.commit.batch.size` — Consumer DB commit batch 크기
 
 ### MCP 서버 — 관측·운영 보조
@@ -665,7 +670,7 @@ MCP 도구로 지표와 테스트 결과를 조회하고, AI를 활용해 원인
 | **Container** | Docker, Amazon ECR | 이미지 버전 관리, 배포 표준화 |
 | **CI/CD** | GitHub Actions + CodeDeploy + Ansible | OIDC 인증, ASG 순차 무중단 배포, 서버 내부 배포 절차 playbook화 |
 | **Load Test** | k6 (shared-iterations, ramping-arrival-rate) | 정확한 총량 정합성 검증과 지속 가능 처리량 탐색 분리 |
-| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 9종, 16패널 대시보드 |
+| **Monitoring** | Prometheus + Grafana | 커스텀 메트릭 13종, 16패널 대시보드 |
 | **운영 보조** | Python/FastAPI + MCP | Prometheus/CloudWatch 폴링, Slack 알림, 지표 조회 |
 | **Cloud** | AWS (EC2, ALB, ASG, ElastiCache, RDS, CodeDeploy, SSM) | 실제 운영 환경 |
 

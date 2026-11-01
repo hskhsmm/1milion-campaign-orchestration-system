@@ -30,7 +30,7 @@ public class DlqMessageRecord extends BaseTimeEntity {
     private String originalKey;
 
     @JdbcTypeCode(SqlTypes.LONGVARCHAR)
-    @Column(name = "original_message", nullable = false, columnDefinition = "TEXT")
+    @Column(name = "original_message", nullable = false, columnDefinition = "MEDIUMTEXT")
     private String originalMessage;
 
     @Column(name = "error_reason", nullable = false, length = 100)
