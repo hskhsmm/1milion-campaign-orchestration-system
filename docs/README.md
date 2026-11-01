@@ -8,7 +8,7 @@
 | --- | --- |
 | 전체 서비스 구조와 요청 흐름 | [아키텍처](../ARCHITECTURE.md) |
 | 하네스 구축과 성능 개선 순서 | [성능·관측 하네스 계획](plans/performance-harness.md) |
-| 202 접수 후 유실·중복 위험과 장애 검증 순서 | [202 이후 장애 검증 계획](plans/accepted-202-failure-verification.md) |
+| DLQ 재처리 Job 실행·재개·결과 대조 | [DLQ 배치 운영 가이드](runbooks/dlq-replay.md) |
 | 부하 테스트 모드와 실행법 | [부하 테스트 가이드](../stress-test/TEST_GUIDE.md) |
 | AWS 테스트 환경 기동·종료 | [운영 가이드](../ops/README.md) |
 | MCP 지표 도구와 Slack 알림의 현재 관계 | [MCP 모니터링 코드 안내](../mcp-server/README.md) |
@@ -23,6 +23,7 @@
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
 | 2026-11-01 | Consumer·DLQ 실패 시나리오, ACK 경계 수정과 로컬 장애 주입 검증 | [DLQ 실패 시나리오](reports/2026-11-01-dlq-failure-scenarios.md) |
+| 2026-11-01 | DLQ 재처리 Job·중복 방지·복구 결과 대조 | [배치 로컬 검증](reports/2026-11-01-dlq-batch-validation.md) |
 | 2026-10-17 | 500·750·1,000 RPS 10분 유지 평형점 탐색 | [지속 RPS 평형점 탐색](reports/2026-10-17-capacity-equilibrium.md) |
 | 2026-10-15 | 지속 RPS 기준선 탐색과 다음 측정 계획 | [지속 RPS 탐색](reports/2026-10-15-capacity-baseline.md) |
 | 2026-10-13 | ASG 증설 지연 단축과 실환경 검증 | [ASG 증설 검증](reports/2026-10-13-asg-scale-out-validation.md) |
@@ -30,6 +31,8 @@
 | 2026-10-01 | RDS 장애 시 Consumer ack 보류만으로는 재전달되지 않음 재현 | [T06 Consumer 재처리 검증](reports/2026-10-01-t06-consumer-redelivery-verification.md) |
 | 2026-09-28 | 150만 재현 중 active Set 제거 원인 추적 | [좀비 컨테이너 원인 분석](reports/2026-09-28-zombie-container-root-cause.md) |
 | 2026-09-20 | AWS 환경 복구와 150만 건 재검증 | [150만 건 복구·재검증](reports/2026-09-20-aws-recovery-150m-validation.md) |
+
+[202 접수 이후 경계 인계](reports/2026-11-01-accepted-202-boundaries.md)는 초기 조사와 남은 위험을 분리한 기록이다.
 
 ## 글과 보관 자료
 

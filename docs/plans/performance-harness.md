@@ -1,7 +1,7 @@
 # 내맘대로캠페인 성능·관측 하네스 도입 로드맵
 
 > 작성: 2026-10-12
-> 상태: 제안·실행 계획. 이 문서는 구현 완료나 성능 개선 효과를 주장하지 않는다.
+> 상태(2026-11-01): Consumer ACK·DLQ 저장 경계는 #112에서 반영. Replay 배치의 실행·복구·결과 대조는 PR #113에서 로컬 검증 및 Kafka 실패 시 원본 보존 수정 완료. 앱의 Batch JDBC 이력 전환과 실환경 소량 smoke는 별도. 실환경 성능 개선은 미검증.
 > 범위: [이슈 #95](https://github.com/hskhsmm/1milion-campaign-orchestration-system/issues/95), CPU 관측·증설 지연, p95/p99, 지속 가능한 End-to-End 처리량, 기존 MCP 모니터링의 역할 정리, 후속 Kafka 인프라 코드화 판단.
 
 ## 1. 왜 지금 하네스인가
@@ -47,7 +47,7 @@ API의 p95/p99를 낮추면서 Redis Queue가 계속 증가하거나 DB 반영�
 5. 테스트 종료 후 Queue·lag가 0으로 수렴하고, 최종 DB row 수·재고·접수 건수의 정합성이 맞는다.
 6. 자원과 비용 비교 시 인스턴스 수·종류, Kafka 파티션, RDS/Redis 사양, 로그 수준, 테스트 위치와 실행 시간을 기록한다.
 
-`consumer_db_committed_total`은 현재 DB 성공 경로를 통과한 이벤트 수다. `INSERT IGNORE`가 중복을 무시한 경우에도 물리적 신규 INSERT 수와 다를 수 있으므로, 최종 row count와 혼동하지 않는다.
+`consumer_db_committed_total`은 현재 DB 성공 경로를 통과한 이벤트 수다. 중복을 no-op으로 처리한 경우에도 물리적 신규 INSERT 수와 다를 수 있으므로, 최종 row count와 혼동하지 않는다.
 
 ## 4. 첫 번째 구현: 작은 하네스
 
@@ -183,3 +183,13 @@ Kafka는 **전혀 Terraform에 없는 상태가 아니다.** `infra/ec2.tf`가 �
 - [OpenAI: AGENTS.md와 Skill을 간결하게 유지하는 방법](https://developers.openai.com/blog/rethinking-skills-and-prompts-for-gpt-6-astra)
 - [AWS: 중지된 EC2와 EBS 과금](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/ec2-instance-lifecycle.html)
 - [AWS: EC2 종료 시 EBS 보존 여부](https://docs.aws.amazon.com/AWSEC2/latest/UserGuide/preserving-volumes-on-termination.html)
+
+## 현재 실행 순서 (2026-11-01)
+
+1. DLQ Replay 운영 절차·로컬 실패/복구 시험: [배치 운영 가이드](../runbooks/dlq-replay.md).
+2. 머지·배포 버전 확인 후 격리된 소량 캠페인에서 실제 Job 실행과 최종 DB 반영 대조.
+3. 150만 기준선 재측정: Queue/in-flight/lag, 신규 DB 건수, p95/p99, Redis 메모리 기록.
+4. API·Bridge·Consumer 자원 경쟁과 드레인 병목을 한 변수씩 개선.
+5. 기준선과 정합성 확인 뒤 200만 총량 검증.
+
+202 접수 전체 내구성 확보를 완료로 표시하지 않는다. Redis failover 직후 유실, Kafka 보존 기간, 실환경 비용/성능은 남은 경계다.

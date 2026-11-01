@@ -84,6 +84,19 @@ public class DlqReplayExecution extends BaseTimeEntity {
         this.status = DlqReplayExecutionStatus.REQUESTED;
     }
 
+    @Column(name = "last_message_id", nullable = false)
+    private long lastMessageId;
+
+    @Column(name = "processed_count", nullable = false)
+    private int processedCount;
+
+    public void advance(long messageId) {
+        this.lastMessageId = messageId;
+        this.processedCount++;
+    }
+
+    public void moveCursor(long messageId) { this.lastMessageId = messageId; }
+
     public void markRunning(LocalDateTime now) {
         this.status = DlqReplayExecutionStatus.RUNNING;
         this.startedAt = now;

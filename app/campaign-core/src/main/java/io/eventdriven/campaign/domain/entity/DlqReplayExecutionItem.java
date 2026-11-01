@@ -48,6 +48,14 @@ public class DlqReplayExecutionItem extends BaseTimeEntity {
     @Column(name = "processed_at", nullable = false)
     private LocalDateTime processedAt;
 
+    /** Keep one latest outcome per execution/message; failure attempts remain in counters. */
+    public void recordOutcome(String reason, DlqReplayAction action, DlqReplayItemResult result,
+            String detail, LocalDateTime at) {
+        this.reason=reason; this.action=action; this.result=result;
+        this.detailMessage=detail == null ? null : detail.substring(0, Math.min(detail.length(),1000));
+        this.processedAt=at;
+    }
+
     public DlqReplayExecutionItem(
             DlqReplayExecution execution,
             DlqMessageRecord dlqMessage,
@@ -64,7 +72,7 @@ public class DlqReplayExecutionItem extends BaseTimeEntity {
         this.reason = reason;
         this.action = action;
         this.result = result;
-        this.detailMessage = detailMessage;
+        this.detailMessage = detailMessage == null ? null : detailMessage.substring(0, Math.min(detailMessage.length(), 1000));
         this.processedAt = processedAt;
     }
 }

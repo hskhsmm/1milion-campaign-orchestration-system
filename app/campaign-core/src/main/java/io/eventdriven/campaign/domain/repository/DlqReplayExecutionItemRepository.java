@@ -9,6 +9,8 @@ import org.springframework.data.repository.query.Param;
 import java.util.List;
 
 public interface DlqReplayExecutionItemRepository extends JpaRepository<DlqReplayExecutionItem, Long> {
+    java.util.Optional<DlqReplayExecutionItem> findByExecutionIdAndDlqMessageId(Long executionId, Long dlqMessageId);
+
 
     @Query("""
         SELECT i

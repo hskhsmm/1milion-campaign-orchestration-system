@@ -62,6 +62,7 @@ public class KafkaConfig {
      * - 신뢰성 설정 추가 (acks=all, idempotence=true)
      */
     @Bean
+    @org.springframework.context.annotation.Primary
     public ProducerFactory<String, String> producerFactory() {
         Map<String, Object> configProps = new HashMap<>();
         configProps.put(ProducerConfig.BOOTSTRAP_SERVERS_CONFIG, bootstrapServers);
@@ -88,6 +89,7 @@ public class KafkaConfig {
     }
 
     @Bean
+    @org.springframework.context.annotation.Primary
     public KafkaTemplate<String, String> kafkaTemplate() {
         return new KafkaTemplate<>(producerFactory());
     }

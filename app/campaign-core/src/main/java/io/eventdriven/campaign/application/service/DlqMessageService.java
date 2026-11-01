@@ -88,6 +88,16 @@ public class DlqMessageService {
         fitToColumns(payload);
         try {
             saveDlqMessage(payload);
+        } catch (org.springframework.dao.DataIntegrityViolationException e) {
+            // A committed copy of this exact Kafka record is sufficient to ACK a redelivery.
+            if (payload.getOriginalPartition() != null && payload.getOriginalOffset() != null
+                    && dlqMessageRepository.existsByOriginalTopicAndOriginalPartitionAndOriginalOffset(
+                    payload.getOriginalTopic(), payload.getOriginalPartition(), payload.getOriginalOffset())) {
+                counter("dlq.db.duplicate", "DLQ records already durably stored", payload).increment();
+                return;
+            }
+            counter("dlq.db.store.failed", "DLQ messages that failed to persist", payload).increment();
+            throw e;
         } catch (RuntimeException e) {
             counter("dlq.db.store.failed", "DLQ messages that failed to persist", payload).increment();
             throw e;
@@ -149,7 +159,7 @@ public class DlqMessageService {
 
     // SimpleJpaRepository.save는 자체 트랜잭션으로 커밋한 뒤 반환한다.
     private void saveDlqMessage(DlqEventPayload payload) {
-        dlqMessageRepository.save(new DlqMessageRecord(
+        DlqMessageRecord record = new DlqMessageRecord(
                 payload.getSourceType(),
                 payload.getOriginalTopic(),
                 payload.getOriginalKey(),
@@ -160,7 +170,9 @@ public class DlqMessageService {
                 payload.getUserId(),
                 payload.getSequence(),
                 payload.getReplayClassification()
-        ));
+        );
+        record.setSourcePosition(payload.getOriginalPartition(), payload.getOriginalOffset());
+        dlqMessageRepository.save(record);
     }
 
     private void publishDlqEvent(DlqEventPayload payload) {

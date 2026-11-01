@@ -115,7 +115,6 @@ class ParticipationEventConsumerTest {
         when(jsonMapper.readValue("null-user", ParticipationEvent.class))
                 .thenReturn(new ParticipationEvent(61L, null, 3L));
         when(jsonMapper.readValue("not-json", ParticipationEvent.class)).thenThrow(new RuntimeException("bad json"));
-        when(jsonMapper.writeValueAsString(any())).thenReturn("{\"campaignId\":999}");
         when(jdbcTemplate.batchUpdate(anyString(), anyList()))
                 .thenThrow(new DataIntegrityViolationException("fk violation"));
         lenient().doThrow(new DataIntegrityViolationException("fk violation"))

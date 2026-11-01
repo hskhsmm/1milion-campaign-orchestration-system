@@ -29,6 +29,16 @@ public class DlqMessageRecord extends BaseTimeEntity {
     @Column(name = "original_key")
     private String originalKey;
 
+    @Column(name="original_partition")
+    private Integer originalPartition;
+    @Column(name="original_offset")
+    private Long originalOffset;
+
+    public void setSourcePosition(Integer partition, Long offset) {
+        this.originalPartition=partition; this.originalOffset=offset;
+    }
+
+
     @JdbcTypeCode(SqlTypes.LONGVARCHAR)
     @Column(name = "original_message", nullable = false, columnDefinition = "MEDIUMTEXT")
     private String originalMessage;
