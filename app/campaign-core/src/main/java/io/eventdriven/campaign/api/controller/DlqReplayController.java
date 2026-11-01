@@ -44,6 +44,7 @@ public class DlqReplayController {
     private final Job dlqReplayJob;
 
     private final DlqReplayService dlqReplayService;
+    private final io.eventdriven.campaign.application.service.DlqReplayVerificationService verificationService;
 
     @PostMapping
     public ResponseEntity<ApiResponse<?>> replay(@RequestBody(required = false) DlqReplayRequest request) {
@@ -86,6 +87,27 @@ public class DlqReplayController {
             return ResponseEntity.status(HttpStatus.INTERNAL_SERVER_ERROR)
                     .body(ApiResponse.fail("Unexpected error: " + e.getMessage()));
         }
+    }
+
+    /** Resume the same persisted cursor; a new execution would start from the beginning. */
+    @PostMapping("/executions/{executionId}/resume")
+    public ResponseEntity<ApiResponse<?>> resume(@PathVariable Long executionId) throws Exception {
+        DlqReplayExecution execution = dlqReplayService.getExecution(executionId);
+        if (execution.getStatus() == io.eventdriven.campaign.domain.entity.DlqReplayExecutionStatus.COMPLETED) {
+            return ResponseEntity.status(HttpStatus.CONFLICT).body(ApiResponse.fail("Execution already completed"));
+        }
+        JobParameters params = new JobParametersBuilder()
+                .addLong("replayExecutionId", executionId).addString("attempt", java.util.UUID.randomUUID().toString())
+                .toJobParameters();
+        JobExecution job = asyncJobLauncher.run(dlqReplayJob, params);
+        return ResponseEntity.ok(ApiResponse.success(Map.of("jobExecutionId", job.getId(), "replayExecutionId", executionId)));
+    }
+
+    @GetMapping("/executions/{executionId}/verification")
+    public ResponseEntity<ApiResponse<?>> verification(@PathVariable long executionId,
+            @RequestParam(defaultValue="0") long afterId, @RequestParam(defaultValue="100") int size) {
+        dlqReplayService.getExecution(executionId);
+        return ResponseEntity.ok(ApiResponse.success(verificationService.verify(executionId, afterId, size)));
     }
 
     @GetMapping("/executions/{executionId}")

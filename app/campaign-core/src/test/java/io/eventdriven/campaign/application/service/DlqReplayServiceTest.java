@@ -53,6 +53,7 @@ class DlqReplayServiceTest {
         assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.PENDING);
         service.processNext(1L);service.processNext(1L);
         assertThat(message.getProcessingStatus()).isEqualTo(DlqMessageProcessingStatus.FINAL_FAILED);
+        assertThat(execution.getFinalFailedCount()).isEqualTo(1);
     }
     @Test void resultStorageFailureMustRollBack(){
         when(items.save(any())).thenThrow(new IllegalStateException("database unavailable"));

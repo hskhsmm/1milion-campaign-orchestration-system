@@ -209,7 +209,10 @@ public class DlqReplayService {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             message.incrementReplayAttempt();
             execution.incrementPublishFailed();
-            if (message.getReplayAttemptCount() >= 3) message.markFinalFailed("PUBLISH_ATTEMPTS_EXHAUSTED");
+            if (message.getReplayAttemptCount() >= 3) {
+                message.markFinalFailed("PUBLISH_ATTEMPTS_EXHAUSTED");
+                execution.incrementFinalFailed();
+            }
             dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
                     execution,
                     message,
