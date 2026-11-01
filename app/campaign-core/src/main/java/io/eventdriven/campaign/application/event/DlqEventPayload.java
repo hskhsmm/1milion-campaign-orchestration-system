@@ -9,6 +9,9 @@ public class DlqEventPayload {
     private DlqSourceType sourceType;
     private String originalTopic;
     private String originalKey;
+    private Integer originalPartition;
+    private Long originalOffset;
+
     private String originalMessage;
     private String errorReason;
     private String errorMessage;
@@ -17,6 +20,11 @@ public class DlqEventPayload {
     private Long sequence;
     private DlqReplayClassification replayClassification;
     private LocalDateTime occurredAt;
+
+    public Integer getOriginalPartition() { return originalPartition; }
+    public void setOriginalPartition(Integer partition) { this.originalPartition = partition; }
+    public Long getOriginalOffset() { return originalOffset; }
+    public void setOriginalOffset(Long offset) { this.originalOffset = offset; }
 
     public DlqSourceType getSourceType() {
         return sourceType;

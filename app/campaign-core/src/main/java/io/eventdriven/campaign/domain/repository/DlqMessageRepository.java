@@ -11,6 +11,8 @@ import java.time.LocalDateTime;
 import java.util.List;
 
 public interface DlqMessageRepository extends JpaRepository<DlqMessageRecord, Long> {
+    boolean existsByOriginalTopicAndOriginalPartitionAndOriginalOffset(String topic, Integer partition, Long offset);
+
 
     @Query("""
         SELECT COUNT(d)
@@ -64,4 +66,22 @@ public interface DlqMessageRepository extends JpaRepository<DlqMessageRecord, Lo
             @Param("reason") String reason,
             Pageable pageable
     );
+    @Query("""
+        SELECT d.id FROM DlqMessageRecord d
+        WHERE d.processingStatus = :status AND d.id > :afterId
+          AND (:campaignId IS NULL OR d.campaignId = :campaignId)
+          AND (:reason IS NULL OR d.errorReason = :reason)
+          AND (:fromTime IS NULL OR d.createdAt >= :fromTime)
+          AND (:toTime IS NULL OR d.createdAt <= :toTime)
+        ORDER BY d.id ASC
+    """)
+    List<Long> findReplayCandidateIds(@Param("status") DlqMessageProcessingStatus status,
+        @Param("afterId") long afterId, @Param("campaignId") Long campaignId,
+        @Param("reason") String reason, @Param("fromTime") LocalDateTime fromTime,
+        @Param("toTime") LocalDateTime toTime, Pageable pageable);
+
+    @org.springframework.data.jpa.repository.Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @org.springframework.data.jpa.repository.Query("select e from DlqMessageRecord e where e.id = :id")
+    java.util.Optional<DlqMessageRecord> findLockedById(@org.springframework.data.repository.query.Param("id") Long id);
+
 }

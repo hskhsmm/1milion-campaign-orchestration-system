@@ -67,11 +67,12 @@ public class ParticipationEventConsumer {
         long batchStartNanos = System.nanoTime();
         List<ParticipationEvent> events = new ArrayList<>();
         List<DlqEventPayload> dlqPayloads = new ArrayList<>();
-        parseRecords(records, events, dlqPayloads);
+        java.util.Map<ParticipationEvent, ConsumerRecord<String,String>> origins = new java.util.IdentityHashMap<>();
+        parseRecords(records, events, dlqPayloads, origins);
 
         int storedCount = 0;
         if (!events.isEmpty()) {
-            storedCount = storeEvents(events, dlqPayloads);
+            storedCount = storeEvents(events, dlqPayloads, origins);
             long dbProcessingNanos = System.nanoTime() - batchStartNanos;
             recordDbProcessingLatency(dbProcessingNanos);
 
@@ -98,7 +99,8 @@ public class ParticipationEventConsumer {
     /**
      * @return 참여 이력에 저장된(이미 있던 중복 포함) 이벤트 수. 메시지 탓이 아닌 DB 실패면 RETRY_REQUIRED.
      */
-    private int storeEvents(List<ParticipationEvent> events, List<DlqEventPayload> dlqPayloads) {
+    private int storeEvents(List<ParticipationEvent> events, List<DlqEventPayload> dlqPayloads,
+            java.util.Map<ParticipationEvent, ConsumerRecord<String,String>> origins) {
         try {
             List<Object[]> batchArgs = new ArrayList<>(events.size());
             for (ParticipationEvent event : events) {
@@ -124,8 +126,7 @@ public class ParticipationEventConsumer {
             } catch (DataIntegrityViolationException e) {
                 log.warn("Insert rejected by data integrity. Sending to DLQ. campaignId={}, userId={}, sequence={}",
                         event.getCampaignId(), event.getUserId(), event.getSequence(), e);
-                dlqPayloads.add(createDlqPayload(String.valueOf(event.getUserId()), serializeEvent(event),
-                        "INSERT_FAILED", e));
+                dlqPayloads.add(createDlqPayload(origins.get(event), "INSERT_FAILED", e));
             } catch (Exception e) {
                 log.error("Row insert failed without a message-level cause. Retrying batch. campaignId={}, userId={}, sequence={}",
                         event.getCampaignId(), event.getUserId(), event.getSequence(), e);
@@ -205,13 +206,14 @@ public class ParticipationEventConsumer {
     private void parseRecords(
             List<ConsumerRecord<String, String>> records,
             List<ParticipationEvent> events,
-            List<DlqEventPayload> dlqPayloads
+            List<DlqEventPayload> dlqPayloads,
+            java.util.Map<ParticipationEvent, ConsumerRecord<String,String>> origins
     ) {
         for (ConsumerRecord<String, String> record : records) {
             // 실제 null value(tombstone)는 JSON 문자열 "null"(INVALID_PAYLOAD)과 사유로 구별해 보관한다.
             if (record.value() == null) {
                 log.warn("Null participation record value. Sending to DLQ. key={}", record.key());
-                dlqPayloads.add(createDlqPayload(record.key(), null, "NULL_VALUE", null));
+                dlqPayloads.add(createDlqPayload(record, "NULL_VALUE", null));
                 continue;
             }
             ParticipationEvent event;
@@ -219,15 +221,16 @@ public class ParticipationEventConsumer {
                 event = jsonMapper.readValue(record.value(), ParticipationEvent.class);
             } catch (Exception e) {
                 log.error("Failed to parse consumer payload. Sending to DLQ. payload={}", record.value(), e);
-                dlqPayloads.add(createDlqPayload(record.key(), record.value(), "JSON_PARSE_ERROR", e));
+                dlqPayloads.add(createDlqPayload(record, "JSON_PARSE_ERROR", e));
                 continue;
             }
             if (!hasRequiredFields(event)) {
                 log.warn("Invalid participation payload. Sending to DLQ. payload={}", record.value());
-                dlqPayloads.add(createDlqPayload(record.key(), record.value(), "INVALID_PAYLOAD", null));
+                dlqPayloads.add(createDlqPayload(record, "INVALID_PAYLOAD", null));
                 continue;
             }
             events.add(event);
+            origins.put(event, record);
         }
     }
 
@@ -240,6 +243,14 @@ public class ParticipationEventConsumer {
 
     private boolean isPositive(Long value) {
         return value != null && value > 0;
+    }
+
+    private DlqEventPayload createDlqPayload(ConsumerRecord<String,String> record, String reason, Exception cause) {
+        DlqEventPayload payload = createDlqPayload(record.key(), record.value(), reason, cause);
+        payload.setOriginalTopic(record.topic());
+        payload.setOriginalPartition(record.partition());
+        payload.setOriginalOffset(record.offset());
+        return payload;
     }
 
     private DlqEventPayload createDlqPayload(
@@ -256,13 +267,4 @@ public class ParticipationEventConsumer {
         );
     }
 
-    private String serializeEvent(ParticipationEvent event) {
-        try {
-            return jsonMapper.writeValueAsString(event);
-        } catch (Exception e) {
-            return "{\"campaignId\":" + event.getCampaignId()
-                    + ",\"userId\":" + event.getUserId()
-                    + ",\"sequence\":" + event.getSequence() + "}";
-        }
-    }
 }
