@@ -218,7 +218,7 @@
 
 | 항목 | 값 |
 |---|---|
-| 코드 | 브랜치 `fix/consumer-dlq-retry-boundary` = `c76be3f` + 미커밋 변경 (이미지 `campaign-core:dlq-fix`). 대조군 `main` `c76be3f` (이미지 `campaign-core:main-c76be3f`) |
+| 코드 | 브랜치: 앱 소스(`src/main`)가 커밋 `c84dcbe`와 같은 작업 트리에서 빌드. 로컬 이미지 `campaign-core:dlq-fix`, ID `sha256:b379492b84d0fcac9adcc329ee483ca4c5f38072a7a754d6d9270a41cd6f985e`. 대조군: `main` `c76be3f`, 로컬 이미지 `campaign-core:main-c76be3f`, ID `sha256:dde2776d99e1af3ef61548a62547a3fe26a4a5dc52fcdfdedcf30eac7570c885`. 레지스트리에 올리지 않은 로컬 이미지라 repo digest는 없다. 리뷰 반영 후 재검증(`023e06c`)은 §8.7 |
 | 환경 | `repro/t06/docker-compose.yml`: MySQL 8.4, cp-kafka 7.5.0 단일 브로커(토픽 10 파티션, DLQ 3 파티션), Redis 7.2 클러스터 3노드, 앱 1개 |
 | 앱 설정 | `local` 프로필, `max-poll-records` 100(prod와 같음), `max-poll-interval` 600s, Hikari `connection-timeout` 20s, `retry-backoff-ms` 기본 1000 |
 | 부하 (L2) | 200건/s × 270s = 54,000건 (장애 전 30s, 장애 150s, 복구 후 90s). key = userId = sequence |
@@ -266,6 +266,39 @@ C3·C4는 [추정]에서 **[확정 재현]**으로 바뀌었다. 추가로, `mai
 | 파티션 재할당 | 0 |
 
 이번 조건에서는 DB가 완전히 끊긴 상태라 DLQ 저장이 일부만 성공하는 일이 없어서 Q4(DLQ 기록 중복)가 나타나지 않았다. DB가 오락가락하는 조건에서는 여전히 생길 수 있다.
+
+### 8.7 PR #112 리뷰 반영 (`023e06c`)
+
+**지적:** DB가 정상인데도 DLQ 저장이 데이터 문제로 실패하면 같은 배치가 계속 `nack`된다.
+- 실제 null value: `original_message TEXT NOT NULL`에 저장할 수 없음
+- 70,000바이트 원문: `TEXT`(64KB) 초과
+- 1,001자 오류 설명: `VARCHAR(1000)` 초과
+
+**수정**
+
+| 입력 | 처리 |
+|---|---|
+| 실제 null value | `NULL_VALUE` / `NON_REPLAYABLE`, 원문은 빈 문자열. JSON 문자열 `"null"`(`INVALID_PAYLOAD`)과 사유로 구별 |
+| 원문 크기 | V7: `original_message` → `MEDIUMTEXT`. Kafka 기본 최대(약 1MB) 원문을 자르지 않고 보관. 16MB를 넘는 원문만 앞부분을 남기고 `OVERSIZED_PAYLOAD` / `NON_REPLAYABLE` |
+| 오류 설명 | 1000자로 자름 (부가 정보) |
+| 원본 키 | 255자로 자름. Replay는 키가 아니라 `userId` 필드를 사용 |
+
+길이 조정은 `DlqMessageService.publishAndStore` 입구에서 한 번만 해서 모든 호출 경로에 적용된다.
+
+**재검증 조건:** 커밋 `023e06c`, 로컬 이미지 `campaign-core:dlq-fix-023e06c`, ID `sha256:0fd807066de8430956aa8491c2748c6e50321fe73e4e0a7e608b5c9f6dc65be3`. 환경은 §8.5와 같다.
+
+| 검증 | 결과 |
+|---|---|
+| 단위 테스트 | 57건, 실패 0 (컬럼 한도·null value 경계 3건 추가) |
+| 실제 null value(kcat `-Z`) + 정상 메시지 | DLQ `NULL_VALUE` 1행(원문 0바이트), 정상 저장, `nack` 0, lag 0 |
+| 70,000바이트 비정상 원문 + 정상 메시지 | DLQ `JSON_PARSE_ERROR` 1행(원문 70,000바이트 그대로), 정상 저장, `nack` 0 |
+| V7 적용 | `original_message` = `mediumtext`, 앱이 `ddl-auto: validate`를 통과해 기동 |
+| L1 기존 유형 | §8.5와 같음 (참여 2행, DLQ 6, 잘못된 행 0, 재전달 중복 없음) |
+| L3 DLQ 저장 실패 (`reject` 60s) | 정상 200/200, 불량 20/20, DLQ 중복 없음, nack `db_failure` 20·`dlq_store_failure` 6 |
+| L2 `reject 150` 회귀 | 진행 중 (결과는 후속 커밋으로 기록) |
+| 1,001자 오류 설명 | 앱 경로로는 자연스럽게 만들 수 없어 단위 테스트로만 확인 |
+
+**남는 위험:** 예상하지 못한 다른 컬럼 제약으로 DLQ 저장이 실패하면 여전히 같은 배치가 `nack`된다. `dlq.db.store.failed` 지표로 탐지해야 한다.
 
 ### 8.6 남은 검증
 
