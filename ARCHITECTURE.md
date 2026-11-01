@@ -31,7 +31,7 @@ Bridge는 각 실행 인스턴스에서 활성 캠페인 집합을 순회한다.
 ## 배치·DLQ·관측
 
 - [BatchScheduler](app/campaign-core/src/main/java/io/eventdriven/campaign/batch/BatchScheduler.java)의 정기 스케줄은 일별 통계 집계와 주별 배치 메타데이터 정리다. 정합성 복구·DLQ 재처리 Job과 API도 존재하지만, 각각을 정상 처리 경로에서 어떤 역할로 운영할지는 앞으로 명확히 정할 설계 과제다.
-- [Consumer](app/campaign-core/src/main/java/io/eventdriven/campaign/application/consumer/ParticipationEventConsumer.java)는 파싱 실패와 DB 실패에 대한 DLQ 경로를 갖는다. 실패 종류별 재시도·ack·재처리 의미는 별도 검증 대상이며, DLQ 적재만으로 유실 방지가 증명되지는 않는다.
+- [Consumer](app/campaign-core/src/main/java/io/eventdriven/campaign/application/consumer/ParticipationEventConsumer.java)는 배치의 모든 메시지가 참여 이력(정상) 또는 `dlq_message`(메시지 자체의 문제)에 저장된 뒤에만 ACK한다. 파싱 실패·필수 값 누락·무결성 위반은 DLQ에 보관하고, DB 장애나 DLQ 저장 실패처럼 메시지 탓이 아닌 실패는 배치 전체를 `nack`해 다시 받는다. 장애가 지속되는 동안 해당 파티션은 멈추며 Kafka 보존 기간이 상한이다. DLQ 토픽은 보조 기록이다. 로컬 장애 주입에서는 유실 0을 확인했고, 실환경 재검증은 진행 전이다([시나리오 목록](docs/reports/2026-11-01-dlq-failure-scenarios.md)).
 - `mcp-server/`는 지표 조회 도구와 폴링·Slack 알림을 포함한다. 하네스 리포트와 알림을 대체·검증하기 전에는 MCP 엔드포인트만 보고 전체 서버를 제거하지 않는다.
 
 ## 인프라와 검증 문서
