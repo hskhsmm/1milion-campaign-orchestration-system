@@ -23,10 +23,8 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.time.LocalDateTime;
 import java.util.HashMap;
-import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
-import java.util.Set;
 
 @Slf4j
 @Service
@@ -51,6 +49,7 @@ public class DlqReplayService {
             LocalDateTime toTime,
             Integer maxItems
     ) {
+        toTime = toTime != null ? toTime : LocalDateTime.now();
         int effectiveMaxItems = maxItems != null && maxItems > 0
                 ? maxItems
                 : batchProperties.getReplay().getDefaultMaxItems();
@@ -63,7 +62,7 @@ public class DlqReplayService {
         );
         DlqReplayExecution execution = new DlqReplayExecution(
                 normalize(requestedBy),
-                Boolean.TRUE.equals(dryRun),
+                !Boolean.FALSE.equals(dryRun),
                 campaignId,
                 normalize(reason),
                 fromTime,
@@ -94,41 +93,29 @@ public class DlqReplayService {
         execution.markFailed(LocalDateTime.now());
     }
 
+    /** One tasklet invocation = one committed item. Cursor and item outcome commit together.
+     * A row lock serializes competing executions; future wait is bounded to five seconds (send itself uses producer max.block.ms).
+     * Broker success followed by DB rollback can republish, so Consumer remains idempotent.
+     */
     @Transactional
-    public void processExecution(Long executionId) {
-        DlqReplayExecution execution = getExecutionEntity(executionId);
-        int pageSize = Math.max(1, batchProperties.getReplay().getPageSize());
-        int remaining = execution.getMaxItems();
-        long afterId = 0L;
-        Set<Long> processedIds = new HashSet<>();
-
-        while (remaining > 0) {
-            List<DlqMessageRecord> candidates = dlqMessageRepository.findReplayCandidates(
-                    DlqMessageProcessingStatus.PENDING,
-                    afterId,
-                    execution.getFilterCampaignId(),
-                    execution.getFilterReason(),
-                    execution.getFilterFromTime(),
-                    execution.getFilterToTime(),
-                    PageRequest.of(0, Math.min(pageSize, remaining))
-            );
-
-            if (candidates.isEmpty()) {
-                return;
-            }
-
-            for (DlqMessageRecord candidate : candidates) {
-                afterId = candidate.getId();
-                if (!processedIds.add(candidate.getId())) {
-                    continue;
-                }
-                processSingleMessage(execution, candidate);
-                remaining--;
-                if (remaining == 0) {
-                    return;
-                }
-            }
+    public boolean processNext(Long executionId) {
+        DlqReplayExecution execution = dlqReplayExecutionRepository.findLockedById(executionId)
+                .orElseThrow(() -> new IllegalArgumentException("Execution not found: " + executionId));
+        if (execution.getProcessedCount() >= execution.getMaxItems()) return false;
+        List<Long> ids = dlqMessageRepository.findReplayCandidateIds(
+                DlqMessageProcessingStatus.PENDING, execution.getLastMessageId(),
+                execution.getFilterCampaignId(), execution.getFilterReason(),
+                execution.getFilterFromTime(), execution.getFilterToTime(), PageRequest.of(0, 1));
+        if (ids.isEmpty()) return false;
+        DlqMessageRecord message = dlqMessageRepository.findLockedById(ids.get(0)).orElseThrow();
+        // Re-read under lock; a competing execution may have finished while we waited.
+        if (message.getProcessingStatus() == DlqMessageProcessingStatus.PENDING) {
+            processSingleMessage(execution, message);
+            execution.advance(message.getId());
+        } else {
+            execution.moveCursor(message.getId());
         }
+        return true;
     }
 
     @Transactional(readOnly = true)
@@ -164,6 +151,8 @@ public class DlqReplayService {
         Map<String, Object> data = new HashMap<>();
         data.put("execution", execution);
         data.put("items", items);
+        data.put("completionMeaning", "Kafka republication attempted; REPLAYED is not DB confirmation");
+        data.put("remainingLimit", Math.max(0, execution.getMaxItems() - execution.getProcessedCount()));
         return data;
     }
 
@@ -215,34 +204,12 @@ public class DlqReplayService {
             LocalDateTime now
     ) {
         try {
-            kafkaTemplate.send(KafkaConfig.TOPIC_NAME, decision.replayKey(), decision.replayPayload()).get();
-            message.incrementReplayAttempt();
-            message.markReplayed(now);
-            execution.incrementReplayed();
-            dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
-                    execution,
-                    message,
-                    decision.reason(),
-                    DlqReplayAction.REPLAY,
-                    DlqReplayItemResult.SUCCESS,
-                    decision.detail(),
-                    now
-            ));
-            counterFor(DlqReplayAction.REPLAY, false).increment();
-            log.info(
-                    "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
-                    execution.getId(),
-                    message.getId(),
-                    message.getReplayClassification(),
-                    decision.action(),
-                    decision.replayKey(),
-                    DlqReplayItemResult.SUCCESS,
-                    message.getProcessingStatus(),
-                    message.getReplayAttemptCount()
-            );
+            kafkaTemplate.send(KafkaConfig.TOPIC_NAME, decision.replayKey(), decision.replayPayload()).get(5, java.util.concurrent.TimeUnit.SECONDS);
         } catch (Exception e) {
+            if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             message.incrementReplayAttempt();
             execution.incrementPublishFailed();
+            if (message.getReplayAttemptCount() >= 3) message.markFinalFailed("PUBLISH_ATTEMPTS_EXHAUSTED");
             dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
                     execution,
                     message,
@@ -265,7 +232,32 @@ public class DlqReplayService {
                     message.getReplayAttemptCount(),
                     e.getMessage()
             );
+            return;
         }
+        message.incrementReplayAttempt();
+        message.markReplayed(now);
+        execution.incrementReplayed();
+        dlqReplayExecutionItemRepository.save(new DlqReplayExecutionItem(
+                execution,
+                message,
+                decision.reason(),
+                DlqReplayAction.REPLAY,
+                DlqReplayItemResult.SUCCESS,
+                decision.detail(),
+                now
+        ));
+        counterFor(DlqReplayAction.REPLAY, false).increment();
+        log.info(
+                "DLQ replay result. executionId={}, messageId={}, classification={}, action={}, publishKey={}, result={}, processingStatus={}, replayAttempts={}",
+                execution.getId(),
+                message.getId(),
+                message.getReplayClassification(),
+                decision.action(),
+                decision.replayKey(),
+                DlqReplayItemResult.SUCCESS,
+                message.getProcessingStatus(),
+                message.getReplayAttemptCount()
+        );
     }
 
     private void skip(

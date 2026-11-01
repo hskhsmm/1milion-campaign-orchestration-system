@@ -70,8 +70,9 @@ public class DlqReplayJobConfig {
     public Tasklet dlqReplayProcessTasklet() {
         return (contribution, chunkContext) -> {
             Long executionId = (Long) chunkContext.getStepContext().getJobParameters().get("replayExecutionId");
-            dlqReplayService.processExecution(executionId);
-            return RepeatStatus.FINISHED;
+            if (!dlqReplayService.processNext(executionId)) return RepeatStatus.FINISHED;
+            contribution.incrementReadCount();
+            return RepeatStatus.CONTINUABLE;
         };
     }
 

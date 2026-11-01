@@ -64,7 +64,7 @@ public class DlqReplayExecutionItem extends BaseTimeEntity {
         this.reason = reason;
         this.action = action;
         this.result = result;
-        this.detailMessage = detailMessage;
+        this.detailMessage = detailMessage == null ? null : detailMessage.substring(0, Math.min(detailMessage.length(), 1000));
         this.processedAt = processedAt;
     }
 }
