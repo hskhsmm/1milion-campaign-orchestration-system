@@ -23,6 +23,7 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-03 | 같은 30만 건의 앱 2대·3대 비교와 신규 노드 지연 | [앱 2대·3대 비교](reports/2026-11-03-app-2-vs-3-300k.md) |
 | 2026-11-03 | 30만 건 유입·drain 비교와 claim 대기 분석 | [Bridge 30만 건 분석](reports/2026-11-03-bridge-drain-300k.md) |
 | 2026-11-03 | 계측 배포 후 100·1만 건 AWS 검증과 Grafana 권한 복구 | [Bridge AWS 소량 검증](reports/2026-11-03-bridge-observability-aws-smoke.md) |
 | 2026-11-03 | Bridge 호출 계측·로컬 Redis 검증, AWS 미실행 | [Bridge 관측 로컬 검증](reports/2026-11-03-bridge-observability-local.md) |
