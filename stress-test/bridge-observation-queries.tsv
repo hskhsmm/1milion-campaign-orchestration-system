@@ -1,0 +1,10 @@
+# name	PromQL; filter campaign/target as needed. queue_gauge is a sampled shared queue, not a sum over app instances.
+redis_call_mean_ms	1000 * sum by (instance, operation) (rate(bridge_redis_duration_seconds_sum[1m])) / sum by (instance, operation) (rate(bridge_redis_duration_seconds_count[1m]))
+redis_call_p95_ms	1000 * histogram_quantile(0.95, sum by (instance, operation, le) (rate(bridge_redis_duration_seconds_bucket[1m])))
+redis_call_rps	sum by (instance, operation) (rate(bridge_redis_duration_seconds_count[1m]))
+redis_error_rps	sum by (instance, operation) (rate(bridge_redis_errors_total[1m]))
+claim_result_rps	sum by (instance, result) (rate(bridge_claim_results_total[1m]))
+kafka_send_mean_ms	1000 * sum by (instance) (rate(bridge_kafka_send_duration_seconds_sum[1m])) / sum by (instance) (rate(bridge_kafka_send_duration_seconds_count[1m]))
+kafka_completion_mean_ms	1000 * sum by (instance) (rate(bridge_kafka_confirm_duration_seconds_sum[1m])) / sum by (instance) (rate(bridge_kafka_confirm_duration_seconds_count[1m]))
+drain_cycle_mean_ms	1000 * sum by (instance) (rate(bridge_drain_duration_seconds_sum[1m])) / sum by (instance) (rate(bridge_drain_duration_seconds_count[1m]))
+queue_gauge	max by (campaignId) (redis_queue_size)

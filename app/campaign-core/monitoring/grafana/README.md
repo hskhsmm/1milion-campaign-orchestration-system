@@ -134,3 +134,7 @@ docker-compose.prod.yml
 ```
 
 현재 단계에서는 `git pull -> apply-provisioning.sh 실행` 방식이 가장 단순하고 재현 가능하다.
+
+## Bridge 병목 진단 패널
+
+Bridge Redis 호출 평균·p95 추정, Kafka send/응답 평균, claim 결과 패널을 추가했다. 아직 실환경 반영 전이다. 지표 해석·로컬 시험·AWS 재개 절차는 [Bridge 관측 가이드](../../../../docs/runbooks/bridge-observability.md), 수집식은 [PromQL 목록](../../../../stress-test/bridge-observation-queries.tsv)을 따른다. `send`와 응답 시간은 겹치므로 합산하지 않는다.

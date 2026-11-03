@@ -1,7 +1,7 @@
 # 내맘대로캠페인 성능·관측 하네스 도입 로드맵
 
 > 작성: 2026-10-12
-> 상태(2026-11-01): Consumer ACK·DLQ 저장 경계는 #112에서 반영. Replay 배치의 실행·복구·결과 대조는 PR #113에서 로컬 검증 및 Kafka 실패 시 원본 보존 수정 완료. 앱의 Batch JDBC 이력 전환과 실환경 소량 smoke는 별도. 실환경 성능 개선은 미검증.
+> 상태(2026-11-03): #113 핵심 복구는 제공된 AWS 소량 장애 보고서에서 확인. 150만 r4는 DB 150만·응답 timeout 22건으로 FAIL. #114의 Bridge 관측 보완은 작업 브랜치에서 로컬 검증했으며 [기록](../reports/2026-11-03-bridge-observability-local.md)을 참고한다. 하네스 main 통합·Batch JDBC 이력·실환경 성능 개선은 남아 있다.
 > 범위: [이슈 #95](https://github.com/hskhsmm/1milion-campaign-orchestration-system/issues/95), CPU 관측·증설 지연, p95/p99, 지속 가능한 End-to-End 처리량, 기존 MCP 모니터링의 역할 정리, 후속 Kafka 인프라 코드화 판단.
 
 ## 1. 왜 지금 하네스인가
