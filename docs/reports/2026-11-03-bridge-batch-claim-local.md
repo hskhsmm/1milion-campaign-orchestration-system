@@ -197,6 +197,68 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 - C 장애 창에 앱 health 조회가 2초 안에 응답하지 않았고(`obs.sh`에 DOWN 표시), 같은 샤드 캠페인의 `Failed to drain campaign queue` 로그가 2회씩 있었다. 회복 후 health는 UP이었다.
 - B에서 Kafka 중지 시 첫 batch(10건) 후 claim이 멈추는 현상이 다시 나타났다(8장 2번).
 
+### 6-5. 운영 보장 범위
+
+이 시스템은 Redis failover 구간의 **완전 무중단을 보장하지 않는다.** 6-4 결과를 바탕으로 한 운영 목표는 다음과 같다.
+
+1. 단일 Redis primary 장애 후 앱 재시작이나 운영자 조치 없이 자동 복구한다.
+2. 장애 중 요청을 무기한 대기시키지 않고, 정해진 timeout 안에 성공 또는 실패로 끝낸다.
+3. Redis가 요청을 접수하지 못한 경우 성공 응답(202)을 반환하지 않는다.
+4. Kafka·Bridge 안에서는 중복 발행을 허용하되, Consumer와 DB 고유 제약으로 최종 데이터는 한 번만 반영한다.
+5. ACK에 실패한 이벤트는 in-flight에 남기고 lease 만료 후 reclaim해 다시 처리한다.
+6. 장애 복구 후 Queue·in-flight·Kafka lag가 최종적으로 0으로 수렴한다.
+
+로컬 시험에서는 단일 primary 장애 후 약 7~13초 안에 앱 재시작 없이 자동 복구했다. 장애 구간에는 일부 요청이 HTTP 500으로 실패했고, 그 요청은 참여 키·재고·DB에 반영되지 않았다.
+
+#### 202 Accepted의 보장 범위
+
+`202 Accepted`는 Redis primary에서 재고 차감·중복 확인·Queue 적재가 원자적으로 성공했다는 뜻이며, DB 반영 완료를 뜻하지 않는다.
+
+로컬 failover 시험에서는 202를 받은 요청이 모두 최종 DB에 반영됐다. 그러나 Redis OSS 7.2의 primary-replica 복제는 비동기이므로, primary가 응답한 직후 replica에 복제되기 전에 노드가 유실되면 최근 쓰기가 빠질 수 있다([Redis replication](https://redis.io/docs/latest/operate/oss_and_stack/management/replication/), [ElastiCache 복제](https://docs.aws.amazon.com/AmazonElastiCache/latest/dg/Replication.html)). 따라서 이번 결과는 **"시험한 단일 primary failover에서 202 요청 유실이 관측되지 않았다"** 는 뜻이며, "모든 장애에서 RPO 0"이나 "202 요청은 절대 유실되지 않는다"를 뜻하지 않는다.
+
+#### 현재 보장과 미보장
+
+| 항목 | 현재 상태 |
+| --- | --- |
+| batch claim 원자성(Queue→in-flight 일부만 이동 없음) | Lua 단일 실행 범위에서 보장, 실제 Redis 시험 |
+| 동시 claim 중복 이동 방지 | 보장, 8개 연결 20회 반복 시험 |
+| 앱 재시작 없는 failover 회복 | 로컬 검증 완료, AWS 미검증 |
+| 장애 중 요청 무중단 성공 | 보장하지 않음 |
+| Kafka 중복 발행 0 | 보장하지 않음(ACK 실패·reclaim 시 중복) |
+| 최종 DB 중복 반영 방지 | DB `(campaign_id, user_id)` 고유 제약으로 보장 |
+| ACK 실패 이벤트 복구 | lease·reclaim으로 처리, 실제 lease 5분 시험 |
+| Queue/in-flight/lag 최종 수렴 | 시험 시나리오에서 확인 |
+| 모든 202 요청의 장애 시 무손실 | 현재 구조(Redis 비동기 복제)에서 보장하지 못함 |
+| AWS 회복 시간 | 미검증 |
+
+#### 운영 SLO 방향
+
+완전 무중단 대신 측정 가능한 목표를 둔다. 숫자는 AWS(ElastiCache `TestFailover` 등)에서 실제 시간을 측정한 뒤 정하며, 지금 "30초 이내 복구 보장"처럼 확정하지 않는다.
+
+| 목표 | 기준 |
+| --- | --- |
+| 단일 primary 장애 자동 복구 | 운영자 개입 없음 |
+| AWS failover 복구 시간 | 실험 후 상한 결정 |
+| 장애 요청 대기 시간 | 설정한 timeout 이내 |
+| 202와 최종 DB 불일치 | 0을 목표로 감시 |
+| DB 중복 INSERT | 0 |
+| 복구 후 Queue/in-flight/lag | 0 |
+| ACK error·reclaim·중복 발행 | 허용하되 반드시 측정 |
+
+#### 202 무손실이 필수 요구라면
+
+"202를 반환한 요청은 primary가 즉시 사라져도 잃으면 안 된다"가 요구사항이라면 현재 Redis 비동기 복제만으로는 부족하다. 선택지는 다음과 같으며 모두 지연·처리량 비용이 있다(검토만, 미적용).
+
+- Redis `WAIT`로 replica 반영을 기다려 유실 가능성을 줄임(강한 일관성이 되지는 않음)
+- 더 강한 durability를 제공하는 저장소 사용
+- 영속 Kafka에 먼저 기록하고 202의 의미를 "처리 접수"로 변경
+- DB를 접수 원장으로 사용
+- 동기 durability를 지원하는 ElastiCache 구성 검토
+
+선착순 성능을 중시하는 현재 구조에서 현실적인 계약은 다음이다.
+
+> 단일 primary 장애에서 자동 복구하고, 장애 구간 요청은 명확하게 실패시키며, 접수된 이벤트는 중복 가능하더라도 최종 DB에 한 번만 반영한다. Redis 비동기 복제 한계에 따른 최근 쓰기 유실 가능성은 별도 위험으로 관리한다.
+
 ## 7. 미검증
 
 - AWS 30만 비교(N=1 → 10 → 50 → 1): 2026-11-03 사용자 결정으로 이번 작업 범위에서 제외. 실제 Bridge 발행률·Queue·완료 시간 개선 여부는 모른다(기본값 1이라 배포 시 동작은 기존과 같다)
@@ -214,7 +276,8 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 | --- | --- | --- | --- | --- |
 | 1 | (로컬 해결) Redis primary failover 후 앱이 승격된 primary를 따라가지 못해 앱 재시작 전까지 정지 | 6-2 재현 → 6-4 topology refresh·timeout 적용 후 A·B·C 자동 회복. AWS 미확인 | 적용 후 남은 영향: failover 창 약 7~13초의 해당 슬롯 요청 실패, ACK 실패분 중복 발행·최대 5분 지연 | 무관(기존 구성). 같은 브랜치에서 수정 |
 | 2 | Kafka 중지 시 Bridge claim이 첫 batch 후 멈춤 | 6-2·6-4 B에서 관측(30건·10건 후 멈춤), `KafkaTemplate.send` 대기(`max.block.ms` 60초) 추정. 5장에서는 재현 안 됨 | 처리 지연(원본은 Redis에 남음) | 무관(기존 동기 send 경로), 원인 미확인 |
-| 3 | 추적되지 않는 예전 로컬 시험 파일 때문에 작업 폴더 그대로 `gradlew test` 컴파일 실패 | 1장 | 로컬 시험 불편. 이번 시험은 임시 worktree 사용 | 무관 |
+| 3 | Redis 비동기 복제: primary 응답 직후 복제 전에 노드가 유실되면 202 접수분 일부가 빠질 수 있음 | 6-5, Redis·ElastiCache 문서. 이번 시험에서는 관측되지 않음 | 드문 경우의 최근 쓰기 유실 | 무관(기존 구조 위험) |
+| 4 | 추적되지 않는 예전 로컬 시험 파일 때문에 작업 폴더 그대로 `gradlew test` 컴파일 실패 | 1장 | 로컬 시험 불편. 이번 시험은 임시 worktree 사용 | 무관 |
 
 1번 수정은 사용자 결정으로 같은 브랜치에 넣었다. 기본 `claim-batch-size=1`이면 기존 단건 경로이므로 코드를 병합해도 동작은 같다. 실제 환경에서 N=10/50을 켜는 것은 AWS 성능 비교와 failover 보완 이후로 분리한다.
 
@@ -226,7 +289,7 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 
 | 방법 | 장점 | 트레이드오프 |
 | --- | --- | --- |
-| 서버 내부 Redis 재시도 | 일시적인 500/503 감소 | API 응답이 수초 느려지고 대기 요청이 쌓임 |
+| 서버 내부 Redis 재시도 | 일시적인 요청 실패 감소 | API 응답이 수초 느려지고 대기 요청이 쌓임 |
 | 재시도 횟수 증가 | failover 중 성공 가능성 증가 | Redis 복구 순간 요청이 몰리는 재시도 폭주 |
 | Redis timeout 증가 | 느린 요청도 성공할 가능성 증가 | 장애 요청이 오래 매달리고 장애가 전파될 수 있음 |
 | Redis timeout 감소 | 빨리 실패해 서버 보호 | 정상적인 순간 지연도 실패로 처리될 수 있음 |
@@ -245,13 +308,10 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 2. Redis timeout으로 장시간 대기 차단 — 적용함(값은 측정 전)
 3. 연결 장애에 한해 짧게 1~3회 서버 재시도
 4. exponential backoff + jitter
-5. 끝까지 실패하면 `500` 대신 `503`으로 응답(현재는 `500`)
-6. 클라이언트는 같은 `campaignId + userId`로 제한적으로 재시도(중복 참여 키가 이중 접수를 막음)
-7. Consumer·DB는 계속 중복을 허용하고 멱등 처리 — 현재 구조 유지
-8. AWS 측정 후 timeout·재시도 시간 확정
+5. 클라이언트는 같은 `campaignId + userId`로 제한적으로 재시도(중복 참여 키가 이중 접수를 막음)
+6. Consumer·DB는 계속 중복을 허용하고 멱등 처리 — 현재 구조 유지
+7. AWS 측정 후 timeout·재시도 시간 확정
 
-목표는 완전 무중단이 아니라 다음이다.
+목표는 완전 무중단이 아니라 6-5의 운영 보장 목표다.
 
-> 장애 중 일부 요청은 빠르게 503으로 실패할 수 있지만, 202를 받은 요청은 유실하지 않고 앱은 재시작 없이 자동 복구한다.
-
-이번 변경으로 장기 정지 방지(1)와 장시간 대기 차단(2)까지 했고, 6-4에서 202 요청의 정합성을 확인했다. 3~6은 AWS에서 failover 시간과 정상 Redis p99를 먼저 측정한 뒤 별도 변경으로 다룬다.
+이번 변경으로 장기 정지 방지(1)와 장시간 대기 차단(2)까지 했고, 6-4의 시험 시나리오에서 202 요청 유실이 관측되지 않았다. 3~5는 AWS에서 failover 시간과 정상 Redis p99를 먼저 측정한 뒤 별도 변경으로 다룬다.
