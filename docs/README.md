@@ -23,6 +23,7 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-03 | 계측 배포 후 100·1만 건 AWS 검증과 Grafana 권한 복구 | [Bridge AWS 소량 검증](reports/2026-11-03-bridge-observability-aws-smoke.md) |
 | 2026-11-03 | Bridge 호출 계측·로컬 Redis 검증, AWS 미실행 | [Bridge 관측 로컬 검증](reports/2026-11-03-bridge-observability-local.md) |
 | 2026-11-01 | Consumer·DLQ 실패 시나리오, ACK 경계 수정과 로컬 장애 주입 검증 | [DLQ 실패 시나리오](reports/2026-11-01-dlq-failure-scenarios.md) |
 | 2026-11-01 | DLQ 재처리 Job·중복 방지·복구 결과 대조 | [배치 로컬 검증](reports/2026-11-01-dlq-batch-validation.md) |

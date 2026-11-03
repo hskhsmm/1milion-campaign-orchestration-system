@@ -138,3 +138,7 @@ docker-compose.prod.yml
 ## Bridge 병목 진단 패널
 
 Bridge Redis 호출 평균·p95 추정, Kafka send/응답 평균, claim 결과 패널을 추가했다. 아직 실환경 반영 전이다. 지표 해석·로컬 시험·AWS 재개 절차는 [Bridge 관측 가이드](../../../../docs/runbooks/bridge-observability.md), 수집식은 [PromQL 목록](../../../../stress-test/bridge-observation-queries.tsv)을 따른다. `send`와 응답 시간은 겹치므로 합산하지 않는다.
+
+## Provisioning 파일 권한
+
+Grafana UID가 읽는 비밀값 없는 dashboard.yml·campaign.json은 0644, dashboard 디렉터리는 0755로 설치한다. mktemp의 0600 권한을 그대로 복사하면 Grafana 시작이 permission denied로 실패할 수 있다. 로컬 회귀 검증은 저장소 루트에서 `bash ops/tests/grafana-provisioning-test.sh`로 실행한다.
