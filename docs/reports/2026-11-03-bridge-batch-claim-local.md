@@ -17,7 +17,7 @@
 
 ## 2. 시험 결과
 
-전체: **180개, 성공 169, 실패 0, 오류 0, 건너뜀 11**(6-4의 설정 시험 포함). 마지막 실행은 6-4 failover 스택 정리 직후(2026-11-04 00:03경 KST 시작, 약 3분 소요, 정확한 시각은 기록하지 않음)이며 커밋 전 작업 트리를 담은 임시 worktree에서 실행했다. 시험 후 Redis `DBSIZE` 0(이 시험의 키만 쓰고 지움). 건너뛴 것은 외부 인프라가 필요한 기존 시험(`DlqReplayTransactionTest` 10, `CampaignCoreApplicationTests` 1)이며 이번 변경과 무관하다.
+전체: **180개, 성공 169, 실패 0, 오류 0, 건너뜀 11**(6-4의 설정 시험 포함). 마지막 실행은 6-4 failover 스택 정리 직후(2026-11-04 00:03경 KST 시작, 약 3분 소요, 정확한 시각은 기록하지 않음)이며 커밋 전 작업 트리를 담은 임시 worktree에서 실행했다. 커밋 후 `353f416`을 그대로 checkout한 깨끗한 worktree(작업 트리 변경 0)에서 실제 Redis 7.2를 붙여 다시 실행해 같은 결과(180개, 성공 169, 실패 0, 건너뜀 11)를 얻었다(2026-11-04 00:21:28~00:24:26 KST). 시험 후 Redis `DBSIZE` 0(이 시험의 키만 쓰고 지움). 건너뛴 것은 외부 인프라가 필요한 기존 시험(`DlqReplayTransactionTest` 10, `CampaignCoreApplicationTests` 1)이며 이번 변경과 무관하다.
 
 | 시험 | 수 | 확인한 것 |
 | --- | ---: | --- |
@@ -204,7 +204,6 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 - `timeout: 2s`·`period: 30s`의 적정값(측정으로 정하지 않음), 정상 고부하에서 2초 timeout 발생 여부
 - refresh 적용 상태의 반복 failover(같은 슬롯 연속 장애), replica 없는 샤드 장애
 - Kafka 발행 성공 후 ACK 전 앱 kill(중복 발행 경로). 기대: Kafka 발행 2회, DB INSERT 1회, 최종 Queue/in-flight/lag 0
-- 최종 커밋을 깨끗한 checkout에서 전체 시험
 - 네트워크 수준의 Redis 응답 유실(Toxiproxy)
 - 동시 접수 부하 중 Lua 대기(API 지연)
 - 서로 다른 앱 프로세스·호스트에서의 동시 claim(3장 동시 시험은 한 JVM 안의 연결 8개)
