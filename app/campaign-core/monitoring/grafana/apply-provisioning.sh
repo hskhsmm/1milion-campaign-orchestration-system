@@ -24,8 +24,8 @@ if [ ! -f "${DASHBOARD_SRC}" ]; then
   exit 1
 fi
 
-${SUDO} mkdir -p "${DASHBOARD_HOST_DIR}"
-${SUDO} cp "${DASHBOARD_SRC}" "${DASHBOARD_TARGET}"
+${SUDO} install -d -m 0755 "${DASHBOARD_HOST_DIR}"
+${SUDO} install -m 0644 "${DASHBOARD_SRC}" "${DASHBOARD_TARGET}"
 
 tmp_provider="$(mktemp)"
 cat > "${tmp_provider}" <<'YAML'
@@ -42,8 +42,9 @@ providers:
       path: /etc/grafana/provisioning/dashboards/json
 YAML
 
-${SUDO} mkdir -p "${PROVIDER_HOST_DIR}"
-${SUDO} cp "${tmp_provider}" "${PROVIDER_FILE}"
+# mktemp is 0600; Grafana runs as another UID and must read this non-secret config.
+${SUDO} install -d -m 0755 "${PROVIDER_HOST_DIR}"
+${SUDO} install -m 0644 "${tmp_provider}" "${PROVIDER_FILE}"
 rm -f "${tmp_provider}"
 
 echo "Dashboard provisioning files were written."
