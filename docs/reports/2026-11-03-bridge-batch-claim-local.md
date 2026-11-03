@@ -259,6 +259,43 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 
 > 단일 primary 장애에서 자동 복구하고, 장애 구간 요청은 명확하게 실패시키며, 접수된 이벤트는 중복 가능하더라도 최종 DB에 한 번만 반영한다. Redis 비동기 복제 한계에 따른 최근 쓰기 유실 가능성은 별도 위험으로 관리한다.
 
+### 6-6. Kafka 중지 시 Bridge claim이 멈추는 원인 확인 (2026-11-04)
+
+6-2·6-4 B에서 Kafka 중지 후 claim이 첫 batch(30건·10건) 뒤 더 늘지 않았다. 원인을 확인하려고 재현했다.
+
+| 항목 | 내용 |
+| --- | --- |
+| 이미지 | 6-4와 같은 빌드(23:53:20, `10629fb`의 코드). Docker 표시 ID는 빌드 직후 `1be8052d7549`, 이후 `a1607062f32f`로 보였으며 생성 시각이 같다 |
+| 환경 | `compose-kill.yml`(3샤드) 1회, `compose-failover.yml`(3+3) 7회. N=50 |
+| 절차 | 새 캠페인 → `docker compose stop kafka` → 100건 병렬 10 요청 → 2~3초 후 Queue·in-flight·`bridge_kafka_send_duration` 확인 → 멈추면 스레드 덤프 |
+| 덤프 | 앱은 가상 스레드(`spring.threads.virtual.enabled=true`)라 SIGQUIT 덤프에 스케줄러 스레드가 나오지 않는다. JDK 컨테이너를 같은 PID 공간에 붙여 `jcmd 1 Thread.dump_to_file`로 받았다 |
+
+| 시도 | 직전 Kafka 기동 후 대기 | 결과 |
+| --- | --- | --- |
+| 3샤드 1회, 3+3 첫 1회 | (앱 기동 후 첫 중지) | 멈춤 없음: 100건 모두 claim, send 최대 0.03~0.09초 |
+| 3+3 시도 1 | 3초 | 멈춤 없음 |
+| 3+3 시도 2~6 | 15~51초 | **5회 모두 멈춤**(in-flight 30·9·37·30·32, 나머지는 Queue), send 최대 약 10.2초 |
+
+멈춘 순간의 Bridge 스케줄러 스레드:
+
+```text
+"scheduling-2" virtual TIMED_WAITING
+  ProducerMetadata.awaitUpdate
+  KafkaProducer.waitOnMetadata
+  KafkaProducer.doSend / send
+  KafkaTemplate.send
+  ParticipationBridge.publishAsync ← drainInBatches ← drainQueues
+```
+
+- **원인: `KafkaTemplate.send()`가 Kafka 메타데이터 갱신을 기다리며 호출 스레드를 붙잡는다.** Bridge는 한 스레드에서 claim과 send를 번갈아 하므로 drain 루프 전체가 멈춘다. 같은 인스턴스의 다른 캠페인 drain도 함께 멈춘다.
+- 대기는 최대 `max.block.ms`(60초)다. 시도 5에서 1건은 Kafka 중지(00:40:30) 60초 뒤 `Kafka publish failed before enqueue`로 실패했고, 그 claim은 in-flight에 남았다가 lease 5분 뒤(00:45:35) reclaim돼 DB에 반영됐다.
+- 어떤 조건에서 메타데이터 대기가 생기는지(앱 기동 후 첫 중지·직후 재중지에서는 안 생김)는 확정하지 않았다.
+- Kafka를 다시 켜면 몇 초 안에 풀렸다(시도 6: Kafka 시작 00:42:33 → DB 반영 00:42:40).
+- 정합성: 7개 캠페인 모두 DB 100(고유 사용자 100), 최종 Queue·in-flight 0, Kafka offset 합 850 = DB 850, 중복 0.
+- **batch 변경과 무관하다.** 단건 경로도 같은 `send()`를 쓴다. API 접수 경로는 Kafka를 쓰지 않으므로 영향이 없다(시도별 202 100, 요청 평균 8ms).
+
+영향: Kafka가 멈춘 동안 어차피 발행할 수 없으므로 유실은 없고, 처리 재개가 몇 초 늦거나 60초 대기 끝에 실패한 claim이 lease(5분)만큼 늦게 처리된다. 개선 선택지(검토만, 미적용): `max.block.ms` 단축(더 빨리 실패하지만 reclaim 대상이 늘어남), Kafka 발행이 실패하는 동안 claim을 멈추는 차단기(불필요한 claim·reclaim 감소), send를 drain 스레드와 분리.
+
 ## 7. 미검증
 
 - AWS 30만 비교(N=1 → 10 → 50 → 1): 2026-11-03 사용자 결정으로 이번 작업 범위에서 제외. 실제 Bridge 발행률·Queue·완료 시간 개선 여부는 모른다(기본값 1이라 배포 시 동작은 기존과 같다)
@@ -275,7 +312,7 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 | 순위 | 문제 | 근거 | 영향 | batch 변경과 관계 |
 | --- | --- | --- | --- | --- |
 | 1 | (로컬 해결) Redis primary failover 후 앱이 승격된 primary를 따라가지 못해 앱 재시작 전까지 정지 | 6-2 재현 → 6-4 topology refresh·timeout 적용 후 A·B·C 자동 회복. AWS 미확인 | 적용 후 남은 영향: failover 창 약 7~13초의 해당 슬롯 요청 실패, ACK 실패분 중복 발행·최대 5분 지연 | 무관(기존 구성). 같은 브랜치에서 수정 |
-| 2 | Kafka 중지 시 Bridge claim이 첫 batch 후 멈춤 | 6-2·6-4 B에서 관측(30건·10건 후 멈춤), `KafkaTemplate.send` 대기(`max.block.ms` 60초) 추정. 5장에서는 재현 안 됨 | 처리 지연(원본은 Redis에 남음) | 무관(기존 동기 send 경로), 원인 미확인 |
+| 2 | Kafka 중지 시 Bridge claim이 첫 batch 후 멈춤 | 6-6에서 확인: `KafkaTemplate.send()`가 메타데이터 대기(`waitOnMetadata`, 최대 `max.block.ms` 60초)로 drain 스레드를 붙잡음. 발생 조건은 미확정 | 처리 지연(유실 없음). Kafka 복구 후 수 초 내 재개, 60초 대기 끝에 실패한 claim은 lease 5분 뒤 처리 | 무관(기존 동기 send 경로) |
 | 3 | Redis 비동기 복제: primary 응답 직후 복제 전에 노드가 유실되면 202 접수분 일부가 빠질 수 있음 | 6-5, Redis·ElastiCache 문서. 이번 시험에서는 관측되지 않음 | 드문 경우의 최근 쓰기 유실 | 무관(기존 구조 위험) |
 | 4 | 추적되지 않는 예전 로컬 시험 파일 때문에 작업 폴더 그대로 `gradlew test` 컴파일 실패 | 1장 | 로컬 시험 불편. 이번 시험은 임시 worktree 사용 | 무관 |
 
