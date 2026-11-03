@@ -1,0 +1,96 @@
+# Bridge batch claim Redis failover 시험 전용 (3 primary + 3 replica).
+# 기존 campaign-core 컨테이너·볼륨과 분리한다. 비밀번호는 이 로컬 시험 전용 임의값이다.
+# 앱 이미지는 compose-kill.yml이 빌드한 bbc-kill-app:local을 쓴다.
+name: bbc-fo
+services:
+  mysql:
+    image: mysql:8.4
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci, --default-time-zone=+09:00]
+    environment:
+      MYSQL_ROOT_PASSWORD: bbc-root-test
+      MYSQL_DATABASE: campaign
+      MYSQL_USER: bbc
+      MYSQL_PASSWORD: bbc-test
+      TZ: Asia/Seoul
+    ports: ["127.0.0.1:13306:3306"]
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-pbbc-root-test"]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  kafka:
+    image: confluentinc/cp-kafka:7.5.0
+    environment:
+      KAFKA_NODE_ID: 1
+      KAFKA_PROCESS_ROLES: broker,controller
+      KAFKA_CONTROLLER_QUORUM_VOTERS: 1@kafka:29093
+      KAFKA_OFFSETS_TOPIC_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_REPLICATION_FACTOR: 1
+      KAFKA_TRANSACTION_STATE_LOG_MIN_ISR: 1
+      KAFKA_GROUP_INITIAL_REBALANCE_DELAY_MS: 0
+      CLUSTER_ID: QmJjS2lsbFRlc3QwMDAwMQ
+      KAFKA_LISTENERS: PLAINTEXT://0.0.0.0:29092,CONTROLLER://0.0.0.0:29093
+      KAFKA_ADVERTISED_LISTENERS: PLAINTEXT://kafka:29092
+      KAFKA_LISTENER_SECURITY_PROTOCOL_MAP: CONTROLLER:PLAINTEXT,PLAINTEXT:PLAINTEXT
+      KAFKA_INTER_BROKER_LISTENER_NAME: PLAINTEXT
+      KAFKA_CONTROLLER_LISTENER_NAMES: CONTROLLER
+    healthcheck:
+      test: ["CMD", "kafka-topics", "--bootstrap-server", "kafka:29092", "--list"]
+      interval: 5s
+      timeout: 10s
+      retries: 30
+
+  redis-1: &redis
+    image: redis:7.2-alpine
+    command: redis-server --port 7001 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-1 --cluster-announce-port 7001 --cluster-preferred-endpoint-type hostname --appendonly no
+  redis-2:
+    <<: *redis
+    command: redis-server --port 7002 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-2 --cluster-announce-port 7002 --cluster-preferred-endpoint-type hostname --appendonly no
+  redis-3:
+    <<: *redis
+    command: redis-server --port 7003 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-3 --cluster-announce-port 7003 --cluster-preferred-endpoint-type hostname --appendonly no
+
+  redis-4:
+    <<: *redis
+    command: redis-server --port 7004 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-4 --cluster-announce-port 7004 --cluster-preferred-endpoint-type hostname --appendonly no
+  redis-5:
+    <<: *redis
+    command: redis-server --port 7005 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-5 --cluster-announce-port 7005 --cluster-preferred-endpoint-type hostname --appendonly no
+  redis-6:
+    <<: *redis
+    command: redis-server --port 7006 --cluster-enabled yes --cluster-config-file /data/nodes.conf --cluster-node-timeout 5000 --cluster-announce-hostname redis-6 --cluster-announce-port 7006 --cluster-preferred-endpoint-type hostname --appendonly no
+
+  redis-cluster-init:
+    image: redis:7.2-alpine
+    depends_on: [redis-1, redis-2, redis-3, redis-4, redis-5, redis-6]
+    entrypoint: ["sh", "-c"]
+    command:
+      - |
+        sleep 3
+        if redis-cli -h redis-1 -p 7001 cluster info | grep -q 'cluster_state:ok'; then exit 0; fi
+        redis-cli --cluster create redis-1:7001 redis-2:7002 redis-3:7003 redis-4:7004 redis-5:7005 redis-6:7006 --cluster-replicas 1 --cluster-yes
+        for i in $$(seq 1 30); do redis-cli -h redis-1 -p 7001 cluster info | grep -q 'cluster_state:ok' && exit 0; sleep 1; done
+        exit 1
+
+  app:
+    image: bbc-kill-app:local
+    environment:
+      SPRING_PROFILES_ACTIVE: local
+      SPRING_DATASOURCE_URL: jdbc:mysql://mysql:3306/campaign?useSSL=false&allowPublicKeyRetrieval=true&characterEncoding=UTF-8&serverTimezone=Asia/Seoul
+      SPRING_DATASOURCE_USERNAME: bbc
+      SPRING_DATASOURCE_PASSWORD: bbc-test
+      MYSQL_DATABASE: campaign
+      MYSQL_USER: bbc
+      MYSQL_PASSWORD: bbc-test
+      SPRING_KAFKA_BOOTSTRAP_SERVERS: kafka:29092
+      SPRING_DATA_REDIS_CLUSTER_NODES: redis-1:7001,redis-2:7002,redis-3:7003,redis-4:7004,redis-5:7005,redis-6:7006
+      SPRING_JPA_SHOW_SQL: "false"
+      BRIDGE_CLAIM_BATCH_SIZE: "50"
+      TZ: Asia/Seoul
+      JAVA_TOOL_OPTIONS: -Xms256m -Xmx512m -Duser.timezone=Asia/Seoul -Dfile.encoding=UTF-8
+    ports: ["127.0.0.1:18080:8080"]
+    depends_on:
+      mysql: {condition: service_healthy}
+      kafka: {condition: service_healthy}
+      redis-cluster-init: {condition: service_completed_successfully}
