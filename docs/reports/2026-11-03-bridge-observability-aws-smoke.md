@@ -38,8 +38,8 @@ smoke는 14:58:38~14:58:41 KST, 1만 건은 15:00:28~15:00:46 KST(실행 준비�
 
 | 앱 | claim | ACK | Kafka send 동기 | Kafka 성공/실패 응답 |
 | --- | ---: | ---: | ---: | ---: |
-| i-02b3db28e5336dfd0 | 2.027ms | 0.954ms | 0.232ms | 8.891ms |
-| i-07ac6b3ff72e02fb8 | 3.894ms | 1.432ms | 0.226ms | 12.167ms |
+| i-07ac6b3ff72e02fb8 (2b) | 2.027ms | 0.954ms | 0.232ms | 8.891ms |
+| i-02b3db28e5336dfd0 (2a) | 3.894ms | 1.432ms | 0.226ms | 12.167ms |
 
 claim count는 빈 선점도 포함한다. 응답 시간은 send 대기와 겹치므로 합산하지 않는다. 이번 조건에서는 순차 Redis claim의 호출 대기가 send 동기 호출보다 크게 관측됐다. AZ·연결 경합·Redis 내부 지연 중 어느 원인인지는 확정하지 않았다. 비동기 Kafka 응답이 더 길다는 사실만으로 그것을 순차 루프의 직접 병목으로 단정하지 않는다.
 
@@ -49,7 +49,7 @@ claim count는 빈 선점도 포함한다. 응답 시간은 send 대기와 겹�
 
 apply-provisioning.sh 실행 뒤 Grafana가 재시작을 반복했다. 로그는 dashboard.yml permission denied였다. mktemp의 0600 권한을 cp로 root 소유 새 provider 파일에 유지해 Grafana UID가 읽지 못한 것이 원인이다.
 
-실환경의 비밀값 없는 provider 설정만 0644로 변경하고 Grafana를 재기동했다. 이후 running/restart 0, /api/health database ok, 새 패널 4개 포함 dashboard JSON 20개를 확인했다. 대시보드 원본은 적용 전 /tmp/bridge117/campaign-before117.json에 보관했다. 로그인 후 실화면 렌더링은 아직 확인하지 않았다.
+실환경의 비밀값 없는 provider 설정만 0644로 변경하고 Grafana를 재기동했다. 이후 running/restart 0, /api/health database ok, dashboard JSON의 새 패널 4개 포함 총 20개 패널를 확인했다. 대시보드 원본은 적용 전 /tmp/bridge117/campaign-before117.json에 보관했다. 로그인 후 실화면 렌더링은 아직 확인하지 않았다.
 
 재발 방지 변경은 별도 fix/grafana-provisioning-permissions 브랜치에서 install -m 0644, 디렉터리 0755를 명시한다. 엄격한 umask 077에서 실제 스크립트를 실행하는 로컬 회귀 시험은 통과했다. sudo/docker는 테스트용 stub이라 실제 컨테이너를 건드리지 않는다.
 
