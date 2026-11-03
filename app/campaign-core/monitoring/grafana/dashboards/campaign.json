@@ -929,7 +929,7 @@
     },
     {
       "id": 20,
-      "title": "Bridge claim 결과 (건/초)",
+      "title": "Bridge claim 호출·이벤트 (/초)",
       "type": "timeseries",
       "gridPos": {
         "x": 12,
@@ -944,8 +944,17 @@
             "type": "prometheus",
             "uid": "prometheus"
           },
-          "expr": "sum by (instance, result) (rate(bridge_claim_results_total[1m]))",
-          "legendFormat": "{{instance}} {{result}}"
+          "expr": "sum by (instance, result) (rate(bridge_claim_calls_total[1m]))",
+          "legendFormat": "{{instance}} 호출 {{result}}"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (instance) (rate(bridge_claim_events_total[1m]))",
+          "legendFormat": "{{instance}} 이벤트"
         }
       ],
       "fieldConfig": {
@@ -965,7 +974,7 @@
           "mode": "single"
         }
       },
-      "description": "claimed는 선점 성공. not_claimed는 빈 큐 또는 in-flight 상한이며 두 원인을 이 지표만으로 구분할 수 없다."
+      "description": "호출 claimed/empty는 Lua 호출 횟수, 이벤트는 실제로 in-flight로 옮긴 건수다. claim-batch-size=1이면 claimed 호출과 이벤트가 같다. empty는 빈 큐 또는 in-flight 상한이며 두 원인을 이 지표만으로 구분할 수 없다."
     }
   ]
 }

@@ -57,6 +57,10 @@ management:
       prometheus:
         enabled: true
 
+# Bridge Queue → in-flight claim 묶음 크기 (1~50). 1은 기존 단건 Lua 경로. 범위 밖이면 기동 실패.
+bridge:
+  claim-batch-size: 1
+
 # 배치 작업 설정
 batch:
   aggregation:

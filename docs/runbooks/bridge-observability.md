@@ -10,12 +10,15 @@
 | --- | --- |
 | bridge.redis.duration, operation=claim/ack/reclaim | 클라이언트 호출 시간(초), 성공·예외 모두 timer count에 포함. 연결·네트워크·직렬화 및 스크립트 캐시 fallback 등이 포함될 수 있어 Redis 서버 실행 시간으로 해석하지 않음 |
 | bridge.redis.errors, operation | Redis 호출이 RuntimeException으로 종료된 횟수. 예외는 원래대로 전파 |
-| bridge.claim.results, result=claimed/not_claimed | 선점 성공/결과 없음 횟수. not_claimed는 빈 Queue와 in-flight 상한을 구분하지 못함 |
+| bridge.claim.calls, result=claimed/empty | claim Lua **호출** 횟수(1건 이상 선점/결과 없음). empty는 빈 Queue와 in-flight 상한을 구분하지 못함. 2026-11-03 batch claim 이전 이름은 `bridge.claim.results`(claimed/not_claimed) |
+| bridge.claim.events | 실제로 Queue→in-flight로 옮긴 **이벤트** 수. `claim-batch-size=1`이면 claimed 호출 수와 같음 |
+| bridge.claim.ack.results, result=removed/not_found/error/rejected | ACK 결과. removed=ZREM 1, not_found=ZREM 0(reclaim이 먼저 실행됐거나 예상 밖 중복 삭제), error=Redis 예외·결과 없음, rejected=ACK 실행기 거부. 기존 `bridge.claims.ack.rejected`도 호환용으로 유지 |
+| bridge.claim.batch.size | 1건 이상 선점한 호출 1회당 옮긴 건수 분포(경계 1/10/25/50) |
 | bridge.kafka.send.duration | KafkaTemplate.send 동기 호출 시간. 버퍼/메타데이터 대기를 포함할 수 있음 |
 | bridge.kafka.confirm.duration | send 시작~성공/실패 응답까지. 동기 예외도 포함. Redis ACK·DB 완료가 아님 |
 | 기존 bridge.drain.duration | 한 스케줄 실행의 active Set 조회·캠페인 순회·동기 claim/send까지. 비동기 ACK 완료와 스케줄 사이 100ms 대기는 제외 |
 
-새 지표에는 campaignId/userId/claim token 태그를 붙이지 않는다. operation은 3개, result는 2개뿐이다. Redis/SEND histogram은 고정 SLO 경계만 사용한다. 메트릭 수집을 위해 Redis 명령·Kafka 메시지를 추가하지 않는다. timer count는 논리 호출 수이며 EVALSHA 캐시 miss 시 실제 wire 명령 수와 다를 수 있다.
+새 지표에는 campaignId/userId/claim token 태그를 붙이지 않는다. operation은 3개, result는 2개뿐이다. `operation=claim` timer는 **호출당** 시간이다. batch 크기가 다르면 이벤트당 claim 시간(timer 합계 ÷ `bridge.claim.events`)으로 비교한다. Redis/SEND histogram은 고정 SLO 경계만 사용한다. 메트릭 수집을 위해 Redis 명령·Kafka 메시지를 추가하지 않는다. timer count는 논리 호출 수이며 EVALSHA 캐시 miss 시 실제 wire 명령 수와 다를 수 있다.
 
 Prometheus에서는 점이 밑줄로, Timer는 `_seconds_count/sum/bucket`, Counter는 `_total`로 노출된다. 구체 조회식은 [조회 목록](../../stress-test/bridge-observation-queries.tsv)에 있다. 평균은 sum/count의 가중 평균, p95는 bucket 추정이다. 관측이 없는 구간의 NaN/No data를 0ms로 오인하지 않는다. 긴 꼬리는 마지막 유한 bucket(Redis 1초, send 60초) 밖에서 정확히 추정할 수 없다.
 
