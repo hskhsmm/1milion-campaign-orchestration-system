@@ -289,7 +289,9 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 
 - **원인: `KafkaTemplate.send()`가 Kafka 메타데이터 갱신을 기다리며 호출 스레드를 붙잡는다.** Bridge는 한 스레드에서 claim과 send를 번갈아 하므로 drain 루프 전체가 멈춘다. 같은 인스턴스의 다른 캠페인 drain도 함께 멈춘다.
 - 대기는 최대 `max.block.ms`(60초)다. 시도 5에서 1건은 Kafka 중지(00:40:30) 60초 뒤 `Kafka publish failed before enqueue`로 실패했고, 그 claim은 in-flight에 남았다가 lease 5분 뒤(00:45:35) reclaim돼 DB에 반영됐다.
-- 어떤 조건에서 메타데이터 대기가 생기는지(앱 기동 후 첫 중지·직후 재중지에서는 안 생김)는 확정하지 않았다.
+- **메타데이터가 비는 이유: kafka-clients 4.1.2의 rebootstrap.** 멈춘 4회의 앱 로그에 모두 `Metadata : Rebootstrapping with [kafka/...:29092]`가 있었다. 4.1.2는 알고 있는 브로커에 하나도 연결할 수 없으면 `metadata.recovery.strategy=rebootstrap`(기본값, jar의 설정 설명으로 확인)에 따라 알던 클러스터 정보를 버리고 `bootstrap.servers`부터 다시 접속한다. 그러면 토픽 파티션·리더 정보가 없어져 `send()`가 `waitOnMetadata`에서 새 정보를 기다리고, Kafka가 꺼져 있으므로 최대 `max.block.ms`까지 묶인다.
+- 앱 기동 후 첫 중지·Kafka 재시작 3초 뒤 재중지에서 멈추지 않은 이유는 확정하지 않았다. rebootstrap 전에 send가 끝났을 가능성이 크지만, 멈추지 않은 시도의 로그는 보관하지 않아 확인하지 못했다.
+- 이 상태는 producer가 아는 **모든 브로커**에 연결할 수 없을 때 생긴다. 로컬은 브로커 1대라 Kafka 중지로 바로 발생했다. 브로커가 여러 대인 구성에서 일부 브로커 장애만으로는 생기지 않을 것으로 보지만 확인하지 않았다.
 - Kafka를 다시 켜면 몇 초 안에 풀렸다(시도 6: Kafka 시작 00:42:33 → DB 반영 00:42:40).
 - 정합성: 7개 캠페인 모두 DB 100(고유 사용자 100), 최종 Queue·in-flight 0, Kafka offset 합 850 = DB 850, 중복 0.
 - **batch 변경과 무관하다.** 단건 경로도 같은 `send()`를 쓴다. API 접수 경로는 Kafka를 쓰지 않으므로 영향이 없다(시도별 202 100, 요청 평균 8ms).
@@ -312,7 +314,7 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 | 순위 | 문제 | 근거 | 영향 | batch 변경과 관계 |
 | --- | --- | --- | --- | --- |
 | 1 | (로컬 해결) Redis primary failover 후 앱이 승격된 primary를 따라가지 못해 앱 재시작 전까지 정지 | 6-2 재현 → 6-4 topology refresh·timeout 적용 후 A·B·C 자동 회복. AWS 미확인 | 적용 후 남은 영향: failover 창 약 7~13초의 해당 슬롯 요청 실패, ACK 실패분 중복 발행·최대 5분 지연 | 무관(기존 구성). 같은 브랜치에서 수정 |
-| 2 | Kafka 중지 시 Bridge claim이 첫 batch 후 멈춤 | 6-6에서 확인: `KafkaTemplate.send()`가 메타데이터 대기(`waitOnMetadata`, 최대 `max.block.ms` 60초)로 drain 스레드를 붙잡음. 발생 조건은 미확정 | 처리 지연(유실 없음). Kafka 복구 후 수 초 내 재개, 60초 대기 끝에 실패한 claim은 lease 5분 뒤 처리 | 무관(기존 동기 send 경로) |
+| 2 | Kafka 중지 시 Bridge claim이 첫 batch 후 멈춤 | 6-6에서 확인: 모든 브로커 연결 불가 시 kafka-clients 4.1.2 기본 rebootstrap으로 메타데이터가 비고, `KafkaTemplate.send()`가 `waitOnMetadata`(최대 `max.block.ms` 60초)에서 drain 스레드를 붙잡음. 일부 시도에서 안 생기는 이유는 미확정 | 처리 지연(유실 없음). Kafka 복구 후 수 초 내 재개, 60초 대기 끝에 실패한 claim은 lease 5분 뒤 처리 | 무관(기존 동기 send 경로) |
 | 3 | Redis 비동기 복제: primary 응답 직후 복제 전에 노드가 유실되면 202 접수분 일부가 빠질 수 있음 | 6-5, Redis·ElastiCache 문서. 이번 시험에서는 관측되지 않음 | 드문 경우의 최근 쓰기 유실 | 무관(기존 구조 위험) |
 | 4 | 추적되지 않는 예전 로컬 시험 파일 때문에 작업 폴더 그대로 `gradlew test` 컴파일 실패 | 1장 | 로컬 시험 불편. 이번 시험은 임시 worktree 사용 | 무관 |
 
