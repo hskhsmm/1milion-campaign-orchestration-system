@@ -98,8 +98,16 @@ class BridgeQueueServiceTest {
                 io.micrometer.prometheusmetrics.PrometheusConfig.DEFAULT);
         try {
             new BridgeQueueService(redisTemplate, prometheus).claim(91L);
-            assertThat(prometheus.scrape()).contains("bridge_redis_duration_seconds_bucket",
+            String scrape = prometheus.scrape();
+            assertThat(scrape).contains("bridge_redis_duration_seconds_bucket",
                     "operation=\"claim\"", "bridge_claim_results_total");
+            var claimBounds = scrape.lines()
+                    .filter(line -> line.startsWith("bridge_redis_duration_seconds_bucket{")
+                            && line.contains("operation=\"claim\""))
+                    .map(line -> line.replaceAll(".*le=\"([^\"]+)\".*", "$1"))
+                    .map(value -> "+Inf".equals(value) ? Double.POSITIVE_INFINITY : Double.parseDouble(value))
+                    .collect(java.util.stream.Collectors.toSet());
+            assertThat(claimBounds).contains(0.001, 0.005, 0.01, 0.05, 0.1, 1.0, Double.POSITIVE_INFINITY);
         } finally {
             prometheus.close();
         }

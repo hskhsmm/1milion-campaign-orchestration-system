@@ -158,6 +158,23 @@ class ParticipationBridgeDeliveryWindowTest {
         verify(bridgeQueueService).acknowledge(claim);
     }
 
+    @Test
+    void synchronousSendFailureRecordsBothTimersAndRetainsClaim() throws Exception {
+        BridgeQueueService.Claim claim = prepareClaim();
+        var registry = new SimpleMeterRegistry();
+        when(kafkaTemplate.send(KafkaConfig.TOPIC_NAME, "7", MESSAGE))
+                .thenThrow(new IllegalStateException("metadata unavailable"));
+        var bridge = new ParticipationBridge(redisTemplate, kafkaTemplate, bridgeQueueService,
+                Runnable::run, redisStockService, registry, jsonMapper);
+
+        bridge.drainQueues();
+
+        assertThat(registry.get("bridge.kafka.send.duration").timer().count()).isEqualTo(1);
+        assertThat(registry.get("bridge.kafka.confirm.duration").timer().count()).isEqualTo(1);
+        verify(bridgeQueueService, never()).acknowledge(claim);
+        assertThat(registry.find("bridge.messages.published").counter()).isNull();
+    }
+
     private BridgeQueueService.Claim prepareClaim() throws Exception {
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(setOperations.members("active:campaigns")).thenReturn(Set.of("91"));

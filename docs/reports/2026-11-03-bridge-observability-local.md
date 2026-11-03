@@ -31,3 +31,9 @@ Java 25, Gradle offline, 격리된 localhost Docker Redis 7.2. Redis를 지정�
 계측 오버헤드·실제 Redis 네트워크 지연·원인·처리량·API/E2E p95/p99 개선은 측정하지 않았다. 로컬 단일 Redis 시험은 Redis Cluster·Kafka 전체 경로·AWS 시험을 대신하지 않는다. Grafana 실화면과 실제 Prometheus 스크래핑·query_range도 미실행이다.
 
 다음은 AWS 사용이 가능할 때 버전·잔류 데이터·고정 자원 조건을 확인하고 기준선에서 Redis/ACK/send 대기를 분해하는 것이다. 최적화나 서버 증설을 선결론으로 두지 않는다. 상세 해석과 명령은 [운영 가이드](../runbooks/bridge-observability.md), 조회는 [PromQL 목록](../../stress-test/bridge-observation-queries.tsv)을 따른다.
+
+## PR #117 리뷰 보강
+
+CodeRabbit의 두 테스트 보강 제안을 반영했다. claim histogram의 le=0.001/0.005/0.01/0.05/0.1/1.0/+Inf 포함을 검증하고, 동기 send 예외에서도 send·응답 타이머 각 1회 기록·claim 유지·발행 성공 미집계를 확인했다. 운영 코드는 변경하지 않았다.
+
+추가 실행은 외부 DB·Redis 환경 변수 없이 전체 Gradle 테스트를 수행했다. **87건 중 실제 75건 통과, 실패/오류 0, 건너뜀 12**(기존 DB 10건·기존 skip 1건·옵션 Redis smoke 1건)이다. 앞선 실제 Redis 시험 결과와 구분한다.
