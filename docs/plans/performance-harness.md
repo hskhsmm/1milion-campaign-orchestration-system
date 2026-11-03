@@ -1,7 +1,7 @@
 # 내맘대로캠페인 성능·관측 하네스 도입 로드맵
 
 > 작성: 2026-10-12
-> 상태(2026-11-03): #113 핵심 복구는 제공된 AWS 소량 장애 보고서에서 확인. 150만 r4는 DB 150만·응답 timeout 22건으로 FAIL. #114의 Bridge 관측 보완은 작업 브랜치에서 로컬 검증했으며 [기록](../reports/2026-11-03-bridge-observability-local.md)을 참고한다. 하네스 main 통합·Batch JDBC 이력·실환경 성능 개선은 남아 있다.
+> 상태(2026-11-03): #118 배포 후 앱 2대·30만 건에서 응답/DB 30만·중복 0을 확인했다. 유입 중 CPU 포화와 drain 중 순차 claim 호출 대기가 관측됐으며 [분석](../reports/2026-11-03-bridge-drain-300k.md)을 참고한다. batch claim 변경·동일 조건 A/B·150만 및 200만 검증은 남아 있다.
 > 범위: [이슈 #95](https://github.com/hskhsmm/1milion-campaign-orchestration-system/issues/95), CPU 관측·증설 지연, p95/p99, 지속 가능한 End-to-End 처리량, 기존 MCP 모니터링의 역할 정리, 후속 Kafka 인프라 코드화 판단.
 
 ## 1. 왜 지금 하네스인가
