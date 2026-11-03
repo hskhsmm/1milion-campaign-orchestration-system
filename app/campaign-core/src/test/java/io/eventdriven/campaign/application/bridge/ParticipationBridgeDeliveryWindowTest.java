@@ -134,6 +134,47 @@ class ParticipationBridgeDeliveryWindowTest {
         assertThat(meterRegistry.counter("bridge.messages.published", "campaignId", "91").count()).isEqualTo(1);
     }
 
+    @Test
+    void synchronousSendWaitIsSeparateFromAsyncConfirmation() throws Exception {
+        BridgeQueueService.Claim claim = prepareClaim();
+        var clock = new io.micrometer.core.instrument.MockClock();
+        var registry = new SimpleMeterRegistry(io.micrometer.core.instrument.simple.SimpleConfig.DEFAULT, clock);
+        CompletableFuture<SendResult<String, String>> pending = new CompletableFuture<>();
+        when(kafkaTemplate.send(KafkaConfig.TOPIC_NAME, "7", MESSAGE)).thenAnswer(invocation -> {
+            clock.add(java.time.Duration.ofMillis(10));
+            return pending;
+        });
+        var bridge = new ParticipationBridge(redisTemplate, kafkaTemplate, bridgeQueueService,
+                Runnable::run, redisStockService, registry, jsonMapper);
+        bridge.drainQueues();
+        assertThat(registry.get("bridge.kafka.send.duration").timer()
+                .totalTime(java.util.concurrent.TimeUnit.MILLISECONDS)).isEqualTo(10);
+        assertThat(registry.get("bridge.kafka.confirm.duration").timer().count()).isZero();
+        verify(bridgeQueueService, never()).acknowledge(claim);
+        clock.add(java.time.Duration.ofMillis(20));
+        pending.complete(null);
+        assertThat(registry.get("bridge.kafka.confirm.duration").timer()
+                .totalTime(java.util.concurrent.TimeUnit.MILLISECONDS)).isEqualTo(30);
+        verify(bridgeQueueService).acknowledge(claim);
+    }
+
+    @Test
+    void synchronousSendFailureRecordsBothTimersAndRetainsClaim() throws Exception {
+        BridgeQueueService.Claim claim = prepareClaim();
+        var registry = new SimpleMeterRegistry();
+        when(kafkaTemplate.send(KafkaConfig.TOPIC_NAME, "7", MESSAGE))
+                .thenThrow(new IllegalStateException("metadata unavailable"));
+        var bridge = new ParticipationBridge(redisTemplate, kafkaTemplate, bridgeQueueService,
+                Runnable::run, redisStockService, registry, jsonMapper);
+
+        bridge.drainQueues();
+
+        assertThat(registry.get("bridge.kafka.send.duration").timer().count()).isEqualTo(1);
+        assertThat(registry.get("bridge.kafka.confirm.duration").timer().count()).isEqualTo(1);
+        verify(bridgeQueueService, never()).acknowledge(claim);
+        assertThat(registry.find("bridge.messages.published").counter()).isNull();
+    }
+
     private BridgeQueueService.Claim prepareClaim() throws Exception {
         when(redisTemplate.opsForSet()).thenReturn(setOperations);
         when(setOperations.members("active:campaigns")).thenReturn(Set.of("91"));

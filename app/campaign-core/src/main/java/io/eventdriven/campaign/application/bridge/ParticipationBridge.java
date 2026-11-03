@@ -9,15 +9,18 @@ import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
+import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.net.InetAddress;
+import java.time.Duration;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
 import java.util.concurrent.RejectedExecutionException;
 
@@ -37,6 +40,8 @@ public class ParticipationBridge {
     private final MeterRegistry meterRegistry;
     private final JsonMapper jsonMapper;
     private final Timer drainTimer;
+    private final Timer kafkaSendTimer;
+    private final Timer kafkaConfirmTimer;
     private final Map<Long, Counter> publishedCounters = new ConcurrentHashMap<>();
 
     public ParticipationBridge(
@@ -57,6 +62,14 @@ public class ParticipationBridge {
         this.jsonMapper = jsonMapper;
         this.drainTimer = Timer.builder("bridge.drain.duration")
                 .description("Time spent draining Redis queues into Kafka")
+                .register(meterRegistry);
+        this.kafkaSendTimer = Timer.builder("bridge.kafka.send.duration")
+                .description("Synchronous KafkaTemplate.send call time; excludes asynchronous confirmation")
+                .serviceLevelObjectives(Duration.ofMillis(1), Duration.ofMillis(10),
+                        Duration.ofMillis(100), Duration.ofSeconds(1), Duration.ofSeconds(60))
+                .register(meterRegistry);
+        this.kafkaConfirmTimer = Timer.builder("bridge.kafka.confirm.duration")
+                .description("Time from send start to success/failure callback; not DB confirmation or Redis ACK")
                 .register(meterRegistry);
     }
 
@@ -150,8 +163,16 @@ public class ParticipationBridge {
         String message = claim.message();
         String partitionKey = extractUserIdKey(message, campaignId);
         try {
-            kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message)
-                    .whenComplete((result, ex) -> {
+            Timer.Sample confirmation = Timer.start(meterRegistry);
+            CompletableFuture<SendResult<String, String>> send;
+            try {
+                send = kafkaSendTimer.record(() -> kafkaTemplate.send(KafkaConfig.TOPIC_NAME, partitionKey, message));
+            } catch (RuntimeException failure) {
+                confirmation.stop(kafkaConfirmTimer);
+                throw failure;
+            }
+            send.whenComplete((result, ex) -> {
+                        confirmation.stop(kafkaConfirmTimer);
                         if (ex != null) {
                             log.warn("Kafka publish failed; claim retained for retry. campaignId={}", campaignId, ex);
                             return;

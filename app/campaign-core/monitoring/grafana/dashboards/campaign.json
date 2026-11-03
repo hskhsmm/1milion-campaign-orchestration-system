@@ -797,6 +797,175 @@
           "mode": "single"
         }
       }
+    },
+    {
+      "id": 17,
+      "title": "Bridge Redis 호출 지연 (앱별 평균)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1000 * sum by (instance, operation) (rate(bridge_redis_duration_seconds_sum[1m])) / sum by (instance, operation) (rate(bridge_redis_duration_seconds_count[1m]))",
+          "legendFormat": "{{instance}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "클라이언트 호출 시간. 연결/네트워크/직렬화/Redis 대기를 포함하며 Redis 서버 실행 시간만을 의미하지 않는다."
+    },
+    {
+      "id": 18,
+      "title": "Bridge Redis 호출 지연 (앱별 p95 추정)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 80,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1000 * histogram_quantile(0.95, sum by (instance, operation, le) (rate(bridge_redis_duration_seconds_bucket[1m])))",
+          "legendFormat": "{{instance}} {{operation}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "고정 SLO bucket 기반 추정값. 관측이 없으면 No data/NaN. 1초 초과 꼬리는 bucket 해상도 밖이다."
+    },
+    {
+      "id": 19,
+      "title": "Bridge Kafka send / 응답 지연 (앱별 평균)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 0,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1000 * sum by (instance) (rate(bridge_kafka_send_duration_seconds_sum[1m])) / sum by (instance) (rate(bridge_kafka_send_duration_seconds_count[1m]))",
+          "legendFormat": "{{instance}} send 호출"
+        },
+        {
+          "refId": "B",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "1000 * sum by (instance) (rate(bridge_kafka_confirm_duration_seconds_sum[1m])) / sum by (instance) (rate(bridge_kafka_confirm_duration_seconds_count[1m]))",
+          "legendFormat": "{{instance}} 성공·실패 응답"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ms",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "send는 동기 호출 대기, 응답은 send 시작부터 성공/실패 콜백까지다. 둘은 겹치는 구간이며 합산하지 않는다. Redis ACK나 DB 완료 시간이 아니다."
+    },
+    {
+      "id": 20,
+      "title": "Bridge claim 결과 (건/초)",
+      "type": "timeseries",
+      "gridPos": {
+        "x": 12,
+        "y": 88,
+        "w": 12,
+        "h": 8
+      },
+      "targets": [
+        {
+          "refId": "A",
+          "datasource": {
+            "type": "prometheus",
+            "uid": "prometheus"
+          },
+          "expr": "sum by (instance, result) (rate(bridge_claim_results_total[1m]))",
+          "legendFormat": "{{instance}} {{result}}"
+        }
+      ],
+      "fieldConfig": {
+        "defaults": {
+          "unit": "ops",
+          "color": {
+            "mode": "palette-classic"
+          },
+          "custom": {
+            "lineWidth": 2,
+            "fillOpacity": 10
+          }
+        }
+      },
+      "options": {
+        "tooltip": {
+          "mode": "single"
+        }
+      },
+      "description": "claimed는 선점 성공. not_claimed는 빈 큐 또는 in-flight 상한이며 두 원인을 이 지표만으로 구분할 수 없다."
     }
   ]
 }
