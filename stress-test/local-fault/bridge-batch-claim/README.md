@@ -14,7 +14,7 @@
 ```sh
 cd stress-test/local-fault/bridge-batch-claim
 export COMPOSE_FILE=compose-kill.yml        # 또는 compose-failover.yml
-docker compose up -d --build                # failover는 --build 없이
+docker compose up -d --build                # failover는 --build 없이 --pull never (로컬 이미지만 사용)
 source lib.sh
 id=$(create_campaign test 1000)
 ./obs.sh $id baseline

@@ -290,7 +290,14 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 - **원인: `KafkaTemplate.send()`가 Kafka 메타데이터 갱신을 기다리며 호출 스레드를 붙잡는다.** Bridge는 한 스레드에서 claim과 send를 번갈아 하므로 drain 루프 전체가 멈춘다. 같은 인스턴스의 다른 캠페인 drain도 함께 멈춘다.
 - 대기는 최대 `max.block.ms`(60초)다. 시도 5에서 1건은 Kafka 중지(00:40:30) 60초 뒤 `Kafka publish failed before enqueue`로 실패했고, 그 claim은 in-flight에 남았다가 lease 5분 뒤(00:45:35) reclaim돼 DB에 반영됐다.
 - **메타데이터가 비는 이유: kafka-clients 4.1.2의 rebootstrap.** 멈춘 4회의 앱 로그에 모두 `Metadata : Rebootstrapping with [kafka/...:29092]`가 있었다. 4.1.2는 알고 있는 브로커에 하나도 연결할 수 없으면 `metadata.recovery.strategy=rebootstrap`(기본값, jar의 설정 설명으로 확인)에 따라 알던 클러스터 정보를 버리고 `bootstrap.servers`부터 다시 접속한다. 그러면 토픽 파티션·리더 정보가 없어져 `send()`가 `waitOnMetadata`에서 새 정보를 기다리고, Kafka가 꺼져 있으므로 최대 `max.block.ms`까지 묶인다.
-- 앱 기동 후 첫 중지·Kafka 재시작 3초 뒤 재중지에서 멈추지 않은 이유는 확정하지 않았다. rebootstrap 전에 send가 끝났을 가능성이 크지만, 멈추지 않은 시도의 로그는 보관하지 않아 확인하지 못했다.
+- **멈춤 여부는 producer rebootstrap 발생 여부와 정확히 일치했다**(2026-11-04 01:05~01:10 추가 9회, 새로 띄운 3+3 스택, 시도마다 앱 로그 전체 보관). 조건은 앱 기동 후 첫 중지 1회와 Kafka 재시작 후 3·15·30·45초 뒤 중지 각 2회.
+
+  | 결과 | 시도 수 | producer `Rebootstrapping` |
+  | --- | ---: | --- |
+  | 멈춤(in-flight 12~50, 나머지 Queue) | 8 | 8회 모두, 첫 연결 끊김 0~0.1초 뒤·요청 0.7~0.8초 전 |
+  | 멈추지 않음(100건 claim) | 1 | 없음(같은 시점 consumer는 rebootstrap) |
+
+  대기 시간·첫 중지 여부와는 관계가 없었다(네 조건 모두에서 멈춤이 나왔다). 앞서 "첫 중지·3초 뒤 재중지에서는 안 멈춤"으로 본 것은 표본이 적어서였다. producer가 연결 끊김 직후 rebootstrap까지 가는지는 클라이언트 내부의 재연결·메타데이터 갱신 타이밍에 달린 것으로 보이며, 그 내부 조건은 더 파지 않았다. 추가 9회도 최종 DB 900(캠페인마다 100), Kafka offset 합 = DB 합 920, Queue·in-flight 0이었다.
 - 이 상태는 producer가 아는 **모든 브로커**에 연결할 수 없을 때 생긴다. 로컬은 브로커 1대라 Kafka 중지로 바로 발생했다. 브로커가 여러 대인 구성에서 일부 브로커 장애만으로는 생기지 않을 것으로 보지만 확인하지 않았다.
 - Kafka를 다시 켜면 몇 초 안에 풀렸다(시도 6: Kafka 시작 00:42:33 → DB 반영 00:42:40).
 - 정합성: 7개 캠페인 모두 DB 100(고유 사용자 100), 최종 Queue·in-flight 0, Kafka offset 합 850 = DB 850, 중복 0.
