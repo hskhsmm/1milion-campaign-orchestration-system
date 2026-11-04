@@ -106,7 +106,7 @@ DB 건수만 맞는 것으로 통과시키지 않는다. DB 고유 제약이 Kaf
 | 3 | 여러 Bridge 동시 claim A·B·C 각 20회 | 완료 |
 | 4 | 앱 강제 종료(Kafka 중단 → claim → kill → 복구 → DB 대조) | 완료(100건 PASS) |
 | 5 | 로컬 Redis Cluster 3 primary + replica, failover A·B·C | refresh 적용 전 B 가용성 FAIL(앱 재시작 필요) → Redis timeout·topology refresh 적용 후 다중 샤드 PASS, A·B·C 자동 복구·정합성 PASS, failover 구간 가용성 저하(B `500` 1건, C `500` 31건) |
-| 6 | AWS N=1 → 10 → 50 → 1 | 2026-11-04 N=1 정상, N=10 ACK 병목(거부·중복 발행) → 묶음 ACK(PR #122) 후 N=10 정상·완료 시간 단축, API p99 증가. N=50 보류. failover·scale-out 정합성 확인 ([운영 비교](../reports/2026-11-04-ops-batch-claim-ack.md)) |
+| 6 | AWS N=1 → 10 → 50 → 1 | 2026-11-04 N=1 정상, N=10 ACK 병목(거부·중복 발행) → 묶음 ACK(PR #122) 후 N=10 정상·완료 시간 단축, API p99 증가. N=25·50은 API/worker 역할 분리 A/B에서 분리 전후로 측정. failover·scale-out 정합성 확인 ([운영 비교](../reports/2026-11-04-ops-batch-claim-ack.md)) |
 
 결과: [로컬 검증](../reports/2026-11-03-bridge-batch-claim-local.md).
 
