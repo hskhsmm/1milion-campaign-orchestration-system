@@ -1,6 +1,7 @@
 # Bridge ACK 묶음 처리와 역압 (2026-11-04)
 
 > 브랜치 `perf/bridge-ack-batch`(main `8ba2ef9` 기준, PR #122로 머지). 운영 N=10에서 확인한 ACK 병목의 수정과 로컬 검증 기록이다.
+> 이 문서는 [11-04 작업 종합](2026-11-04-ops-batch-claim-ack.md)의 부록(코드 변경 상세·시험 목록)이다.
 > **운영 재시험 결과(2026-11-04)**: N=10에서 발행 = ACK = 300,000, ACK 거부·reclaim 0, 접수 끝 → 발행 완료 5초. 대신 서버 p99는 N=1 407ms → 659ms. scale-out(120만 건)·ElastiCache failover에서도 정합성 유지. 상세: [운영 비교](2026-11-04-ops-batch-claim-ack.md).
 
 ## 1. 운영에서 확인한 문제
