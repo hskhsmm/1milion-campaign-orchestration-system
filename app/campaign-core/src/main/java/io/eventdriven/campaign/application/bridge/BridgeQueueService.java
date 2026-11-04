@@ -43,6 +43,7 @@ public class BridgeQueueService {
     private final Counter ackRemoved;
     private final Counter ackNotFound;
     private final Counter ackError;
+    private final DistributionSummary ackBatchSize;
 
     public BridgeQueueService(RedisTemplate<String, String> redisTemplate, MeterRegistry registry) {
         this.redisTemplate = redisTemplate;
@@ -65,6 +66,11 @@ public class BridgeQueueService {
         this.claimBatchSize = DistributionSummary.builder("bridge.claim.batch.size")
                 .description("Events moved per non-empty claim call")
                 .serviceLevelObjectives(1, 10, 25, 50)
+                .register(registry);
+        // ack timer는 Redis 호출 수다. 묶음 ACK에서는 이벤트 수 = ack.results 합계.
+        this.ackBatchSize = DistributionSummary.builder("bridge.ack.batch.size")
+                .description("Claims removed per Redis ACK call")
+                .serviceLevelObjectives(1, 10, 50, 100)
                 .register(registry);
     }
 
@@ -144,6 +150,7 @@ public class BridgeQueueService {
 
     /** Kafka가 성공을 확인한 claim만 삭제한다. 0이면 만료 복구가 먼저 이겼을 수 있다. */
     public boolean acknowledge(Claim claim) {
+        ackBatchSize.record(1);
         Long removed;
         try {
             removed = observeRedis(ackTimer, "ack", () ->
@@ -162,6 +169,42 @@ public class BridgeQueueService {
         }
         ackNotFound.increment();
         return false;
+    }
+
+    /**
+     * 같은 캠페인의 claim 여러 건을 한 번의 ZREM으로 삭제한다(같은 슬롯). 반환값은 실제 삭제 건수이며,
+     * 나머지(not_found)는 reclaim이 먼저 이겼을 수 있다. 어느 member가 없었는지는 구분하지 않는다.
+     * 실패하면 claim이 in-flight에 남아 lease 만료 후 reclaim된다(단건 ACK 실패와 같은 복구 경로).
+     */
+    public long acknowledgeBatch(Long campaignId, List<Claim> claims) {
+        if (claims.isEmpty()) {
+            return 0;
+        }
+        Object[] values = new Object[claims.size()];
+        for (int i = 0; i < claims.size(); i++) {
+            Claim claim = claims.get(i);
+            if (!campaignId.equals(claim.campaignId())) {
+                throw new IllegalArgumentException("ACK batch must belong to one campaign. expected=" + campaignId
+                        + ", actual=" + claim.campaignId());
+            }
+            values[i] = claim.value();
+        }
+        ackBatchSize.record(claims.size());
+        Long removed;
+        try {
+            removed = observeRedis(ackTimer, "ack", () ->
+                    redisTemplate.opsForZSet().remove(inFlightKey(campaignId), values));
+        } catch (RuntimeException failure) {
+            ackError.increment(claims.size());
+            throw failure;
+        }
+        if (removed == null) {
+            ackError.increment(claims.size());
+            return 0;
+        }
+        ackRemoved.increment(removed);
+        ackNotFound.increment(claims.size() - removed);
+        return removed;
     }
 
     public long reclaimExpired(Long campaignId) {
