@@ -11,12 +11,15 @@ import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
 import org.springframework.scheduling.annotation.Scheduled;
+import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.beans.factory.annotation.Qualifier;
+import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.net.InetAddress;
 import java.time.Duration;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
@@ -39,11 +42,27 @@ public class ParticipationBridge {
     private final RedisStockService redisStockService;
     private final MeterRegistry meterRegistry;
     private final JsonMapper jsonMapper;
+    private final int claimBatchSize;
     private final Timer drainTimer;
     private final Timer kafkaSendTimer;
     private final Timer kafkaConfirmTimer;
     private final Map<Long, Counter> publishedCounters = new ConcurrentHashMap<>();
 
+    /** 기존 단건 claim 경로(claim-batch-size=1). */
+    public ParticipationBridge(
+            RedisTemplate<String, String> redisTemplate,
+            KafkaTemplate<String, String> kafkaTemplate,
+            BridgeQueueService bridgeQueueService,
+            Executor ackExecutor,
+            RedisStockService redisStockService,
+            MeterRegistry meterRegistry,
+            JsonMapper jsonMapper
+    ) {
+        this(redisTemplate, kafkaTemplate, bridgeQueueService, ackExecutor, redisStockService,
+                meterRegistry, jsonMapper, 1);
+    }
+
+    @Autowired
     public ParticipationBridge(
             RedisTemplate<String, String> redisTemplate,
             KafkaTemplate<String, String> kafkaTemplate,
@@ -51,8 +70,14 @@ public class ParticipationBridge {
             @Qualifier("bridgeAckExecutor") Executor ackExecutor,
             RedisStockService redisStockService,
             MeterRegistry meterRegistry,
-            JsonMapper jsonMapper
+            JsonMapper jsonMapper,
+            @Value("${bridge.claim-batch-size:1}") int claimBatchSize
     ) {
+        if (claimBatchSize < 1 || claimBatchSize > BridgeQueueService.MAX_CLAIM_BATCH_SIZE) {
+            throw new IllegalArgumentException("bridge.claim-batch-size must be 1.."
+                    + BridgeQueueService.MAX_CLAIM_BATCH_SIZE + ": " + claimBatchSize);
+        }
+        this.claimBatchSize = claimBatchSize;
         this.redisTemplate = redisTemplate;
         this.kafkaTemplate = kafkaTemplate;
         this.bridgeQueueService = bridgeQueueService;
@@ -114,7 +139,12 @@ public class ParticipationBridge {
     private void drainCampaignQueue(Long campaignId) {
         String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
         Long queueSize = redisTemplate.opsForList().size(queueKey);
+        // 회차 한도는 호출 수가 아니라 이벤트 수다(앱 인스턴스·캠페인별 drain 1회 기준).
         int dynamicBatchSize = resolveBatchSize(queueSize);
+        if (claimBatchSize > 1) {
+            drainInBatches(campaignId, dynamicBatchSize);
+            return;
+        }
 
         for (int i = 0; i < dynamicBatchSize; i++) {
             BridgeQueueService.Claim claim = bridgeQueueService.claim(campaignId);
@@ -125,6 +155,26 @@ public class ParticipationBridge {
                 break;
             }
             publishAsync(claim);
+        }
+    }
+
+    private void drainInBatches(Long campaignId, int eventLimit) {
+        int remaining = eventLimit;
+        while (remaining > 0) {
+            int requested = Math.min(claimBatchSize, remaining);
+            List<BridgeQueueService.Claim> claims = bridgeQueueService.claimBatch(campaignId, requested);
+            if (claims.isEmpty()) {
+                if (!redisStockService.isActive(campaignId)) {
+                    deactivateIfQueueEmpty(campaignId);
+                }
+                break;
+            }
+            // 한 batch 안의 send 호출 순서만 오래된 순이다. 인스턴스 간·Kafka 비동기 전체 순서는 보장하지 않는다.
+            claims.forEach(this::publishAsync);
+            remaining -= claims.size();
+            if (claims.size() < requested) {
+                break; // Queue 소진 또는 in-flight 상한. 비활성화 판단은 다음 회차의 빈 결과에서 한다.
+            }
         }
     }
 
@@ -199,7 +249,8 @@ public class ParticipationBridge {
                             });
                         } catch (RejectedExecutionException rejected) {
                             // 전송 성공 이후 ACK만 거부된 경우에만 이 지표를 올린다.
-                            meterRegistry.counter("bridge.claims.ack.rejected").increment();
+                            meterRegistry.counter("bridge.claims.ack.rejected").increment(); // 기존 대시보드 호환
+                            meterRegistry.counter("bridge.claim.ack.results", "result", "rejected").increment();
                             log.error("Kafka succeeded but Redis claim ACK execution was rejected; claim retained for retry. campaignId={}",
                                     campaignId, rejected);
                         }

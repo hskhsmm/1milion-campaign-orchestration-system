@@ -27,6 +27,15 @@ spring:
     redis:
       host: ${SPRING_DATA_REDIS_HOST:localhost}
       port: ${SPRING_DATA_REDIS_PORT:6379}
+      # 명령 응답 대기 상한. 미설정 시 Lettuce 기본 60초라 장애 중 요청이 오래 매달린다.
+      timeout: 2s
+      lettuce:
+        cluster:
+          refresh:
+            # primary failover 후 승격된 노드를 따라가도록 클러스터 토폴로지를 다시 읽는다.
+            # Spring Boot 4.0.4 기본값은 adaptive=false, period 미설정(갱신 안 함).
+            adaptive: true   # 연결 끊김·MOVED/ASK 등 신호가 오면 즉시 갱신
+            period: 30s      # 신호를 놓친 경우를 위한 주기 갱신
 
   # HTTP 응답 인코딩 설정 (한글 깨짐 방지)
   servlet:
@@ -56,6 +65,10 @@ management:
     export:
       prometheus:
         enabled: true
+
+# Bridge Queue → in-flight claim 묶음 크기 (1~50). 1은 기존 단건 Lua 경로. 범위 밖이면 기동 실패.
+bridge:
+  claim-batch-size: 1
 
 # 배치 작업 설정
 batch:
