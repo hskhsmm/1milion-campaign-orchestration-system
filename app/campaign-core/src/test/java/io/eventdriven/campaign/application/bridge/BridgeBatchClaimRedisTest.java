@@ -131,6 +131,40 @@ class BridgeBatchClaimRedisTest {
         assertThat(registry.get("bridge.claim.ack.results").tag("result", "error").counter().count()).isZero();
     }
 
+    /** 묶음 ACK: 한 번의 ZREM으로 지우고, reclaim이 먼저 이긴 claim은 not_found로 센다. 새 claim은 지우지 않는다. */
+    @Test
+    void batchAckRemovesOwnClaimsAndCountsStaleAsNotFound() {
+        enqueue(messages(30));
+        var first = service.claimBatch(campaignId, 30);
+        // 3건만 만료시켜 reclaim → 다시 claim (같은 메시지, 새 token)
+        first.subList(0, 3).forEach(claim -> redis.opsForZSet().add(inFlight, claim.value(), 0));
+        assertThat(service.reclaimExpired(campaignId)).isEqualTo(3);
+        var retry = service.claimBatch(campaignId, 10);
+        assertThat(retry).hasSize(3);
+
+        long removed = service.acknowledgeBatch(campaignId, first); // 30건 중 3건은 stale
+        assertThat(removed).isEqualTo(27);
+        assertThat(redis.opsForZSet().range(inFlight, 0, -1))
+                .containsExactlyInAnyOrderElementsOf(retry.stream().map(BridgeQueueService.Claim::value).toList());
+
+        assertThat(service.acknowledgeBatch(campaignId, retry)).isEqualTo(3);
+        assertThat(redis.opsForZSet().zCard(inFlight)).isZero();
+        assertThat(registry.get("bridge.claim.ack.results").tag("result", "removed").counter().count()).isEqualTo(30);
+        assertThat(registry.get("bridge.claim.ack.results").tag("result", "not_found").counter().count()).isEqualTo(3);
+        assertThat(registry.get("bridge.ack.batch.size").summary().count()).isEqualTo(2);
+        assertThat(registry.get("bridge.ack.batch.size").summary().totalAmount()).isEqualTo(33);
+        // ACK timer는 Redis 호출 수(2)다. 이벤트 수는 ack.results 합계.
+        assertThat(registry.get("bridge.redis.duration").tag("operation", "ack").timer().count()).isEqualTo(2);
+    }
+
+    @Test
+    void batchAckRejectsMixedCampaigns() {
+        var a = new BridgeQueueService.Claim(campaignId, "t1|m", "m");
+        var b = new BridgeQueueService.Claim(campaignId + 1, "t2|m", "m");
+        assertThatThrownBy(() -> service.acknowledgeBatch(campaignId, List.of(a, b)))
+                .isInstanceOf(IllegalArgumentException.class);
+    }
+
     @Test
     void wrongKeyTypeIsRejectedBeforeAnyWrite() {
         redis.opsForValue().set(queue, "not-a-list");

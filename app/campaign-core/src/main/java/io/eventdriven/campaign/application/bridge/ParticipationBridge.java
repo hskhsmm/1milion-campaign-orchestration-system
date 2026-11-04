@@ -25,7 +25,6 @@ import java.util.Set;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.Executor;
-import java.util.concurrent.RejectedExecutionException;
 
 @Slf4j
 @Component
@@ -47,6 +46,13 @@ public class ParticipationBridge {
     private final Timer kafkaSendTimer;
     private final Timer kafkaConfirmTimer;
     private final Map<Long, Counter> publishedCounters = new ConcurrentHashMap<>();
+    private final BridgeAckDispatcher ackDispatcher;
+    private final Counter claimSkippedAckBacklog;
+
+    /** ACK drainer 수. bridgeAckExecutor 스레드 수(4)와 같다. */
+    private static final int ACK_DRAINERS = 4;
+    /** 대기 ACK가 이 값 이상이면 claim을 한 회차 쉰다. 한 회차 claim 한도(최대 2,000)의 몇 배로 둔다. */
+    static final int ACK_BACKLOG_PAUSE = 5_000;
 
     /** 기존 단건 claim 경로(claim-batch-size=1). */
     public ParticipationBridge(
@@ -96,6 +102,8 @@ public class ParticipationBridge {
         this.kafkaConfirmTimer = Timer.builder("bridge.kafka.confirm.duration")
                 .description("Time from send start to success/failure callback; not DB confirmation or Redis ACK")
                 .register(meterRegistry);
+        this.ackDispatcher = new BridgeAckDispatcher(bridgeQueueService, ackExecutor, ACK_DRAINERS, meterRegistry);
+        this.claimSkippedAckBacklog = meterRegistry.counter("bridge.claim.skipped", "reason", "ack_backlog");
     }
 
     @Scheduled(fixedDelay = 100)
@@ -137,6 +145,12 @@ public class ParticipationBridge {
     }
 
     private void drainCampaignQueue(Long campaignId) {
+        // 역압: ACK가 밀리면 in-flight가 "발행됐지만 지워지지 않은" claim으로 차서 상한에 막히고 lease 만료를 기다리게 된다.
+        // 대기 ACK가 많으면 이번 회차 claim을 쉬어 이벤트를 Queue에 둔다(유실 없음, 다음 회차에 다시 시도).
+        if (ackDispatcher.pendingCount() >= ACK_BACKLOG_PAUSE) {
+            claimSkippedAckBacklog.increment();
+            return;
+        }
         String queueKey = QUEUE_KEY_PREFIX + campaignId + "}";
         Long queueSize = redisTemplate.opsForList().size(queueKey);
         // 회차 한도는 호출 수가 아니라 이벤트 수다(앱 인스턴스·캠페인별 drain 1회 기준).
@@ -236,23 +250,13 @@ public class ParticipationBridge {
                                         .register(meterRegistry)
                         ).increment();
 
-                        try {
-                            ackExecutor.execute(() -> {
-                                try {
-                                    if (!bridgeQueueService.acknowledge(claim)) {
-                                        log.warn("Kafka succeeded after claim was reclaimed; duplicate may be retried. campaignId={}", campaignId);
-                                    }
-                                } catch (Exception ackFailure) {
-                                    log.error("Kafka succeeded but Redis claim ack failed; duplicate may be retried. campaignId={}",
-                                            campaignId, ackFailure);
-                                }
-                            });
-                        } catch (RejectedExecutionException rejected) {
+                        // Redis ACK는 Kafka 완료 스레드에서 하지 않고 대기열에 넣어 묶음으로 처리한다.
+                        if (!ackDispatcher.submit(claim)) {
                             // 전송 성공 이후 ACK만 거부된 경우에만 이 지표를 올린다.
                             meterRegistry.counter("bridge.claims.ack.rejected").increment(); // 기존 대시보드 호환
                             meterRegistry.counter("bridge.claim.ack.results", "result", "rejected").increment();
-                            log.error("Kafka succeeded but Redis claim ACK execution was rejected; claim retained for retry. campaignId={}",
-                                    campaignId, rejected);
+                            log.error("Kafka succeeded but Redis claim ACK queue is full; claim retained for retry. campaignId={}, pending={}",
+                                    campaignId, ackDispatcher.pendingCount());
                         }
                     });
         } catch (Exception e) {

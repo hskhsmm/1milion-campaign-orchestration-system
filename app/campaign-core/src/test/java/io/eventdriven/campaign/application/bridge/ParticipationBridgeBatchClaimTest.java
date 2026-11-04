@@ -167,8 +167,9 @@ class ParticipationBridgeBatchClaimTest {
         verify(bridgeQueueService, never()).acknowledge(batch.get(2));
     }
 
+    /** ACK drainer 실행이 거부되면 ACK하지 않고 claim을 in-flight에 남긴다(lease 만료 후 reclaim). */
     @Test
-    void rejectedAckExecutionIsCountedAsRejectedAndClaimIsRetained() throws Exception {
+    void rejectedAckDrainerRetainsClaimWithoutAck() throws Exception {
         bridge(10, 1); // 공통 stub
         SimpleMeterRegistry registry = new SimpleMeterRegistry();
         java.util.concurrent.Executor rejecting = command -> {
@@ -181,8 +182,8 @@ class ParticipationBridgeBatchClaimTest {
         bridge.drainQueues();
 
         verify(bridgeQueueService, never()).acknowledge(any());
-        assertThat(registry.get("bridge.claim.ack.results").tag("result", "rejected").counter().count()).isEqualTo(1);
-        assertThat(registry.get("bridge.claims.ack.rejected").counter().count()).isEqualTo(1);
+        verify(bridgeQueueService, never()).acknowledgeBatch(any(), any());
+        assertThat(registry.get("bridge.ack.pending").gauge().value()).isEqualTo(1);
     }
 
     @Test

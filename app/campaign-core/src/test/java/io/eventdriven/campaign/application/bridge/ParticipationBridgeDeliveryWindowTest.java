@@ -116,8 +116,9 @@ class ParticipationBridgeDeliveryWindowTest {
         verify(bridgeQueueService).acknowledge(claim);
     }
 
+    /** ACK drainer 실행이 거부돼도 claim은 ACK되지 않고 in-flight에 남는다(lease 만료 후 reclaim). */
     @Test
-    void rejectedAckExecutionRetainsClaimForLeaseRetry() throws Exception {
+    void rejectedAckDrainerRetainsClaimForLeaseRetry() throws Exception {
         BridgeQueueService.Claim claim = prepareClaim();
         CompletableFuture<SendResult<String, String>> send = new CompletableFuture<>();
         when(kafkaTemplate.send(KafkaConfig.TOPIC_NAME, "7", MESSAGE)).thenReturn(send);
@@ -130,7 +131,9 @@ class ParticipationBridgeDeliveryWindowTest {
         send.complete(null);
 
         verify(bridgeQueueService, never()).acknowledge(claim);
-        assertThat(meterRegistry.counter("bridge.claims.ack.rejected").count()).isEqualTo(1);
+        assertThat(meterRegistry.get("bridge.ack.pending").gauge().value()).isEqualTo(1);
+        // 대기열에는 들어갔으므로 "대기열 가득 참" 거부는 아니다.
+        assertThat(meterRegistry.counter("bridge.claims.ack.rejected").count()).isZero();
         assertThat(meterRegistry.counter("bridge.messages.published", "campaignId", "91").count()).isEqualTo(1);
     }
 

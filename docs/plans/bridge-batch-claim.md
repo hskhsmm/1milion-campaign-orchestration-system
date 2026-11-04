@@ -106,7 +106,7 @@ DB 건수만 맞는 것으로 통과시키지 않는다. DB 고유 제약이 Kaf
 | 3 | 여러 Bridge 동시 claim A·B·C 각 20회 | 완료 |
 | 4 | 앱 강제 종료(Kafka 중단 → claim → kill → 복구 → DB 대조) | 완료(100건 PASS) |
 | 5 | 로컬 Redis Cluster 3 primary + replica, failover A·B·C | refresh 적용 전 B 가용성 FAIL(앱 재시작 필요) → Redis timeout·topology refresh 적용 후 다중 샤드 PASS, A·B·C 자동 복구·정합성 PASS, failover 구간 가용성 저하(B `500` 1건, C `500` 31건) |
-| 6 | AWS N=1 → 10 → 50 → 1 | 미실행 |
+| 6 | AWS N=1 → 10 → 50 → 1 | 2026-11-04 N=1 정상, N=10 ACK 병목(거부·중복 발행) → N=50 보류. 묶음 ACK 수정 후 N=10 재시험 예정 ([ACK 묶음 처리](../reports/2026-11-04-bridge-ack-batch.md)) |
 
 결과: [로컬 검증](../reports/2026-11-03-bridge-batch-claim-local.md).
 
@@ -114,4 +114,4 @@ DB 건수만 맞는 것으로 통과시키지 않는다. DB 고유 제약이 Kaf
 
 - N이 크면 같은 샤드의 접수 Lua 대기가 늘 수 있다. 로컬 서버 실행 시간은 N=50에서 호출당 약 0.15ms였지만 ElastiCache 수치가 아니다 → AWS에서 API p99·SLOWLOG 동시 확인.
 - 앱 종료·응답 유실 시 최대 N건이 lease 5분 동안 함께 지연된다. 총량은 in-flight 상한 안이다.
-- claim이 빨라지면 ACK(`ZREM`)·Kafka 확인·Consumer가 다음 병목이 될 수 있다. 다음 단계에서 따로 본다.
+- claim이 빨라지면 ACK(`ZREM`)·Kafka 확인·Consumer가 다음 병목이 될 수 있다. → 2026-11-04 운영 N=10에서 **ACK 병목 확인**(ACK 거부 7,157 → reclaim·중복 발행, 발행 완료 335초). 묶음 ACK·역압으로 수정, 운영 재시험 전: [ACK 묶음 처리](../reports/2026-11-04-bridge-ack-batch.md).
