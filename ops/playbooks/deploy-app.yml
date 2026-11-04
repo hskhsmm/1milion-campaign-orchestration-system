@@ -33,6 +33,8 @@
       SPRING_KAFKA_BOOTSTRAP_SERVERS: "/batch-kafka/prod/SPRING_KAFKA_BOOTSTRAP_SERVERS"
       SPRING_DATA_REDIS_CLUSTER_NODES: "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
       SLACK_WEBHOOK_URL: "/batch-kafka/prod/SLACK_WEBHOOK_URL"
+      # 선택. 없으면 application.yml 기본값 1(단건 claim). 1~50 밖이면 앱 기동 실패.
+      BRIDGE_CLAIM_BATCH_SIZE: "/batch-kafka/prod/BRIDGE_CLAIM_BATCH_SIZE"
     deploy_required_env_keys:
       - SPRING_DATASOURCE_URL
       - SPRING_DATASOURCE_USERNAME

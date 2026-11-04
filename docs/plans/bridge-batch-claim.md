@@ -79,6 +79,8 @@ batch에서는 호출 수와 이벤트 수가 달라지므로 분리했다(단�
 
 각 시험 전 맞출 조건: 같은 Git SHA·Docker 이미지, 같은 앱 수·사양(사전 증설, 자동 증설 배제), 같은 Redis·Kafka·DB 구성, 30만 shared-iterations·500 VU, 같은 JVM 워밍업 절차, 새 캠페인, 이전 Queue/in-flight/lag 0 확인. 설정 변경은 `bridge.claim-batch-size`만, 변경 후 앱 재기동 방식도 기록한다. 각 조건 1회면 결과는 탐색 수준이며 개선율로 확정하지 않는다.
 
+운영에서 N을 바꾸는 방법: SSM 파라미터 `/batch-kafka/prod/BRIDGE_CLAIM_BATCH_SIZE`(String, 1~50)를 만들거나 고친 뒤 CodeDeploy로 재배포한다. `deploy-app.yml`이 이 값을 env `BRIDGE_CLAIM_BATCH_SIZE`로 넣는다. 파라미터가 없으면 env에서 빠지고 기본값 1을 쓴다. 범위 밖 값이면 앱 기동이 실패해 배포가 실패한다. 실행 중 컨테이너에는 반영되지 않으므로 재배포가 필요하고, 재배포 때마다 JVM이 새로 뜬다(회차마다 같은 "재배포 직후 첫 부하" 조건).
+
 성능 지표: 요청 RPS, 202 TPS, API p95/p99, claim 호출 시간·이벤트당 시간, Bridge Kafka 발행 TPS(유입 중·drain 분리), Consumer 처리 TPS, DB INSERT TPS, 최대 Queue·in-flight, Kafka lag, Redis CPU·SLOWLOG, 부하 종료 후 최종 완료 시간.
 
 정합성 지표: 요청 수, 202 수, claim 이벤트 수, Kafka 발행 성공 수, ACK removed·not_found·error·rejected 수, reclaim 수, Consumer 처리 수, DB 신규 INSERT 수, 중복 사용자·순번 수, DLQ 수, Redis·Kafka 발행 오류 수, 최종 Queue/in-flight/lag, k6 `dropped_iterations`, 예상 밖 5xx·네트워크 오류.

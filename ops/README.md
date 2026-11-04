@@ -132,6 +132,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 | Redis/Valkey | `batch-kafka-redis`, `aws_elasticache_replication_group.redis` | 비용 절감을 위해 Terraform targeted destroy/apply |
 | Redis app SSM | `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` | Redis endpoint 저장 |
 | Redis exporter SSM | `/batch-kafka/prod/REDIS_EXPORTER_ADDR` | `redis://...:6379` exporter 주소 저장 |
+| Bridge claim 묶음 SSM (선택) | `/batch-kafka/prod/BRIDGE_CLAIM_BATCH_SIZE` | Terraform 밖에서 수동 관리. 1~50, 없으면 기본 1. 바꾼 뒤 재배포해야 반영 ([계획 7장](../docs/plans/bridge-batch-claim.md)) |
 
 기본 리전은 `ap-northeast-2`다.
 
