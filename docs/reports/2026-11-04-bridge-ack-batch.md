@@ -1,6 +1,7 @@
 # Bridge ACK 묶음 처리와 역압 (2026-11-04)
 
-> 브랜치 `perf/bridge-ack-batch`(main `8ba2ef9` 기준). 운영 N=10에서 확인한 ACK 병목의 수정과 로컬 검증 기록이다. **운영 재시험(N=10)은 아직 하지 않았다.**
+> 브랜치 `perf/bridge-ack-batch`(main `8ba2ef9` 기준, PR #122로 머지). 운영 N=10에서 확인한 ACK 병목의 수정과 로컬 검증 기록이다.
+> **운영 재시험 결과(2026-11-04)**: N=10에서 발행 = ACK = 300,000, ACK 거부·reclaim 0, 접수 끝 → 발행 완료 5초. 대신 서버 p99는 N=1 407ms → 659ms. scale-out(120만 건)·ElastiCache failover에서도 정합성 유지. 상세: [운영 비교](2026-11-04-ops-batch-claim-ack.md).
 
 ## 1. 운영에서 확인한 문제
 
@@ -79,7 +80,8 @@ PR #120(batch claim)·#121(N을 SSM으로 주입) 머지 후, 운영(앱 t3.smal
 
 ## 4. 미검증과 다음
 
-- **운영 N=10 재시험**: 기대값은 ACK rejected 0, reclaim 0, 발행 = 300,000, 접수 끝 → 발행 완료가 N=1(85초)보다 짧은 것. 이후 N=50.
+- ~~운영 N=10 재시험~~ → 완료(캠페인 118, 기대값 충족). N=50은 앱 CPU가 한계라 보류.
 - ACK 대기 중 kill의 직접 재현.
 - 묶음 `ZREM` 100건이 같은 샤드의 접수 Lua 지연(API p99)에 주는 영향 — 운영에서 SLOWLOG·p99와 함께 확인.
-- 하네스 판정이 ACK rejected·reclaim을 보지 않아 N=10 문제를 PASS로 냈다. 판정 항목 추가는 별도 과제.
+- 하네스 판정이 ACK rejected·reclaim을 보지 않아 N=10 문제를 PASS로 냈다. → 운영 PC 판정 스크립트에 발행 = 202·reclaim·ACK 거부 검사를 추가했다(main 미포함).
+- 앱 정상 종료 시 메모리 대기 ACK 비우기, 역압 캠페인별 분리: [다음 작업](../plans/performance-next-steps.md).

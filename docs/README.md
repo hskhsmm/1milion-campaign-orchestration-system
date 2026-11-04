@@ -25,7 +25,8 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
-| 2026-11-04 | 운영 N=10 ACK 병목(거부 7,157·중복 발행) 확인, 묶음 ACK·역압 수정과 로컬 검증, 운영 재시험 전 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
+| 2026-11-04 | 운영 N=1·10 비교(적용 전 A/B 포함), 묶음 ACK 후 N=10, ElastiCache failover, scale-out | [운영 batch claim·ACK 비교](reports/2026-11-04-ops-batch-claim-ack.md) |
+| 2026-11-04 | 운영 N=10 ACK 병목(거부 7,157·중복 발행) 확인, 묶음 ACK·역압 수정과 로컬 검증 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
 | 2026-11-03 | batch claim 로컬 정합성·장애 복구, Redis failover 정지 재현과 topology refresh 적용 후 회복, AWS 미실행 | [batch claim 로컬 검증](reports/2026-11-03-bridge-batch-claim-local.md) |
 | 2026-11-03 | 재배포 없는 3대 재시험과 JVM 워밍업 관측 | [앱 3대 30만 건 재시험](reports/2026-11-03-app-warm-repeat-300k.md) |
 | 2026-11-03 | 같은 30만 건의 앱 2대·3대 비교와 신규 노드 지연 | [앱 2대·3대 비교](reports/2026-11-03-app-2-vs-3-300k.md) |
