@@ -5,6 +5,7 @@
 AWS_REGION="${AWS_REGION:-ap-northeast-2}"
 MCP_NAME="terraform-mcp"
 APP_ASG="batch-kafka-app-asg"
+WORKER_ASG="batch-kafka-worker-asg"
 REDIS_ADDR_PARAM="/batch-kafka/prod/REDIS_EXPORTER_ADDR"
 
 aws_() { aws --region "$AWS_REGION" "$@"; }
@@ -22,10 +23,11 @@ mcp_instance_id() {
   echo "$id"
 }
 
-# 앱 ASG에 붙은 InService/Pending 인스턴스 전부
+# 지정한 ASG의 InService/Pending 인스턴스. 생략하면 HTTP를 제공하는 앱 ASG만 조회한다.
 app_instance_ids() {
-  aws_ autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$APP_ASG" \
-    --query "AutoScalingGroups[0].Instances[?LifecycleState=='InService' || starts_with(LifecycleState, 'Pending')].InstanceId" --output text
+  if [[ $# -eq 0 ]]; then set -- "$APP_ASG"; fi
+  aws_ autoscaling describe-auto-scaling-groups --auto-scaling-group-names "$@" \
+    --query "AutoScalingGroups[].Instances[] | [?LifecycleState=='InService' || starts_with(LifecycleState, 'Pending')].InstanceId" --output text
 }
 
 # Redis configuration endpoint host (redis://host:6379 → host)

@@ -1,0 +1,24 @@
+---
+# app_group은 name과 capacity를 갖는다. 같은 상태 확인을 env-up/down에 사용한다.
+- name: Set capacity for {{ app_group.name }}
+  ansible.builtin.command:
+    argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'update-auto-scaling-group', '--region', aws_region, '--auto-scaling-group-name', app_group.name, '--min-size', app_group.capacity.min_size | string, '--max-size', app_group.capacity.max_size | string, '--desired-capacity', app_group.capacity.desired_capacity | string] }}"
+  changed_when: true
+
+- name: Wait for capacity and instances in {{ app_group.name }}
+  ansible.builtin.command:
+    argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_group.name, '--query', 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,InstanceCount:length(Instances),InService:length(Instances[?LifecycleState==`InService`])}', '--output', 'json'] }}"
+  register: app_capacity_cmd
+  changed_when: false
+  retries: 60
+  delay: 10
+  until:
+    - (app_capacity_cmd.stdout | from_json).Min == app_group.capacity.min_size
+    - (app_capacity_cmd.stdout | from_json).Max == app_group.capacity.max_size
+    - (app_capacity_cmd.stdout | from_json).Desired == app_group.capacity.desired_capacity
+    - (app_capacity_cmd.stdout | from_json).InService == app_group.capacity.desired_capacity
+    - (app_capacity_cmd.stdout | from_json).InstanceCount == app_group.capacity.desired_capacity
+
+- name: Save capacity for {{ app_group.name }}
+  ansible.builtin.set_fact:
+    app_capacity_status: "{{ app_capacity_status | default({}) | combine({app_group.name: app_capacity_cmd.stdout | from_json}) }}"

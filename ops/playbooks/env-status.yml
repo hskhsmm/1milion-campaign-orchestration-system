@@ -38,10 +38,10 @@
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
-    - name: Read app ASG capacity
+    - name: Read app and worker ASG capacity
       # 앱 인스턴스는 직접 EC2 이름으로 관리하지 않고 ASG 용량과 ASG 소속 인스턴스로 확인한다.
       ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--auto-scaling-group-names', app_asg.name, '--region', aws_region, '--query', 'AutoScalingGroups[0].{Name:AutoScalingGroupName,Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,Instances:Instances[].{Id:InstanceId,Lifecycle:LifecycleState,Health:HealthStatus}}', '--output', 'json'] }}"
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--auto-scaling-group-names', app_asg.name, app_asg.worker_name, '--region', aws_region, '--query', 'AutoScalingGroups[].{Name:AutoScalingGroupName,Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,Instances:Instances[].{Id:InstanceId,Lifecycle:LifecycleState,Health:HealthStatus}}', '--output', 'json'] }}"
       register: asg_status_cmd
       changed_when: false
 

@@ -21,6 +21,7 @@
     # env-down은 destructive 작업이므로 실수 실행을 막기 위해 명시 확인값을 요구한다.
     # 실행 예: ansible-playbook -i localhost, playbooks/env-down.yml -e confirm_env_down=true
     - name: Require explicit env-down confirmation
+      tags: [app-capacity]
       ansible.builtin.assert:
         that:
           - confirm_env_down | default(false) | bool
@@ -28,16 +29,19 @@
 
     # 잘못된 AWS profile로 종료 작업을 수행하는 사고를 막기 위해 가장 먼저 실행 주체를 확인한다.
     - name: Check AWS caller identity
+      tags: [app-capacity]
       ansible.builtin.command:
         argv: "{{ ['aws'] + aws_cli_profile_args + ['sts', 'get-caller-identity', '--output', 'json'] }}"
       register: caller_identity_cmd
       changed_when: false
 
     - name: Parse AWS caller identity
+      tags: [app-capacity]
       ansible.builtin.set_fact:
         caller_identity: "{{ caller_identity_cmd.stdout | from_json }}"
 
     - name: Ensure AWS account is the test environment account
+      tags: [app-capacity]
       ansible.builtin.assert:
         that:
           - caller_identity.Account == aws_account_id
@@ -48,28 +52,34 @@
 
     # 애플리케이션 트래픽을 가장 먼저 제거한다.
     # App 인스턴스가 살아 있으면 Kafka/RDS/Redis를 내리는 동안 불필요한 연결 오류가 계속 발생할 수 있다.
-    - name: Scale app ASG down to zero
+    - name: Discover app and worker groups to stop
       ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'update-auto-scaling-group', '--region', aws_region, '--auto-scaling-group-name', app_asg.name, '--min-size', app_asg.down.min_size | string, '--max-size', app_asg.down.max_size | string, '--desired-capacity', app_asg.down.desired_capacity | string] }}"
-      register: scale_down_asg_cmd
-      changed_when: true
-
-    - name: Wait until app ASG has no active instances
-      ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, '--query', 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,InstanceCount:length(Instances)}', '--output', 'json'] }}"
-      register: asg_down_status_cmd
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, app_asg.worker_name, '--query', 'AutoScalingGroups[].AutoScalingGroupName', '--output', 'json'] }}"
+      register: app_down_groups_cmd
       changed_when: false
-      retries: 60
-      delay: 10
-      until:
-        - (asg_down_status_cmd.stdout | from_json).Min == app_asg.down.min_size
-        - (asg_down_status_cmd.stdout | from_json).Max == app_asg.down.max_size
-        - (asg_down_status_cmd.stdout | from_json).Desired == app_asg.down.desired_capacity
-        - (asg_down_status_cmd.stdout | from_json).InstanceCount == 0
+      tags: [app-capacity]
 
-    - name: Save app ASG down status
-      ansible.builtin.set_fact:
-        asg_down_status: "{{ asg_down_status_cmd.stdout | from_json }}"
+    - name: Require the main app group before continuing shutdown
+      ansible.builtin.assert:
+        that:
+          - app_asg.name in (app_down_groups_cmd.stdout | from_json)
+      tags: [app-capacity]
+
+    - name: Stop app and worker before dependent services
+      ansible.builtin.include_tasks:
+        file: app-asg-capacity.yml
+        apply:
+          tags: [app-capacity]
+      loop:
+        - name: "{{ app_asg.name }}"
+          capacity: "{{ app_asg.down }}"
+        - name: "{{ app_asg.worker_name }}"
+          capacity: "{{ app_asg.down }}"
+      loop_control:
+        loop_var: app_group
+        label: "{{ app_group.name }}"
+      when: app_group.name in (app_down_groups_cmd.stdout | from_json)
+      tags: [app-capacity]
 
     # App 인스턴스가 완전히 사라진 뒤 ALB만 별도 plan으로 삭제한다.
     # 같은 Terraform state를 쓰는 Redis destroy와 겹치지 않도록 순차 실행한다.
@@ -237,7 +247,7 @@
             user_arn: "{{ caller_identity.Arn }}"
             region: "{{ aws_region }}"
             profile: "{{ aws_profile | default('default', true) }}"
-          app_asg: "{{ asg_down_status }}"
+          app_asg: "{{ app_capacity_status }}"
           alb:
             name: "{{ alb.name }}"
             terraform_exit_code: "{{ terraform_destroy_alb_cmd.rc }}"

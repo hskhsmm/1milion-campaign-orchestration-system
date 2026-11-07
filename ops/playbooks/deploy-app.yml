@@ -221,13 +221,60 @@
       tags:
         - before_install
 
+    - name: Check instance group marker
+      ansible.builtin.stat:
+        path: /etc/campaign-instance-group
+      register: deploy_instance_group_file
+      tags:
+        - before_install
+
+    - name: Read instance group marker
+      ansible.builtin.slurp:
+        src: /etc/campaign-instance-group
+      register: deploy_instance_group_slurp
+      when: deploy_instance_group_file.stat.exists
+      tags:
+        - before_install
+
+    - name: Read campaign layout from SSM
+      ansible.builtin.command:
+        argv: [aws, ssm, get-parameters, --region, "{{ aws_region }}", --names, "{{ app_asg.layout_parameter }}", --query, "Parameters[0].Value", --output, json]
+      register: deploy_layout_cmd
+      changed_when: false
+      tags:
+        - before_install
+
+    - name: Resolve group and layout
+      ansible.builtin.set_fact:
+        deploy_instance_group: "{{ (deploy_instance_group_slurp.content | b64decode | trim) if deploy_instance_group_file.stat.exists else 'app' }}"
+        deploy_layout: "{{ deploy_layout_cmd.stdout | from_json | default('combined', true) }}"
+      tags:
+        - before_install
+
+    - name: Validate group and layout before writing the environment
+      ansible.builtin.assert:
+        that:
+          - deploy_instance_group in ['app', 'worker']
+          - deploy_layout in app_asg.layouts
+          - deploy_instance_group != 'worker' or deploy_layout.startswith('split')
+        fail_msg: "Instance group {{ deploy_instance_group }} is incompatible with layout {{ deploy_layout }}"
+      tags:
+        - before_install
+
+    - name: Select the application role and scheduled batch setting
+      ansible.builtin.set_fact:
+        deploy_campaign_role: "{{ 'worker' if deploy_instance_group == 'worker' else ('api' if deploy_layout.startswith('split') else 'combined') }}"
+        deploy_scheduled_batch: "{{ deploy_layout == 'combined' }}"
+      tags:
+        - before_install
+
     - name: Write deployment environment file
       ansible.builtin.copy:
         dest: "{{ deploy_env_file }}"
         owner: root
         group: root
         mode: "0600"
-        content: "{{ (deploy_env_lines + ['ECR_IMAGE=' ~ deploy_pinned_image]) | join('\n') }}\n"
+        content: "{{ (deploy_env_lines + ['ECR_IMAGE=' ~ deploy_pinned_image, 'CAMPAIGN_ROLE=' ~ deploy_campaign_role, 'CAMPAIGN_SCHEDULED_BATCH_ENABLED=' ~ (deploy_scheduled_batch | ternary('true', 'false'))]) | join('\n') }}\n"
       no_log: true
       tags:
         - before_install
@@ -442,6 +489,8 @@
     - name: Parse expected image for deployment validation
       ansible.builtin.set_fact:
         deploy_expected_image: "{{ ((deploy_validation_env_slurp.content | b64decode).splitlines() | select('match', '^ECR_IMAGE=') | list | first | default('')) | regex_replace('^ECR_IMAGE=', '') }}"
+        deploy_expected_role: "{{ (deploy_validation_env_slurp.content | b64decode).splitlines() | select('match', '^CAMPAIGN_ROLE=') | first | default('') }}"
+        deploy_expected_scheduled_batch: "{{ (deploy_validation_env_slurp.content | b64decode).splitlines() | select('match', '^CAMPAIGN_SCHEDULED_BATCH_ENABLED=') | first | default('') }}"
       tags:
         - validate_service
 
@@ -456,11 +505,15 @@
       tags:
         - validate_service
 
-    - name: Verify running container matches pinned image
+    - name: Verify running container matches pinned image and role
       ansible.builtin.assert:
         that:
           - deploy_expected_image | length > 0
           - (deploy_running_container_inspect.stdout | from_json | first).Config.Image == deploy_expected_image
-        fail_msg: "Running container image does not match pinned deployment image"
+          - deploy_expected_role is match('^CAMPAIGN_ROLE=(combined|api|worker)$')
+          - deploy_expected_role in (deploy_running_container_inspect.stdout | from_json | first).Config.Env
+          - deploy_expected_scheduled_batch is match('^CAMPAIGN_SCHEDULED_BATCH_ENABLED=(true|false)$')
+          - deploy_expected_scheduled_batch in (deploy_running_container_inspect.stdout | from_json | first).Config.Env
+        fail_msg: "Running container does not match the expected image, role or batch setting"
       tags:
         - validate_service

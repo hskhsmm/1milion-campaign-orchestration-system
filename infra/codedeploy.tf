@@ -39,7 +39,7 @@ resource "aws_codedeploy_deployment_group" "app" {
 
   deployment_config_name = "CodeDeployDefault.OneAtATime"
 
-  autoscaling_groups = [aws_autoscaling_group.app.name]
+  autoscaling_groups = [aws_autoscaling_group.app.name, aws_autoscaling_group.worker.name]
 
   deployment_style {
     deployment_option = "WITHOUT_TRAFFIC_CONTROL"

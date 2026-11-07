@@ -124,7 +124,8 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 
 | 대상 | AWS/Terraform 이름 | 운영 방식 |
 | --- | --- | --- |
-| App ASG | `batch-kafka-app-asg`, `aws_autoscaling_group.app` | 종료 시 `min/max/desired=0`, 기동 시 `min=2/max=3/desired=2` |
+| App ASG | `batch-kafka-app-asg`, `aws_autoscaling_group.app` | ALB 연결. 기본 기동 3대, 최소 2대, 최대 4대 |
+| Worker ASG | `batch-kafka-worker-asg`, `aws_autoscaling_group.worker` | 분리 구성에서만 1대. ALB 연결 없이 같은 이미지로 Bridge와 Kafka Consumer 실행 |
 | ALB/Listener | `alb-batch-kafka-api`, `aws_lb.main[0]`, `aws_lb_listener.http[0]` | 앱 ASG가 0대가 된 뒤 삭제, 앱 기동 전에 재생성 |
 | Kafka brokers | `kafka-1`, `kafka-2`, `kafka-3` | EC2 start/stop |
 | Monitoring/MCP | `terraform-mcp`, `aws_instance.terraform_mcp` | EC2 start/stop, SSM SendCommand로 redis-exporter 재기동 |
@@ -142,7 +143,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 
 `env-up`과 `env-down`은 시작 전에 현재 AWS 계정 ID 및 `terraform-mcp` EC2의 VPC/서브넷 ID를 조회해 Terraform의 필수 입력값으로 전달한다. 따라서 로컬 `terraform.tfvars`나 `TF_VAR_*` 환경변수가 없어도 실행할 수 있다. Redis용 SSM Parameter Store 값은 Terraform 입력값이 아니라, Redis 생성 후 앱과 exporter에 전달할 endpoint다.
 
-1. App ASG를 `min=0`, `max=0`, `desired=0`으로 축소하고 인스턴스가 0대인지 확인한다.
+1. App ASG와 Worker ASG를 모두 0대로 축소하고 인스턴스가 남아 있지 않은지 확인한다.
 2. ALB와 HTTP Listener만 저장된 Terraform plan으로 삭제한다. Target Group은 유지한다.
 3. `kafka-1`, `kafka-2`, `kafka-3` EC2를 중지한다.
 4. `terraform-mcp` EC2를 중지한다.
@@ -172,7 +173,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 6. `terraform-mcp`를 시작하고 SSM Agent가 `Online`이 될 때까지 기다린다.
 7. ALB와 HTTP Listener만 저장된 Terraform plan으로 생성하고 새 `alb_base_url`을 출력한다.
 8. `terraform-mcp`에서 redis-exporter 컨테이너를 새 Redis endpoint로 재기동한다.
-9. App ASG를 `min=2`, `max=3`, `desired=2`로 복구하고 인스턴스가 `InService`가 될 때까지 기다린다.
+9. 선택한 레이아웃으로 App ASG와 Worker ASG를 기동하고 인스턴스가 `InService`가 될 때까지 기다린다.
 
 RDS start와 Redis targeted apply는 서로 의존하지 않는 장기 작업이므로 같은 구간에서 진행되게 구성했다. Kafka와 `terraform-mcp`는 기존 순서를 유지하고, App ASG는 모든 의존 리소스와 redis-exporter가 준비된 뒤 마지막에 복구한다.
 
@@ -217,3 +218,26 @@ redis-exporter는 App ASG 인스턴스마다 띄우지 않고 `terraform-mcp`에
 | App이 Redis에 붙지 못함 | `/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES` 값이 새 Redis endpoint인지 확인 |
 | Grafana Redis 지표가 두 배로 보임 | App 인스턴스에서 redis-exporter가 추가로 떠 있지 않은지 확인 |
 | 신규 ASG 인스턴스가 `Pending:Wait` 후 반복 종료 | CodeDeploy deployment target 로그와 `/var/log/cloud-init-output.log`를 함께 확인한다. `BeforeInstall`은 cloud-init 완료 후 Ansible을 실행해야 한다 |
+
+## 앱·워커 레이아웃 전환
+
+`APP_LAYOUT`을 생략하면 `combined`로 기동한다. 레이아웃은 SSM `/batch-kafka/prod/CAMPAIGN_LAYOUT`에 저장되며, 새 인스턴스의 CodeDeploy 훅이 이를 읽어 역할을 지정한다.
+
+| 레이아웃 | 시작 구성 | 최대 앱 EC2 | 정기 배치 |
+| --- | --- | --- | --- |
+| `combined` | 공용 3대 | 4대 | 켜짐 |
+| `combined-fixed` | 공용 3대 고정 | 3대 | 꺼짐 |
+| `split` | API 2대 + 워커 1대 | 4대 (API 최대 3대 + 워커 1대) | 꺼짐 |
+| `split-fixed` | API 2대 + 워커 1대 고정 | 3대 | 꺼짐 |
+
+1. Worker ASG와 Launch Template을 Terraform으로 생성하고 두 ASG가 `batch-kafka-prod-dg`에 연결된 상태를 확인한다. 새 인스턴스는 CodeDeploy의 마지막 성공 번들로 기동하므로, 역할을 지원하는 번들을 공용 앱에 먼저 성공적으로 배포하고 해당 deployment ID를 기록한다. [CodeDeploy의 Auto Scaling 연동](https://docs.aws.amazon.com/codedeploy/latest/userguide/integrations-aws-auto-scaling.html)
+2. 새 요청을 멈추고 캠페인의 Queue·in-flight·Kafka lag가 0이며 최종 DB 대조가 끝났는지 확인한다. 아래 `app-down`은 이 검사를 자동 실행하지 않는다.
+3. ALB, Kafka, Redis, DB가 기동된 상태에서 앱 그룹만 내려 레이아웃을 바꾼다. 두 그룹에 인스턴스가 남아 있으면 레이아웃 변경은 거부된다. `combined` 외 구성은 기록한 ID와 CodeDeploy의 마지막 성공 ID가 일치해야 한다.
+
+```bash
+make -C ops app-down
+APP_LAYOUT=split-fixed APP_ROLE_DEPLOYMENT_ID="$ROLE_DEPLOYMENT_ID" make -C ops app-up
+make -C ops env-status
+```
+
+부하를 시작하기 전에 API와 워커의 역할·이미지 digest·Actuator 상태와 ALB의 healthy API 대상 수를 확인한다. `collect-app-logs.sh`는 양쪽 그룹의 로그와 컨테이너 역할을 수집한다. 공용 기본값으로 돌아갈 때는 드레인 확인 후 `app-down`과 `APP_LAYOUT=combined make -C ops app-up`을 실행한다. 역할을 모르는 이전 번들로 수동 롤백할 때는 공용 구성으로 복귀하고 기존 수동 롤백 검사도 적용한다.

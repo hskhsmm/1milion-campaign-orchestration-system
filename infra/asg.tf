@@ -4,7 +4,16 @@
 # user-data = boothook(docker 기동 전 AMI 잔존 컨테이너 restart 정책 해제) + 기존 셸 스크립트.
 # boothook은 shell script 파트보다 먼저, docker.service 기동 전에 실행된다.
 locals {
-  app_user_data = <<EOT
+  app_bootstrap    = file("${path.module}/app-user-data.sh")
+  worker_bootstrap = <<EOT
+#!/bin/bash
+set -e
+printf '%s\n' worker > /etc/campaign-instance-group
+${trimprefix(local.app_bootstrap, "#!/bin/bash\n")}
+EOT
+
+  app_user_data = {
+    for group in ["app", "worker"] : group => <<EOT
 Content-Type: multipart/mixed; boundary="==BATCH-KAFKA-APP=="
 MIME-Version: 1.0
 
@@ -15,16 +24,17 @@ ${file("${path.module}/app-boothook.sh")}
 --==BATCH-KAFKA-APP==
 Content-Type: text/x-shellscript; charset="us-ascii"
 
-${file("${path.module}/app-user-data.sh")}
+${group == "worker" ? local.worker_bootstrap : local.app_bootstrap}
 --==BATCH-KAFKA-APP==--
 EOT
+  }
 }
 
 resource "aws_launch_template" "app" {
   name          = "batch-kafka-app-lt"
   image_id      = var.app_ami_id
   instance_type = "t3.small"
-  user_data     = base64encode(local.app_user_data)
+  user_data     = base64encode(local.app_user_data.app)
 
   iam_instance_profile {
     name = aws_iam_instance_profile.batch_kafka_app.name
@@ -48,14 +58,43 @@ resource "aws_launch_template" "app" {
   }
 }
 
+resource "aws_launch_template" "worker" {
+  name          = "batch-kafka-worker-lt"
+  image_id      = var.app_ami_id
+  instance_type = "t3.small"
+  user_data     = base64encode(local.app_user_data.worker)
+
+  iam_instance_profile {
+    name = aws_iam_instance_profile.batch_kafka_app.name
+  }
+
+  # 상세 모니터링: EC2 CPU를 1분 단위로 발행 (기본 5분 → 알람 평가가 수 분 지연됨)
+  monitoring {
+    enabled = true
+  }
+
+  network_interfaces {
+    associate_public_ip_address = true
+    security_groups             = [aws_security_group.app.id]
+  }
+
+  tag_specifications {
+    resource_type = "instance"
+    tags = {
+      Name                  = "batch-kafka-app"
+      CampaignInstanceGroup = "worker"
+    }
+  }
+}
+
 # ──────────────────────────────────────────
 # Auto Scaling Group
 # ──────────────────────────────────────────
 resource "aws_autoscaling_group" "app" {
   name             = "batch-kafka-app-asg"
   min_size         = 2
-  max_size         = 3
-  desired_capacity = 2
+  max_size         = 4
+  desired_capacity = 3
   vpc_zone_identifier = [
     aws_subnet.private_app_2a.id,
     aws_subnet.private_app_2b.id,
@@ -108,6 +147,31 @@ resource "aws_autoscaling_group" "app" {
 
   lifecycle {
     ignore_changes = [desired_capacity, min_size, max_size] # 수동 스케일 조정 보호
+  }
+}
+
+# 워커도 같은 AMI·사양을 사용하고, CodeDeploy가 같은 이미지를 설치한다.
+# ALB 연결 없이 EC2 상태를 기준으로 교체한다. 워커 Actuator는 내부에서 확인한다.
+resource "aws_autoscaling_group" "worker" {
+  name             = "batch-kafka-worker-asg"
+  min_size         = 0
+  max_size         = 0
+  desired_capacity = 0
+  vpc_zone_identifier = [
+    aws_subnet.private_app_2a.id,
+    aws_subnet.private_app_2b.id,
+  ]
+
+  launch_template {
+    id      = aws_launch_template.worker.id
+    version = "$Latest"
+  }
+
+  health_check_type         = "EC2"
+  health_check_grace_period = 180
+
+  lifecycle {
+    ignore_changes = [desired_capacity, min_size, max_size] # env-up/down에서 관리
   }
 }
 
