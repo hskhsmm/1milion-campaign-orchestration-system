@@ -26,6 +26,7 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-07 | API·워커 분리 후 로컬 정상·강제 종료와 재기동 복구 | [API·워커 종료 검증](reports/2026-11-07-api-worker-local-recovery.md) |
 | 2026-11-04 | **오늘 작업 종합**: 운영 N=1·10 비교(적용 전 A/B), N=10 ACK 병목과 묶음 ACK 수정·로컬 검증·운영 재시험, ElastiCache failover, scale-out, 다음 작업 | [11-04 작업 종합](reports/2026-11-04-ops-batch-claim-ack.md) |
 | 2026-11-04 | (부록) 묶음 ACK 코드 변경 상세·시험 목록·지표 해석 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
 | 2026-11-03 | batch claim 로컬 정합성·장애 복구, Redis failover 정지 재현과 topology refresh 적용 후 회복, AWS 미실행 | [batch claim 로컬 검증](reports/2026-11-03-bridge-batch-claim-local.md) |
