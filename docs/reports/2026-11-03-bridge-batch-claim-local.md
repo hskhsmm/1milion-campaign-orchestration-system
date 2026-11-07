@@ -303,7 +303,16 @@ spring.data.redis.lettuce.cluster.refresh.period: 30s       # 주기 갱신
 - 정합성: 7개 캠페인 모두 DB 100(고유 사용자 100), 최종 Queue·in-flight 0, Kafka offset 합 850 = DB 850, 중복 0.
 - **batch 변경과 무관하다.** 단건 경로도 같은 `send()`를 쓴다. API 접수 경로는 Kafka를 쓰지 않으므로 영향이 없다(시도별 202 100, 요청 평균 8ms).
 
-영향: Kafka가 멈춘 동안 어차피 발행할 수 없으므로 유실은 없고, 처리 재개가 몇 초 늦거나 60초 대기 끝에 실패한 claim이 lease(5분)만큼 늦게 처리된다. 개선 선택지(검토만, 미적용): `max.block.ms` 단축(더 빨리 실패하지만 reclaim 대상이 늘어남), Kafka 발행이 실패하는 동안 claim을 멈추는 차단기(불필요한 claim·reclaim 감소), send를 drain 스레드와 분리.
+영향: Kafka가 멈춘 동안 어차피 발행할 수 없으므로 유실은 없고, 처리 재개가 몇 초 늦거나 60초 대기 끝에 실패한 claim이 lease(5분)만큼 늦게 처리된다. 개선 선택지(검토만, 미적용). 핵심은 Kafka가 닿지 않는 동안 claim을 멈추고 이벤트를 Queue에 그대로 두는 것이다.
+
+| 방법 | 효과 | 단점 |
+| --- | --- | --- |
+| ① `max.block.ms` 단축(60초 → 수 초) | 설정만 바꾸면 되고 drain 스레드가 오래 묶이지 않음 | 단독으로 쓰면 빨리 실패한 뒤 계속 claim해 Queue가 in-flight로 옮겨지고(상한 10,000), Kafka 복구 후에도 lease 5분 뒤에야 처리됨. 이 값은 정상 고부하에서 producer 버퍼가 찼을 때의 대기에도 쓰이므로 줄이면 평상시 실패가 생길 수 있음 |
+| ② 차단기(circuit breaker) | send 실패 시 일정 시간 claim을 멈추고 주기적으로 시험 발행. 이벤트가 Queue에 남아 Kafka 복구 즉시 재개, reclaim 없음 | 코드 변경 필요, 차단·재시도 기준을 정해야 함 |
+| ③ 동기 send 실패분 즉시 반환 | `send()`가 동기 단계에서 실패하면 Kafka에 들어가지 않은 것이므로 lease를 기다리지 않고 Queue로 바로 되돌림. 5분 지연 제거, 중복 위험 없음 | 비동기 콜백 실패는 기록 여부가 불확실해 제외. 반환용 Lua 추가 필요 |
+| ④ `metadata.recovery.strategy=none` | rebootstrap 자체를 끔 | 브로커 교체·확장 등으로 주소가 바뀌면 클라이언트가 스스로 복구하지 못함. 권하지 않음 |
+
+추천은 ② + ③이다. ②가 "장애 중 claim하지 않기", ③이 "실패한 claim 즉시 되돌리기"를 맡는다. `max.block.ms`는 정상 부하의 버퍼 대기 시간을 측정하기 전까지 유지한다. Kafka 전체에 닿지 못할 때만 생기고 유실이 없으므로 급하지 않으며, 신뢰성 변경이므로 이번 batch claim 변경과 분리해 다룬다.
 
 ## 7. 미검증
 

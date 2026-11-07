@@ -10,7 +10,7 @@
 | 지금까지의 성과·다음 개선·하네스/API 자동화 범위 | [성능 개선 중간 정리](plans/performance-next-steps.md) |
 | 하네스 구축과 성능 개선 순서 | [성능·관측 하네스 계획](plans/performance-harness.md) |
 | Bridge Redis·Kafka 병목 계측과 로컬 시험 | [Bridge 관측 가이드](runbooks/bridge-observability.md) |
-| Bridge batch claim 설계·비교 계획 (AWS 비교 전) | [batch claim 설계](plans/bridge-batch-claim.md) |
+| Bridge batch claim 설계·비교 계획 (AWS 비교 완료, 결과는 [11-04 종합](reports/2026-11-04-ops-batch-claim-ack.md)) | [batch claim 설계](plans/bridge-batch-claim.md) |
 | DLQ 재처리 Job 실행·재개·결과 대조 | [DLQ 배치 운영 가이드](runbooks/dlq-replay.md) |
 | 부하 테스트 모드와 실행법 | [부하 테스트 가이드](../stress-test/TEST_GUIDE.md) |
 | AWS 테스트 환경 기동·종료 | [운영 가이드](../ops/README.md) |
@@ -25,7 +25,8 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
-| 2026-11-04 | 운영 N=10 ACK 병목(거부 7,157·중복 발행) 확인, 묶음 ACK·역압 수정과 로컬 검증, 운영 재시험 전 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
+| 2026-11-04 | **오늘 작업 종합**: 운영 N=1·10 비교(적용 전 A/B), N=10 ACK 병목과 묶음 ACK 수정·로컬 검증·운영 재시험, ElastiCache failover, scale-out, 다음 작업 | [11-04 작업 종합](reports/2026-11-04-ops-batch-claim-ack.md) |
+| 2026-11-04 | (부록) 묶음 ACK 코드 변경 상세·시험 목록·지표 해석 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
 | 2026-11-03 | batch claim 로컬 정합성·장애 복구, Redis failover 정지 재현과 topology refresh 적용 후 회복, AWS 미실행 | [batch claim 로컬 검증](reports/2026-11-03-bridge-batch-claim-local.md) |
 | 2026-11-03 | 재배포 없는 3대 재시험과 JVM 워밍업 관측 | [앱 3대 30만 건 재시험](reports/2026-11-03-app-warm-repeat-300k.md) |
 | 2026-11-03 | 같은 30만 건의 앱 2대·3대 비교와 신규 노드 지연 | [앱 2대·3대 비교](reports/2026-11-03-app-2-vs-3-300k.md) |
