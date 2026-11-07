@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.api.controller;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.api.common.ApiResponse;
 import io.eventdriven.campaign.api.dto.request.ParticipationRequest;
 import io.eventdriven.campaign.api.exception.business.CampaignNotFoundException;
@@ -11,6 +12,7 @@ import io.eventdriven.campaign.domain.repository.CampaignRepository;
 import io.eventdriven.campaign.domain.repository.ParticipationHistoryRepository;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.GetMapping;
 import org.springframework.web.bind.annotation.PathVariable;
@@ -28,6 +30,7 @@ import java.util.List;
 import java.util.Map;
 
 @RestController
+@Conditional(CampaignRole.HttpApi.class)
 @RequestMapping("/api/campaigns")
 @RequiredArgsConstructor
 public class ParticipationController {

@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.api.controller;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.api.common.ApiResponse;
 import io.eventdriven.campaign.api.dto.request.DlqReplayRequest;
 import io.eventdriven.campaign.application.service.DlqReplayService;
@@ -7,6 +8,7 @@ import io.eventdriven.campaign.domain.entity.DlqMessageProcessingStatus;
 import io.eventdriven.campaign.domain.entity.DlqReplayExecution;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.batch.core.job.parameters.JobParameters;
 import org.springframework.batch.core.job.parameters.JobParametersBuilder;
 import org.springframework.batch.core.job.Job;
@@ -32,6 +34,7 @@ import java.util.Map;
 
 @Slf4j
 @RestController
+@Conditional(CampaignRole.HttpApi.class)
 @RequestMapping("/api/admin/dlq-replay")
 @RequiredArgsConstructor
 @SuppressWarnings("removal")

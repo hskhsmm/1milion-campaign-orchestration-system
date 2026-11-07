@@ -1,0 +1,18 @@
+# compose-kill.yml에 덧붙여 같은 이미지로 API와 워커를 분리한다.
+services:
+  app:
+    environment:
+      CAMPAIGN_ROLE: api
+      CAMPAIGN_SCHEDULED_BATCH_ENABLED: "false"
+      BRIDGE_CLAIM_BATCH_SIZE: "10"
+
+  worker:
+    extends:
+      file: compose-kill.yml
+      service: app
+    environment:
+      CAMPAIGN_ROLE: worker
+      CAMPAIGN_SCHEDULED_BATCH_ENABLED: "false"
+      BRIDGE_CLAIM_BATCH_SIZE: "10"
+    # Actuator 확인용 포트. 참여 요청은 app의 18080으로만 보낸다.
+    ports: !override ["127.0.0.1:18081:8080"]

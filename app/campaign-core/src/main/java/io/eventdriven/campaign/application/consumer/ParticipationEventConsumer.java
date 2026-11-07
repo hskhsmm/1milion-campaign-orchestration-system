@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.application.consumer;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.application.event.DlqEventPayload;
 import io.eventdriven.campaign.application.event.ParticipationEvent;
 import io.eventdriven.campaign.application.service.DlqMessageService;
@@ -11,6 +12,7 @@ import io.micrometer.core.instrument.Timer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.kafka.clients.consumer.ConsumerRecord;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.dao.DataIntegrityViolationException;
 import org.springframework.jdbc.core.JdbcTemplate;
@@ -30,6 +32,7 @@ import java.util.concurrent.TimeUnit;
  */
 @Slf4j
 @Component
+@Conditional(CampaignRole.BackgroundWork.class)
 @RequiredArgsConstructor
 public class ParticipationEventConsumer {
 

@@ -312,6 +312,7 @@
   hosts: localhost
   connection: local
   gather_facts: false
+  tags: [app-capacity]
 
   vars_files:
     - ../group_vars/all.yml
@@ -337,31 +338,76 @@
           - caller_identity.Account == aws_account_id
         fail_msg: "AWS 계정이 예상과 다릅니다: {{ caller_identity.Account }}"
 
-    - name: Scale app ASG up to service capacity
-      ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'update-auto-scaling-group', '--region', aws_region, '--auto-scaling-group-name', app_asg.name, '--min-size', app_asg.up.min_size | string, '--max-size', app_asg.up.max_size | string, '--desired-capacity', app_asg.up.desired_capacity | string] }}"
-      register: scale_up_asg_cmd
-      changed_when: true
+    - name: Validate app capacity request
+      ansible.builtin.assert:
+        that:
+          - confirm_env_up | default(false) | bool
+          - app_layout in app_asg.layouts
+        fail_msg: "승인된 env-up/app-up 실행에서 APP_LAYOUT은 combined, combined-fixed, split, split-fixed 중 하나여야 합니다."
 
-    - name: Wait until app ASG reaches service capacity
+    - name: Read existing app and worker groups
       ansible.builtin.command:
-        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, '--query', 'AutoScalingGroups[0].{Min:MinSize,Max:MaxSize,Desired:DesiredCapacity,InstanceCount:length(Instances),InService:length(Instances[?LifecycleState==`InService`])}', '--output', 'json'] }}"
-      register: asg_up_status_cmd
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['autoscaling', 'describe-auto-scaling-groups', '--region', aws_region, '--auto-scaling-group-names', app_asg.name, app_asg.worker_name, '--query', 'AutoScalingGroups[].{Name:AutoScalingGroupName,Desired:DesiredCapacity,InstanceCount:length(Instances)}', '--output', 'json'] }}"
+      register: existing_app_groups_cmd
       changed_when: false
-      retries: 60
-      delay: 10
-      until:
-        - (asg_up_status_cmd.stdout | from_json).Min == app_asg.up.min_size
-        - (asg_up_status_cmd.stdout | from_json).Max == app_asg.up.max_size
-        - (asg_up_status_cmd.stdout | from_json).Desired == app_asg.up.desired_capacity
-        - (asg_up_status_cmd.stdout | from_json).InService == app_asg.up.desired_capacity
 
-    - name: Print app ASG restore summary
+    - name: Read the current app layout
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'get-parameters', '--region', aws_region, '--names', app_asg.layout_parameter, '--query', 'Parameters[0].Value', '--output', 'json'] }}"
+      register: current_app_layout_cmd
+      changed_when: false
+
+    - name: Resolve existing groups and current app layout
+      ansible.builtin.set_fact:
+        existing_app_groups: "{{ existing_app_groups_cmd.stdout | from_json }}"
+        existing_app_group_names: "{{ existing_app_groups_cmd.stdout | from_json | map(attribute='Name') | list }}"
+        current_app_layout: "{{ current_app_layout_cmd.stdout | from_json | default('combined', true) }}"
+
+    - name: Require empty groups before changing roles
+      ansible.builtin.assert:
+        that:
+          - app_asg.name in existing_app_group_names
+          - not app_layout.startswith('split') or app_asg.worker_name in existing_app_group_names
+          - current_app_layout in app_asg.layouts
+          - app_layout == current_app_layout or (existing_app_groups | sum(attribute='Desired') == 0 and existing_app_groups | sum(attribute='InstanceCount') == 0)
+        fail_msg: "분리 ASG를 먼저 준비하고, 레이아웃을 바꾸기 전에 새 요청을 멈춘 상태에서 drain과 app-down을 완료하세요."
+
+    - name: Read CodeDeploy revision and attached groups
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['deploy', 'get-deployment-group', '--region', aws_region, '--application-name', app_asg.deployment_app, '--deployment-group-name', app_asg.deployment_group, '--query', 'deploymentGroupInfo.{Revision:lastSuccessfulDeployment.deploymentId,Groups:autoScalingGroups[].name}', '--output', 'json'] }}"
+      register: app_deploy_group_cmd
+      changed_when: false
+      when: app_layout != 'combined'
+
+    - name: Require the verified role-aware deployment revision
+      ansible.builtin.assert:
+        that:
+          - app_role_deployment_id is match('^d-[A-Z0-9]+$')
+          - (app_deploy_group_cmd.stdout | from_json).Revision == app_role_deployment_id
+          - app_asg.name in ((app_deploy_group_cmd.stdout | from_json).Groups | default([], true))
+          - not app_layout.startswith('split') or app_asg.worker_name in ((app_deploy_group_cmd.stdout | from_json).Groups | default([], true))
+        fail_msg: "두 역할을 지원하는 번들을 공용 앱에 먼저 성공적으로 배포하고, 그 deployment ID를 APP_ROLE_DEPLOYMENT_ID로 지정하세요."
+      when: app_layout != 'combined'
+
+    - name: Save the app layout before starting instances
+      ansible.builtin.command:
+        argv: "{{ ['aws'] + aws_cli_profile_args + ['ssm', 'put-parameter', '--region', aws_region, '--name', app_asg.layout_parameter, '--type', 'String', '--value', app_layout, '--overwrite'] }}"
+      when: app_layout != current_app_layout
+
+    - name: Restore app and worker capacity
+      ansible.builtin.include_tasks: app-asg-capacity.yml
+      loop:
+        - name: "{{ app_asg.worker_name }}"
+          capacity: "{{ app_asg.layouts[app_layout].worker }}"
+        - name: "{{ app_asg.name }}"
+          capacity: "{{ app_asg.layouts[app_layout].app }}"
+      loop_control:
+        loop_var: app_group
+        label: "{{ app_group.name }}"
+      when: app_group.name in existing_app_group_names
+
+    - name: Print app capacity summary
       ansible.builtin.debug:
         msg:
-          aws:
-            account: "{{ caller_identity.Account }}"
-            user_arn: "{{ caller_identity.Arn }}"
-            region: "{{ aws_region }}"
-            profile: "{{ aws_profile | default('default', true) }}"
-          app_asg: "{{ asg_up_status_cmd.stdout | from_json }}"
+          layout: "{{ app_layout }}"
+          groups: "{{ app_capacity_status }}"

@@ -2,7 +2,7 @@ ANSIBLE_CONFIG := ./ansible.cfg
 INVENTORY := inventory/localhost.yml
 ANSIBLE_PLAYBOOK := ansible-playbook
 
-.PHONY: help check-tools requirements env-status env-up env-down redis-exporter
+.PHONY: help check-tools requirements env-status env-up env-down app-up app-down redis-exporter
 
 help:
 	@echo "Usage: make <target>"
@@ -13,6 +13,8 @@ help:
 	@echo "  env-status      Print current AWS test environment status"
 	@echo "  env-up          Start cost-aware test environment"
 	@echo "  env-down        Stop cost-aware test environment"
+	@echo "  app-up          Start app groups only using APP_LAYOUT"
+	@echo "  app-down        Stop app groups after draining"
 	@echo "  redis-exporter  Restart redis-exporter on terraform-mcp through SSM"
 
 check-tools:
@@ -34,6 +36,12 @@ env-up:
 
 env-down:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ANSIBLE_PLAYBOOK) -i $(INVENTORY) playbooks/env-down.yml -e confirm_env_down=true
+
+app-up:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ANSIBLE_PLAYBOOK) -i $(INVENTORY) playbooks/env-up.yml -e confirm_env_up=true --tags app-capacity
+
+app-down:
+	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ANSIBLE_PLAYBOOK) -i $(INVENTORY) playbooks/env-down.yml -e confirm_env_down=true --tags app-capacity
 
 redis-exporter:
 	ANSIBLE_CONFIG=$(ANSIBLE_CONFIG) $(ANSIBLE_PLAYBOOK) -i $(INVENTORY) playbooks/restart-redis-exporter.yml

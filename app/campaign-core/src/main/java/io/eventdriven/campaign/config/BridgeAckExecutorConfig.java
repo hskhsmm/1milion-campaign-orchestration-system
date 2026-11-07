@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.config;
 
+import org.springframework.context.annotation.Conditional;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -11,6 +12,7 @@ import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
 
 @Configuration
+@Conditional(CampaignRole.BackgroundWork.class)
 public class BridgeAckExecutorConfig {
 
     /** Kafka 완료 스레드에서 동기 Redis ACK를 실행하지 않도록 격리한다. */

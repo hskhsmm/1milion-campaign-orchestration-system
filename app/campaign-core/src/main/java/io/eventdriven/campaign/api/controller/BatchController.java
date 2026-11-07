@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.api.controller;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.api.common.ApiResponse;
 import io.eventdriven.campaign.api.exception.business.BatchAlreadyExecutedException;
 import io.eventdriven.campaign.api.exception.business.InvalidDateRangeException;
@@ -7,6 +8,7 @@ import io.eventdriven.campaign.config.BatchProperties;
 import io.eventdriven.campaign.domain.repository.CampaignStatsRepository;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.JobInstance;
@@ -37,6 +39,7 @@ import java.util.stream.Collectors;
  */
 @Slf4j
 @RestController
+@Conditional(CampaignRole.HttpApi.class)
 @RequestMapping("/api/admin/batch")
 @RequiredArgsConstructor
 @SuppressWarnings("removal")

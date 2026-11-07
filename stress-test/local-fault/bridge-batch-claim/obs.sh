@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 사용: obs.sh <campaignId> [label]  — Redis·DB·Kafka·앱 지표 한 줄 요약
+# 사용: [OBS_APP_URL=http://127.0.0.1:18081] obs.sh <campaignId> [label]  — Redis·DB·Kafka·앱 지표 한 줄 요약
 set -u
 cd "$(dirname "$0")"
 id=$1; label=${2:-}
@@ -12,8 +12,9 @@ db=$(q "select count(*), count(distinct user_id), count(sequence), count(distinc
 dlq=$(q "select count(*) from dlq_message where campaign_id=$id" || echo "?")
 lag=$(docker compose exec -T kafka kafka-consumer-groups --bootstrap-server kafka:29092 --describe --group campaign-participation-group 2>/dev/null | awk 'NR>1 && $6 ~ /^[0-9]+$/ {s+=$6} END {print s+0}')
 m=""
-if curl -sf -m 2 http://127.0.0.1:18080/actuator/health >/dev/null 2>&1; then
-  m=$(curl -s -m 5 http://127.0.0.1:18080/actuator/prometheus | awk '
+app_url=${OBS_APP_URL:-http://127.0.0.1:18080}
+if curl -sf -m 2 "$app_url/actuator/health" >/dev/null 2>&1; then
+  m=$(curl -s -m 5 "$app_url/actuator/prometheus" | awk '
     /^bridge_claim_events_total/ {ev=$NF}
     /^bridge_claim_calls_total.*result="claimed"/ {cc=$NF}
     /^bridge_claim_ack_results_total.*result="removed"/ {ar=$NF}

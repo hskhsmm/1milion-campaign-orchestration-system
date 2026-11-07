@@ -11,14 +11,30 @@ terraform_dir: "{{ playbook_dir }}/../../infra"
 
 app_asg:
   name: batch-kafka-app-asg
+  worker_name: batch-kafka-worker-asg
+  layout_parameter: /batch-kafka/prod/CAMPAIGN_LAYOUT
+  deployment_app: batch-kafka-app
+  deployment_group: batch-kafka-prod-dg
   down:
     min_size: 0
     max_size: 0
     desired_capacity: 0
-  up:
-    min_size: 2
-    max_size: 3
-    desired_capacity: 2
+  layouts:
+    combined:
+      app: {min_size: 2, max_size: 4, desired_capacity: 3}
+      worker: {min_size: 0, max_size: 0, desired_capacity: 0}
+    combined-fixed:
+      app: {min_size: 3, max_size: 3, desired_capacity: 3}
+      worker: {min_size: 0, max_size: 0, desired_capacity: 0}
+    split:
+      app: {min_size: 2, max_size: 3, desired_capacity: 2}
+      worker: {min_size: 1, max_size: 1, desired_capacity: 1}
+    split-fixed:
+      app: {min_size: 2, max_size: 2, desired_capacity: 2}
+      worker: {min_size: 1, max_size: 1, desired_capacity: 1}
+
+app_layout: "{{ lookup('env', 'APP_LAYOUT') | default('combined', true) }}"
+app_role_deployment_id: "{{ lookup('env', 'APP_ROLE_DEPLOYMENT_ID') }}"
 
 ec2_instances:
   kafka:

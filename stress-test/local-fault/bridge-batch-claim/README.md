@@ -5,6 +5,7 @@
 | 파일 | 용도 |
 | --- | --- |
 | `compose-kill.yml` | 앱 강제 종료 시험. Redis Cluster 3 primary(replica 없음). 앱 이미지 `bbc-kill-app:local`을 작업 트리에서 빌드 |
+| `compose-split.yml` | `compose-kill.yml`에 덧붙여 API(18080)와 워커(18081)를 같은 이미지로 분리 |
 | `compose-failover.yml` | failover 시험. Redis Cluster 3 primary + 3 replica. 위 이미지를 재사용 |
 | `lib.sh` | helper: 살아 있는 노드로 redis-cli, 캠페인 슬롯의 primary 찾기, 캠페인 생성, 병렬 요청, Kafka offset 합 |
 | `obs.sh <campaignId> [label]` | 한 줄 관측: Queue LLEN, in-flight ZCARD, DB(행·고유 사용자·순번·고유 순번·SUCCESS), DLQ, lag, 앱 claim/발행/ACK/reclaim 지표 |
@@ -36,6 +37,30 @@ docker compose start app
 # 실제 lease 5분 경과 후 reclaim. 10초마다 obs.sh로 Queue/in-flight 0, DB 100 확인
 ./obs.sh $id final; echo "$offsets_before → $(topic_offsets)"
 ```
+
+## API·워커 분리 후 종료 시험
+
+앱과 워커에서 같은 이미지가 실행되는지 확인한다. 참여 요청은 API에만 보내고 워커의 18081 포트는 헬스·메트릭 조회에 사용한다. 각 시험은 새 캠페인을 만들고 앞 시험의 드레인이 끝난 뒤 시작한다.
+
+```sh
+cd stress-test/local-fault/bridge-batch-claim
+export COMPOSE_FILE=compose-kill.yml:compose-split.yml
+export COMPOSE_PROJECT_NAME=bbc-role
+docker compose build app
+docker compose up -d --no-build
+source lib.sh
+curl -fsS http://127.0.0.1:18080/actuator/health
+curl -fsS http://127.0.0.1:18081/actuator/health
+docker inspect -f '{{.Image}}' "$(docker compose ps -q app)" "$(docker compose ps -q worker)"
+```
+
+1. 정상 경로가 끝난 뒤 `docker compose stop worker`로 SIGTERM을 보낸다. 종료 코드는 `docker inspect -f '{{.State.ExitCode}}' "$(docker compose ps -aq worker)"`에서 확인한다. 137이면 시간 내 종료에 실패한 것이다.
+2. 워커가 내려간 동안 새 캠페인에 참여한다. API의 `202` 수만큼 Queue에 쌓이고 in-flight와 DB는 0이어야 한다. `docker compose start worker` 뒤 DB 반영과 드레인을 확인한다.
+3. 강제 종료는 새 캠페인에서 Kafka offset을 기록한 뒤 Kafka를 잠깐 멈춘다. API로 접수한 이벤트가 in-flight에 남은 것을 확인한 뒤 `docker compose kill -s SIGKILL worker`를 실행한다. 종료 코드 137과 in-flight 보존을 확인한다. 워커가 없는 동안 같은 캠페인에 추가 요청을 넣어 Queue에 보관되는지도 본다.
+4. Kafka를 먼저 시작하고 워커를 기동한다. 추가로 접수한 Queue 이벤트가 먼저 반영되고, 기존 in-flight는 5분 lease 만료 후 워커가 다시 가져간다. `docker compose logs worker`에서 reclaim 로그를 확인한다.
+5. `OBS_APP_URL=http://127.0.0.1:18081 bash ./obs.sh <campaignId> final`과 Kafka offset 차이를 함께 기록한다. 모든 사용자·순번이 DB에 한 번씩 반영됐는지, Queue·in-flight·lag와 DLQ가 모두 0인지 확인한다. Kafka는 재발행 중복이 가능하므로 offset 차이는 DB의 최종 유일 건수와 별도로 기록한다.
+
+시험을 마치면 `docker compose down -v`로 이 로컬 시험 프로젝트만 정리한다.
 
 ## failover (보고서 6장)
 
