@@ -1,5 +1,6 @@
 package io.eventdriven.campaign.application.bridge;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.application.event.ParticipationEvent;
 import io.eventdriven.campaign.application.service.RedisStockService;
 import io.eventdriven.campaign.config.KafkaConfig;
@@ -7,6 +8,7 @@ import io.micrometer.core.instrument.Counter;
 import io.micrometer.core.instrument.MeterRegistry;
 import io.micrometer.core.instrument.Timer;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.kafka.core.KafkaTemplate;
 import org.springframework.kafka.support.SendResult;
@@ -28,6 +30,7 @@ import java.util.concurrent.Executor;
 
 @Slf4j
 @Component
+@Conditional(CampaignRole.BackgroundWork.class)
 public class ParticipationBridge {
 
     private static final String ACTIVE_CAMPAIGNS_KEY = "active:campaigns";

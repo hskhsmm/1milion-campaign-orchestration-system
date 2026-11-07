@@ -1,17 +1,20 @@
 package io.eventdriven.campaign.api.controller;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.eventdriven.campaign.api.common.ApiResponse;
 import io.eventdriven.campaign.api.dto.request.CampaignCreateRequest;
 import io.eventdriven.campaign.api.dto.response.CampaignResponse;
 import io.eventdriven.campaign.application.service.CampaignService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.List;
 
 @RestController
+@Conditional(CampaignRole.HttpApi.class)
 @RequestMapping("/api/admin/campaigns")
 @RequiredArgsConstructor
 public class AdminController {

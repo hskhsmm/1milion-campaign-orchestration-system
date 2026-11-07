@@ -1,7 +1,9 @@
 package io.eventdriven.campaign.batch;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.batch.core.job.Job;
 import org.springframework.batch.core.job.JobExecution;
 import org.springframework.batch.core.job.parameters.InvalidJobParametersException;
@@ -19,6 +21,7 @@ import java.time.LocalDate;
 
 @Slf4j
 @Component
+@Conditional(CampaignRole.ScheduledBatch.class)
 @RequiredArgsConstructor
 @SuppressWarnings("removal")
 public class BatchScheduler {

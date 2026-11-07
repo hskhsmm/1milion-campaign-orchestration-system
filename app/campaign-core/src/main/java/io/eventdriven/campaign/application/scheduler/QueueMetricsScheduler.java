@@ -1,9 +1,11 @@
 package io.eventdriven.campaign.application.scheduler;
 
+import io.eventdriven.campaign.config.CampaignRole;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.context.annotation.Conditional;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -28,6 +30,7 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 @Component
+@Conditional(CampaignRole.BackgroundWork.class)
 @RequiredArgsConstructor
 public class QueueMetricsScheduler {
 
