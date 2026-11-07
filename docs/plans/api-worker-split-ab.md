@@ -23,10 +23,11 @@
 | 실행 경로 | combined | api | worker |
 | --- | --- | --- | --- |
 | 참여·캠페인·수동 배치 관리 HTTP | 켜짐 | 켜짐 | 꺼짐 |
-| Bridge·Kafka Consumer·Queue 지표 스케줄러 | 켜짐 | 꺼짐 | 켜짐 |
+| Bridge·Kafka Consumer | 켜짐 | 꺼짐 | 켜짐 |
+| Redis Queue 지표 수집 | 켜짐 | 켜짐 | 켜짐 |
 | 정기 집계·배치 메타데이터 정리 | 기본 켜짐 | 꺼짐 | 기본 꺼짐 |
 
-워커의 Actuator는 헬스 체크와 지표 수집에 사용한다. 정기 배치는 `CAMPAIGN_SCHEDULED_BATCH_ENABLED=true`를 지정한 워커 한 대에서 실행할 수 있다. 분리 구성의 공용 워커 설정에 이 값을 켜면 워커마다 같은 정기 작업을 등록하므로, 필요하면 단일 실행 대상을 지정한다. A/B에서는 양쪽 모두 `CAMPAIGN_SCHEDULED_BATCH_ENABLED=false`로 맞춘다.
+워커의 Actuator는 헬스 체크와 지표 수집에 사용한다. API와 워커의 Actuator를 모두 Prometheus에서 수집하고, 같은 Redis Queue를 여러 앱이 읽으므로 `max by (campaignId) (redis_queue_size)`로 집계한다. 분리 구성에서는 워커 중단 중에도 API에서 Queue 지표가 갱신되는지 확인한다. 정기 배치는 `CAMPAIGN_SCHEDULED_BATCH_ENABLED=true`를 지정한 워커 한 대에서 실행할 수 있다. 분리 구성의 공용 워커 설정에 이 값을 켜면 워커마다 같은 정기 작업을 등록하므로, 필요하면 단일 실행 대상을 지정한다. A/B에서는 양쪽 모두 `CAMPAIGN_SCHEDULED_BATCH_ENABLED=false`로 맞춘다.
 
 ## 실행 순서
 

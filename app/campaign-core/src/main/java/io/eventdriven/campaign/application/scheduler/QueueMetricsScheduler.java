@@ -1,11 +1,9 @@
 package io.eventdriven.campaign.application.scheduler;
 
-import io.eventdriven.campaign.config.CampaignRole;
 import io.micrometer.core.instrument.Gauge;
 import io.micrometer.core.instrument.MeterRegistry;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.springframework.context.annotation.Conditional;
 import org.springframework.data.redis.core.RedisTemplate;
 import org.springframework.scheduling.annotation.Scheduled;
 import org.springframework.stereotype.Component;
@@ -21,6 +19,8 @@ import java.util.concurrent.ConcurrentHashMap;
  * 10초 주기로 active:campaigns를 순회하며 각 캠페인 Queue의 LLEN을 Gauge로 기록.
  * Gauge는 현재 시점의 값을 반환하는 메트릭 → Queue 적재량 모니터링에 적합.
  *
+ * 워커가 중단돼도 적재량을 관측할 수 있도록 API에서도 실행한다.
+ *
  * Prometheus 메트릭명: redis_queue_size{campaignId="1"}
  *
  * Gauge 사용 이유:
@@ -30,7 +30,6 @@ import java.util.concurrent.ConcurrentHashMap;
  */
 @Slf4j
 @Component
-@Conditional(CampaignRole.BackgroundWork.class)
 @RequiredArgsConstructor
 public class QueueMetricsScheduler {
 

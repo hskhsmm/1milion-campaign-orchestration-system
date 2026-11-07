@@ -163,7 +163,7 @@ class CampaignRoleTest {
 
                 assertThat(context.containsBean("participationBridge")).isEqualTo(background);
                 assertThat(context.containsBean("participationEventConsumer")).isEqualTo(background);
-                assertThat(context.containsBean("queueMetricsScheduler")).isEqualTo(background);
+                assertThat(context).hasSingleBean(QueueMetricsScheduler.class);
                 assertThat(context.containsBean("bridgeAckExecutor")).isEqualTo(background);
                 assertThat(context.containsBean("consumerFactory")).isEqualTo(background);
                 assertThat(context.containsBean("kafkaListenerContainerFactory")).isEqualTo(background);
