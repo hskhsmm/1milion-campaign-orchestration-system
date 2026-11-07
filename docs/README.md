@@ -8,6 +8,7 @@
 | --- | --- |
 | 전체 서비스 구조와 요청 흐름 | [아키텍처](../ARCHITECTURE.md) |
 | 지금까지의 성과·다음 개선·하네스/API 자동화 범위 | [성능 개선 중간 정리](plans/performance-next-steps.md) |
+| 앱 3대에서 API·워커 분리를 비교하는 조건과 채택 기준 | [API·워커 분리 A/B 계획](plans/api-worker-split-ab.md) |
 | 하네스 구축과 성능 개선 순서 | [성능·관측 하네스 계획](plans/performance-harness.md) |
 | Bridge Redis·Kafka 병목 계측과 로컬 시험 | [Bridge 관측 가이드](runbooks/bridge-observability.md) |
 | Bridge batch claim 설계·비교 계획 (AWS 비교 완료, 결과는 [11-04 종합](reports/2026-11-04-ops-batch-claim-ack.md)) | [batch claim 설계](plans/bridge-batch-claim.md) |
