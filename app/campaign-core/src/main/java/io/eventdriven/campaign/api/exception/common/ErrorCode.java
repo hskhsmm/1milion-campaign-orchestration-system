@@ -25,6 +25,7 @@ public enum ErrorCode {
     STOCK_EXHAUSTED(HttpStatus.BAD_REQUEST, "PARTICIPATION_004", "재고가 소진되었습니다."),
     PARTICIPATION_SERVICE_UNAVAILABLE(HttpStatus.SERVICE_UNAVAILABLE, "PARTICIPATION_005", "일시적으로 참여 처리에 실패했습니다."),
     QUEUE_FULL(HttpStatus.TOO_MANY_REQUESTS, "PARTICIPATION_006", "처리 큐가 가득 찼습니다. 잠시 후 다시 시도해주세요."),
+    PARTICIPATION_RESULT_UNKNOWN(HttpStatus.SERVICE_UNAVAILABLE, "PARTICIPATION_007", "참여 처리 결과를 확인하지 못했습니다. 같은 요청으로 다시 시도해주세요."),
 
 
     // 배치 관련
