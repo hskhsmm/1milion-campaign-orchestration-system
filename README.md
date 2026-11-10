@@ -660,7 +660,7 @@ MCP 도구로 지표와 테스트 결과를 조회하고, AI를 활용해 원인
 
 | 분류 | 기술 | 선택 이유 |
 |------|------|-----------|
-| **Language** | Java 25 (Virtual Thread) | 스레드 풀 고갈 없이 수천 개 동시 요청 처리 |
+| **Language** | Java 25 (Virtual Thread) | 스레드 풀 고갈 없이 수천 개 동시 요청 처리. 2 vCPU 서버에서는 기본 캐리어 수(2개)로 콜드 스타트 타임아웃, 고부하에서는 끔보다 느림을 확인해 [끔으로 재검증 중](docs/reports/2026-11-09-redis-timeout-cause.md) |
 | **Framework** | Spring Boot 4.0.x | Spring 생태계, Actuator 메트릭 연동 |
 | **Message Queue** | Apache Kafka (KRaft, 3-broker) | 영속 로그, 재처리 기준, RF=3 내결함성 |
 | **Cache/Queue** | Redis ElastiCache CME (3샤드) | 인메모리 원자적 재고 차감, API 버퍼 |
