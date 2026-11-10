@@ -235,7 +235,7 @@ bash ./run-test.sh prod capacity
 
 `participation_5xx`는 응답 상태 500~599만 센다. 타임아웃·연결 실패는 상태 0이라 포함되지 않으므로 5xx 0건이 오류 없음을 뜻하지 않는다. `http_req_failed`와 예상 밖 응답도 함께 확인한다.
 
-현재 스크립트의 `P95_MS=1000`, `MAX_FAIL_RATE=0.01`은 k6 실행용 기본 threshold이지 검증된 운영 SLO나 안전 한계가 아니다. `http_req_duration`은 참여 API의 202만 따로 집계한 값도 아니다. threshold 위반과 최종 시스템 판정을 동일시하지 않는다.
+현재 스크립트의 `P95_MS=1000`, `MAX_FAIL_RATE=0.01`은 k6 실행용 기본 threshold이지 검증된 운영 SLO나 안전 한계가 아니다. `http_req_duration`은 참여 API의 202만 따로 집계한 값도 아니다. threshold 위반과 최종 시스템 판정을 동일시하지 않는다. 특히 최댓값에는 시험 끝 `teardown`의 `/status` 호출이 포함되어 15~22초까지 나온다. 참여 요청의 최대 지연은 `iteration_duration`이나 `api_duration_ms`로 본다. 서버 지표의 p99는 Tomcat 스레드 대기 시간을 포함하지 않으므로 스레드 모델이 다른 구성끼리 비교할 때는 k6 값과 함께 본다.
 
 "지속 가능한 처리량"을 확정하려면 먼저 목표 지연·오류율과 관측 구간을 합의한 뒤, 같은 조건에서 반복한다. 목표 부하가 실제로 생성되고(`dropped_iterations=0`), 합의한 지연·오류 기준을 지키며, 안정 구간의 Queue·lag가 발산하지 않고 DB 처리량이 접수량을 따라가고, 종료 후 drain·정합성이 확인된 **가장 높은 검증 RPS**만 그렇게 부른다. 이 조건이나 증거가 부족하면 `미확정`으로 남긴다. Redis Queue의 250만 건 상한 또는 70%·85% 알림값을 성능 합격선으로 사용하지 않는다.
 
