@@ -217,6 +217,33 @@ class ParticipationEventConsumerTest {
         assertThat(meterRegistry.get("consumer.db.committed").counter().count()).isEqualTo(1D);
     }
 
+    @Test
+    @DisplayName("같은 캠페인·사용자가 한 배치에 두 번 오면 첫 건만 INSERT하고 배치를 ACK한다(MySQL 1869 무한 재시도 방지)")
+    void inBatchDuplicate_insertsFirstOnlyAndAcks() throws Exception {
+        // 11-11 실측: Bridge 재발행 사본이 원본과 같은 100건 묶음에 들어 rewrite된 한 INSERT가 1869로 거부되던 형태
+        List<ConsumerRecord<String, String>> records = new ArrayList<>();
+        when(jsonMapper.readValue("orig", ParticipationEvent.class)).thenReturn(new ParticipationEvent(497L, 352691L, 249046L));
+        when(jsonMapper.readValue("other", ParticipationEvent.class)).thenReturn(new ParticipationEvent(497L, 352654L, 249026L));
+        when(jsonMapper.readValue("copy", ParticipationEvent.class)).thenReturn(new ParticipationEvent(497L, 352691L, 249046L));
+        records.add(record("352691", "orig"));
+        records.add(record("352654", "other"));
+        records.add(record("352691", "copy"));
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<List<Object[]>> args = ArgumentCaptor.forClass(List.class);
+
+        consumer.consumeParticipationEvent(records, acknowledgment);
+
+        verify(jdbcTemplate).batchUpdate(anyString(), args.capture());
+        assertThat(args.getValue()).hasSize(2);
+        assertThat(args.getValue().get(0)).containsExactly(497L, 352691L, 249046L);
+        assertThat(args.getValue().get(1)).containsExactly(497L, 352654L, 249026L);
+        verify(acknowledgment).acknowledge();
+        verify(acknowledgment, never()).nack(anyInt(), any(Duration.class));
+        verify(dlqMessageService, never()).publishAndStore(any());
+        assertThat(meterRegistry.get("consumer.batch.in_batch_duplicates").counter().count()).isEqualTo(1D);
+        assertThat(meterRegistry.get("consumer.db.committed").counter().count()).isEqualTo(3D);
+    }
+
     private List<ConsumerRecord<String, String>> givenValidRecords(int count) throws Exception {
         List<ConsumerRecord<String, String>> records = new ArrayList<>();
         for (long i = 1; i <= count; i++) {

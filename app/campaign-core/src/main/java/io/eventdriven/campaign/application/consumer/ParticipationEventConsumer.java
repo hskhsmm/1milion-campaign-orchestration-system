@@ -23,7 +23,10 @@ import tools.jackson.databind.json.JsonMapper;
 
 import java.time.Duration;
 import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.HashSet;
 import java.util.List;
+import java.util.Set;
 import java.util.concurrent.TimeUnit;
 
 /**
@@ -60,6 +63,7 @@ public class ParticipationEventConsumer {
     private static final String METRIC_DB_COMMIT_BATCH_SIZE = "consumer.db.commit.batch.size";
     private static final String METRIC_DB_TRANSIENT_FAILURE = "consumer.db.transient.failures";
     private static final String METRIC_BATCH_RETRIED = "consumer.batch.retried";
+    private static final String METRIC_IN_BATCH_DUPLICATES = "consumer.batch.in_batch_duplicates";
 
     @KafkaListener(
             topics = "campaign-participation-topic",
@@ -105,9 +109,23 @@ public class ParticipationEventConsumer {
     private int storeEvents(List<ParticipationEvent> events, List<DlqEventPayload> dlqPayloads,
             java.util.Map<ParticipationEvent, ConsumerRecord<String,String>> origins) {
         try {
+            // 같은 (campaign_id, user_id)가 한 배치에 두 번 오면(Bridge 재발행 사본이 원본과 같은 poll에 든 경우)
+            // rewriteBatchedStatements=true로 합쳐진 한 INSERT 안에서 방금 만든 행에 ON DUPLICATE KEY UPDATE id = id가
+            // 걸려 MySQL 1869(Auto-increment value in UPDATE conflicts with internally generated values)로 배치 전체가 거부된다.
+            // 메시지 탓이 아니고 재시도해도 같은 배치가 오므로 무한 nack에 빠진다. 고유 키 기준 첫 건만 보낸다.
             List<Object[]> batchArgs = new ArrayList<>(events.size());
+            Set<List<Long>> seen = new HashSet<>();
             for (ParticipationEvent event : events) {
-                batchArgs.add(new Object[]{event.getCampaignId(), event.getUserId(), event.getSequence()});
+                if (seen.add(Arrays.asList(event.getCampaignId(), event.getUserId()))) {
+                    batchArgs.add(new Object[]{event.getCampaignId(), event.getUserId(), event.getSequence()});
+                }
+            }
+            int inBatchDuplicates = events.size() - batchArgs.size();
+            if (inBatchDuplicates > 0) {
+                incrementCounter(METRIC_IN_BATCH_DUPLICATES, "Duplicate participation events within one consumer batch",
+                        inBatchDuplicates);
+                log.warn("Dropped in-batch duplicate participation events before insert. duplicates={}, batch={}",
+                        inBatchDuplicates, events.size());
             }
             jdbcTemplate.batchUpdate(INSERT_SUCCESS_SQL, batchArgs);
             return events.size();
