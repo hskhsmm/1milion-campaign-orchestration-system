@@ -23,6 +23,13 @@ management:
         enabled: true
 
 spring:
+  # 운영(t3.small, 2 vCPU)은 가상 스레드를 끈다. 켬은 CPU 포화 시 캐리어 대기·동시 처리 무제한으로
+  # Redis 타임아웃·메모리 고갈 동결이 났고, 끔(Tomcat 스레드 200)만 콜드 3,000·예열 5,000·150만 건을 통과했다.
+  # 근거: docs/reports/2026-11-09-redis-timeout-cause.md, docs/reports/2026-11-11-performance-investigation-summary.md
+  threads:
+    virtual:
+      enabled: false
+
   datasource:
     hikari:
       maximum-pool-size: 20
