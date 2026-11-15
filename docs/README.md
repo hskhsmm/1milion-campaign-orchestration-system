@@ -8,7 +8,7 @@
 | --- | --- |
 | 전체 서비스 구조와 요청 흐름 | [아키텍처](../ARCHITECTURE.md) |
 | 지금까지의 성과·다음 개선·하네스/API 자동화 범위 | [성능 개선 중간 정리](plans/performance-next-steps.md) |
-| 앱 3대에서 API·워커 분리를 비교하는 조건과 채택 기준 | [API·워커 분리 A/B 계획](plans/api-worker-split-ab.md) |
+| 앱 3대에서 API·워커 분리를 비교하는 조건과 채택 기준 | [API·워커 분리 A/B 계획](plans/api-worker-split-ab.md) · [2차 계획 (가상 스레드 끔)](plans/api-worker-split-ab-vt-off.md) |
 | 하네스 구축과 성능 개선 순서 | [성능·관측 하네스 계획](plans/performance-harness.md) |
 | Bridge Redis·Kafka 병목 계측과 로컬 시험 | [Bridge 관측 가이드](runbooks/bridge-observability.md) |
 | Bridge batch claim 설계·비교 계획 (AWS 비교 완료, 결과는 [11-04 종합](reports/2026-11-04-ops-batch-claim-ack.md)) | [batch claim 설계](plans/bridge-batch-claim.md) |
@@ -26,6 +26,8 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-09~10 | 가상 스레드 부하의 Redis 타임아웃·서버 동결: 원인은 캐리어 수(기본 2) 부족, 캐리어·Tomcat 캐시·동시 처리 상한 비교, 5xx 사용자 DB 대조, 응답 수정. t3.small은 가상 스레드 끔으로 결정 | [타임아웃 원인 조사](reports/2026-11-09-redis-timeout-cause.md) |
+| 2026-11-09 | API·워커 분리 A/B 1차 결과: 현재 설정의 B는 기준 미달, 기동 직후 5xx·DB 초과 관측, Bridge 회차 한도 | [API·워커 분리 A/B 결과](reports/2026-11-09-api-worker-split-ab.md) |
 | 2026-11-07 | API·워커 분리 후 로컬 정상·강제 종료와 재기동 복구 | [API·워커 종료 검증](reports/2026-11-07-api-worker-local-recovery.md) |
 | 2026-11-04 | **오늘 작업 종합**: 운영 N=1·10 비교(적용 전 A/B), N=10 ACK 병목과 묶음 ACK 수정·로컬 검증·운영 재시험, ElastiCache failover, scale-out, 다음 작업 | [11-04 작업 종합](reports/2026-11-04-ops-batch-claim-ack.md) |
 | 2026-11-04 | (부록) 묶음 ACK 코드 변경 상세·시험 목록·지표 해석 | [Bridge ACK 묶음 처리](reports/2026-11-04-bridge-ack-batch.md) |
