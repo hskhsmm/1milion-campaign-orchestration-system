@@ -208,7 +208,8 @@ resource "aws_instance" "kafka_1" {
 
   root_block_device {
     volume_type = "gp3"
-    volume_size = 8
+    # 2026-11-11 디스크 고갈 복구 때 콘솔에서 8 → 10GB로 늘렸다(EBS는 줄일 수 없음). 실제 크기와 맞춘다.
+    volume_size = 10
     encrypted   = false
   }
 

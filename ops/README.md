@@ -127,7 +127,7 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 | App ASG | `batch-kafka-app-asg`, `aws_autoscaling_group.app` | ALB 연결. 기본 기동 3대, 최소 2대, 최대 4대 |
 | Worker ASG | `batch-kafka-worker-asg`, `aws_autoscaling_group.worker` | 분리 구성에서만 1대. ALB 연결 없이 같은 이미지로 Bridge와 Kafka Consumer 실행 |
 | ALB/Listener | `alb-batch-kafka-api`, `aws_lb.main[0]`, `aws_lb_listener.http[0]` | 앱 ASG가 0대가 된 뒤 삭제, 앱 기동 전에 재생성 |
-| Kafka brokers | `kafka-1`, `kafka-2`, `kafka-3` | EC2 start/stop |
+| Kafka brokers | `kafka-1`, `kafka-2`, `kafka-3` | EC2 start/stop. 참여 토픽 보관 제한은 `ops/scripts/kafka-topic-retention.sh`로 적용(아래 "Kafka 보관 제한") |
 | Monitoring/MCP | `terraform-mcp`, `aws_instance.terraform_mcp` | EC2 start/stop, SSM SendCommand로 redis-exporter 재기동 |
 | RDS MySQL | `batch-kafka-db`, `aws_db_instance.batch_kafka_db` | RDS start/stop |
 | Redis/Valkey | `batch-kafka-redis`, `aws_elasticache_replication_group.redis` | 비용 절감을 위해 Terraform targeted destroy/apply |
@@ -136,6 +136,20 @@ ANSIBLE_CONFIG=./ansible.cfg ansible-playbook -i inventory/localhost.yml playboo
 | Bridge claim 묶음 SSM (선택) | `/batch-kafka/prod/BRIDGE_CLAIM_BATCH_SIZE` | Terraform 밖에서 수동 관리. 1~50, 없으면 기본 1. 바꾼 뒤 재배포해야 반영 ([계획 7장](../docs/plans/bridge-batch-claim.md)) |
 
 기본 리전은 `ap-northeast-2`다.
+
+## Kafka 보관 제한
+
+브로커 기본값(`log.retention.hours=168`, `segment.bytes=1GB`)으로는 부하 시험 데이터가 거의 지워지지 않는다. 2026-11-11 이틀 시험으로 루트 8GB 디스크가 차서 `kafka-1`이 멈췄다(`min.insync.replicas=2`라 한 대 더 멈추면 발행 전체가 멈춘다). 참여 토픽에만 보관 제한을 건다.
+
+```bash
+bash ops/scripts/kafka-topic-retention.sh           # 현재 설정 조회
+bash ops/scripts/kafka-topic-retention.sh --apply   # 1일·파티션당 300MB·세그먼트 100MB 적용
+```
+
+- 브로커 한 대가 파티션 10개를 모두 들고 있으므로 브로커당 최대 약 4GB다.
+- 파티션당 300MB를 넘으면 **소비되지 않은 메시지도 지워진다.** 약 600만 건/파티션 밀림까지 버티는 크기이므로, Consumer가 오래 멈춘 상태로 대량 부하를 주지 않는다.
+- 토픽을 다시 만들면 설정이 사라지므로 다시 적용한다. DLQ 토픽은 재처리용이라 그대로 둔다.
+- 디스크 사용량 확인: `df -h /`(브로커), 데이터 위치 `/home/ssm-user/kafka-data`.
 
 ## 종료 흐름
 
