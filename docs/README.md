@@ -26,6 +26,9 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-07~11 | **종합**: 가상 스레드 끔 결정, 켬이 고부하에서 무너지는 이유, 분리 A/B 2차, Consumer 장애, 측정 도구 영향을 한 장으로 | [성능·안정성 조사 종합](reports/2026-11-11-performance-investigation-summary.md) |
+| 2026-11-11 | Consumer 무한 재시도 장애: Bridge 재발행 사본이 같은 배치에 들어가 MySQL 1869 → 무한 nack. 원인 확정·재현, 배치 안 중복 제거 수정, AWS 장애 주입 A/B로 검증(미반영 201 → 0). Kafka 디스크 고갈 함께 기록 | [Consumer 묶음 중복 장애](reports/2026-11-11-consumer-in-batch-duplicate-stall.md) |
+| 2026-11-11 | API·워커 분리 A/B 2차(가상 스레드 끔): B는 기준 3개 모두 미달, 공용 3대 유지. 원인 = 워커 1대 Bridge 발행 상한(약 3,460건/s)과 느린 서버 1대의 비중 증가 | [A/B 2차 결과](reports/2026-11-11-api-worker-split-ab-vt-off.md) |
 | 2026-11-09~10 | 가상 스레드 부하의 Redis 타임아웃·서버 동결: 원인은 캐리어 수(기본 2) 부족, 캐리어·Tomcat 캐시·동시 처리 상한 비교, 5xx 사용자 DB 대조, 응답 수정. t3.small은 가상 스레드 끔으로 결정 | [타임아웃 원인 조사](reports/2026-11-09-redis-timeout-cause.md) |
 | 2026-11-09 | API·워커 분리 A/B 1차 결과: 현재 설정의 B는 기준 미달, 기동 직후 5xx·DB 초과 관측, Bridge 회차 한도 | [API·워커 분리 A/B 결과](reports/2026-11-09-api-worker-split-ab.md) |
 | 2026-11-07 | API·워커 분리 후 로컬 정상·강제 종료와 재기동 복구 | [API·워커 종료 검증](reports/2026-11-07-api-worker-local-recovery.md) |
