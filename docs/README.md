@@ -26,6 +26,7 @@
 
 | 날짜 | 주제 | 문서 |
 | --- | --- | --- |
+| 2026-11-15 | 공용 3대에서 150만 건 두 차례 정합성 통과, 클라이언트 p95 약 1.12초, Redis 메모리 및 #125 후속 과제 | [150만 건 정합성 재검증](reports/2026-11-15-150m-stability-validation.md) |
 | 2026-11-07~11 | **종합**: 가상 스레드 끔 결정, 켬이 고부하에서 무너지는 이유, 분리 A/B 2차, Consumer 장애, 측정 도구 영향을 한 장으로 | [성능·안정성 조사 종합](reports/2026-11-11-performance-investigation-summary.md) |
 | 2026-11-11 | Consumer 무한 재시도 장애: Bridge 재발행 사본이 같은 배치에 들어가 MySQL 1869 → 무한 nack. 원인 확정·재현, 배치 안 중복 제거 수정, AWS 장애 주입 A/B로 검증(미반영 201 → 0). Kafka 디스크 고갈 함께 기록 | [Consumer 묶음 중복 장애](reports/2026-11-11-consumer-in-batch-duplicate-stall.md) |
 | 2026-11-11 | API·워커 분리 A/B 2차(가상 스레드 끔): B는 기준 3개 모두 미달, 공용 3대 유지. 원인 = 워커 1대 Bridge 발행 상한(약 3,460건/s)과 느린 서버 1대의 비중 증가 | [A/B 2차 결과](reports/2026-11-11-api-worker-split-ab-vt-off.md) |
