@@ -2,7 +2,6 @@
 # terraform-mcp에서 systemd 서비스로 실행한다. 설정 값은 상위 실행기가 전달한다.
 set -euo pipefail
 source ./run.env
-export PATH="/usr/local/bin:$PATH"
 export CAMPAIGN_ID TOTAL_REQUESTS MAX_VUS DURATION BASE_URL
 export CONFIRM_BASE_URL_OVERRIDE=true LOG_EVERY=0
 export K6_SUMMARY_EXPORT="$PWD/k6-summary.json"

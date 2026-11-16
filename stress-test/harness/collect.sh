@@ -62,7 +62,7 @@ prom_final() {
 
 verify_loadgen() {
   ssm_run "$MCP" "set -e
-export PATH=/usr/local/bin:\$PATH
+export PATH=$LOADGEN_PATH
 cd $LOADGEN_REPO
 git -c safe.directory=$LOADGEN_REPO rev-parse HEAD
 k6 version

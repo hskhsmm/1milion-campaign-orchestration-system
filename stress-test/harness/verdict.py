@@ -98,6 +98,11 @@ def prom_scalar(doc):
         raise Missing("Prometheus 단일 숫자 증거가 유효하지 않음") from e
 
 
+def status_count(status, key):
+    value = status.get(key)
+    return value if type(value) is int and value >= 0 else None
+
+
 def fmt_ts(epoch):
     return datetime.fromtimestamp(epoch, KST).strftime("%H:%M:%S")
 
@@ -181,6 +186,7 @@ def evaluate(evid):
 
     # ---- k6 ----
     accepted = None
+    integrity_target_met = False
     try:
         metrics = load_json(evid, "k6-summary.json")["metrics"]
         fivexx = k6_count(metrics, "participation_5xx")
@@ -196,6 +202,7 @@ def evaluate(evid):
             elif accepted != total:
                 add("k6_target", FAIL, f"participation_success {accepted} ≠ TOTAL_REQUESTS {total}", "k6-summary.json")
             else:
+                integrity_target_met = True
                 add("k6_target", OK, f"participation_success {accepted}", "k6-summary.json")
             if fivexx or k6_fail or failed:
                 add("k6_errors", FAIL, f"5xx {fivexx}, participation_fail {k6_fail}, http_req_failed {failed}", "k6-summary.json")
@@ -313,14 +320,21 @@ def evaluate(evid):
 
     # ---- DB·상태 API ----
     try:
-        db = read_db_counts(evid, live)
         status = load_json(evid, "status.json")["data"]
-        api_success = status.get("successCount")
-        counts = {"k6 202": accepted, "status API": api_success, "DB SUCCESS": db["success_count"]}
-        if accepted is None:
-            add("db_counts", INCONCLUSIVE, f"k6 접수 건수가 없어 비교 불가: {counts}", "db-counts.txt, status.json")
-        elif len(set(counts.values())) != 1 or db["total_rows"] != db["success_count"]:
+    except (Missing, KeyError, TypeError):
+        status = {}
+    if not isinstance(status, dict):
+        status = {}
+
+    try:
+        db = read_db_counts(evid, live)
+        counts = {"k6 202": accepted, "status API": status_count(status, "successCount"), "DB SUCCESS": db["success_count"]}
+        known = {value for value in counts.values() if value is not None}
+        missing = [name for name, value in counts.items() if value is None]
+        if len(known) > 1 or db["total_rows"] != db["success_count"]:
             add("db_counts", FAIL, f"건수 불일치: {counts}, DB 전체 행 {db['total_rows']}", "db-counts.txt, status.json")
+        elif missing:
+            add("db_counts", INCONCLUSIVE, f"건수 증거 누락: {', '.join(missing)}", "db-counts.txt, status.json")
         else:
             add("db_counts", OK, f"k6 202 = status API = DB SUCCESS = {accepted}", "db-counts.txt, status.json")
         duplicate_unit = "rows" if live else "groups"
@@ -333,15 +347,23 @@ def evaluate(evid):
                 continuous = first == 1 and last == db["total_rows"] and dup_sequences == 0
                 add("db_sequence_range", OK if continuous else FAIL,
                     f"sequence {first}~{last}, DB 전체 행 {db['total_rows']}", "db-counts.txt")
-            if status.get("failCount") is None:
-                add("status_fail", INCONCLUSIVE, "상태 API failCount 없음", "status.json")
-            else:
-                add("status_fail", FAIL if status["failCount"] else OK, f"failCount {status['failCount']}", "status.json")
             add("db_dlq", FAIL if db["dlq_rows"] else OK, f"캠페인 DLQ 행 {db['dlq_rows']}", "db-counts.txt")
-        if mode == "integrity" and status.get("currentStock") != 0:
-            add("stock_final", FAIL, f"종료 후 재고 {status.get('currentStock')}", "status.json")
     except (Missing, KeyError) as e:
-        add("db", INCONCLUSIVE, f"DB·상태 증거 누락: {e}", "db-counts.txt, status.json")
+        add("db", INCONCLUSIVE, f"DB 증거 누락: {e}", "db-counts.txt")
+
+    if live:
+        fail_count = status_count(status, "failCount")
+        if fail_count is None:
+            add("status_fail", INCONCLUSIVE, "상태 API failCount 없음 또는 유효하지 않음", "status.json")
+        else:
+            add("status_fail", FAIL if fail_count else OK, f"failCount {fail_count}", "status.json")
+
+    if integrity_target_met:
+        stock = status_count(status, "currentStock")
+        if stock is None:
+            add("stock_final", INCONCLUSIVE, "상태 API currentStock 없음 또는 유효하지 않음", "status.json")
+        else:
+            add("stock_final", FAIL if stock else OK, f"종료 후 재고 {stock}", "status.json")
 
     # ---- 정합성 dry-run (TEST_GUIDE 8.2: 최종 검증 필수). anomalyCount는 4.4 기준이 아니므로 유형만 기록한다(8.3). ----
     try:

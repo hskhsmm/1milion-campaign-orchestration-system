@@ -3,6 +3,7 @@ HERE="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 source "$HERE/../../ops/scripts/lib-ssm.sh"
 
 LOADGEN_REPO=/home/ssm-user/1milion-campaign-orchestration-system
+LOADGEN_PATH=/usr/local/bin:/usr/local/sbin:/usr/bin:/usr/sbin:/bin:/sbin
 LAG='sum(kafka_consumergroup_lag{consumergroup="campaign-participation-group"})'
 
 prom_command() {

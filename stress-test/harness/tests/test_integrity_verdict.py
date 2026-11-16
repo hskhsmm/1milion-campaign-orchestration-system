@@ -105,10 +105,13 @@ class LiveIntegrityVerdictTest(unittest.TestCase):
         self.save("bridge-counter-resets.json", prom_value(0))
         self.save("status.json", {"data": {"successCount": 2, "currentStock": 0, "failCount": 0}})
         (self.evidence / "redis-memory.tsv").write_text("1 primary:6379 50\n")
+        self.save_db_count(2)
+
+    def save_db_count(self, count):
         (self.evidence / "db-counts.txt").write_text(
             "| total_rows | success_count | dup_sequence_rows | dup_user_rows | first_sequence | last_sequence |\n"
             "+------------+---------------+-------------------+---------------+----------------+---------------+\n"
-            "| 2          | 2             | 0                 | 0             | 1              | 2             |\n"
+            f"| {count:<10} | {count:<13} | 0                 | 0             | 1              | {count:<13} |\n"
             "| dlq_rows |\n"
             "+----------+\n"
             "| 0        |\n"
@@ -133,3 +136,37 @@ class LiveIntegrityVerdictTest(unittest.TestCase):
         summary["metrics"]["dropped_iterations"] = {"count": 1}
         self.save("k6-summary.json", summary)
         self.assertEqual("INCONCLUSIVE", verdict.evaluate(self.evidence)["verdict"])
+
+
+    def test_short_load_with_remaining_stock_is_inconclusive(self):
+        summary = self.read("k6-summary.json")
+        summary["metrics"]["iterations"]["count"] = 1
+        summary["metrics"]["participation_success"]["count"] = 1
+        self.save("k6-summary.json", summary)
+        self.save("bridge-published-final.json", prom_value(1))
+        self.save("status.json", {"data": {"successCount": 1, "currentStock": 1, "failCount": 0}})
+        self.save_db_count(1)
+        result = verdict.evaluate(self.evidence)
+        self.assertEqual("INCONCLUSIVE", result["verdict"])
+        self.assertEqual("OK", next(c["status"] for c in result["checks"] if c["id"] == "db_counts"))
+
+    def test_full_load_with_remaining_stock_fails(self):
+        self.save("status.json", {"data": {"successCount": 2, "currentStock": 1, "failCount": 0}})
+        result = verdict.evaluate(self.evidence)
+        self.assertEqual("FAIL", result["verdict"])
+        self.assertEqual("FAIL", next(c["status"] for c in result["checks"] if c["id"] == "stock_final"))
+
+    def test_missing_status_fields_are_inconclusive(self):
+        self.save("status.json", {"data": {}})
+        result = verdict.evaluate(self.evidence)
+        self.assertEqual("INCONCLUSIVE", result["verdict"])
+        checks = {c["id"]: c["status"] for c in result["checks"]}
+        for key in ("db_counts", "stock_final", "status_fail"):
+            self.assertEqual("INCONCLUSIVE", checks[key])
+
+    def test_missing_status_does_not_hide_confirmed_count_mismatch(self):
+        (self.evidence / "status.json").unlink()
+        self.save_db_count(1)
+        result = verdict.evaluate(self.evidence)
+        self.assertEqual("FAIL", result["verdict"])
+        self.assertEqual("FAIL", next(c["status"] for c in result["checks"] if c["id"] == "db_counts"))

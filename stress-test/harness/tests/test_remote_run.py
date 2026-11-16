@@ -22,7 +22,8 @@ class RemoteRunTest(unittest.TestCase):
             path.write_text("#!/usr/bin/env bash\nset -eu\n" + script)
             path.chmod(0o755)
 
-        stub("flock", "exit 0\n")
+        # 실제 Docker나 k6 명령에 닿기 전에 스텁 경로가 우선함을 확인한다.
+        stub("flock", '[[ "${PATH%%:*}" == "${0%/*}" ]]\n')
         stub("timeout", 'shift\nexec "$@"\n')
         stub("sleep", "exit 0\n")
         stub("curl", """echo '{"status":"success","data":{"result":[{"value":[1,"0"]}]}}'""")

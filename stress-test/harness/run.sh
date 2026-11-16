@@ -103,7 +103,7 @@ CONFIG
 cat > remote-run.sh <<'SCRIPT'
 $(cat "$HERE/remote-run.sh")
 SCRIPT
-systemd-run --unit=$RUN_ID --property=WorkingDirectory=$REMOTE_DIR --property=RuntimeMaxSec=$RUNTIME_LIMIT --property=TimeoutStopSec=30s /bin/bash $REMOTE_DIR/remote-run.sh
+systemd-run --unit=$RUN_ID --setenv=PATH=$LOADGEN_PATH --property=WorkingDirectory=$REMOTE_DIR --property=RuntimeMaxSec=$RUNTIME_LIMIT --property=TimeoutStopSec=30s /bin/bash $REMOTE_DIR/remote-run.sh
 REMOTE
 )
 launched=true
