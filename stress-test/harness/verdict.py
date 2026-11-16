@@ -14,6 +14,7 @@
 표준 라이브러리만 사용한다(Python 3.9 이상).
 """
 import json
+import math
 import re
 import sys
 from datetime import datetime, timedelta, timezone
@@ -62,20 +63,25 @@ def read_redis_watch(evid):
     return rows
 
 
-def read_db_counts(evid):
+def read_db_counts(evid, live):
     path = evid / "db-counts.txt"
     if not path.is_file():
         raise Missing("db-counts.txt")
     text = path.read_text()
     values = {}
-    for key in ("total_rows", "success_count", "dup_sequence_groups", "dup_user_groups"):
+    duplicate_unit = "rows" if live else "groups"
+    fields = ("total_rows", "success_count", f"dup_sequence_{duplicate_unit}", f"dup_user_{duplicate_unit}")
+    if live:
+        fields += ("first_sequence", "last_sequence", "dlq_rows")
+    for key in fields:
         # mysql --table 출력: 헤더 행 다음의 값 행에서 같은 열 위치의 값을 읽는다.
         m = re.search(r"\|([^\n]*\b" + key + r"\b[^\n]*)\|\n\+[-+]+\+\n\|([^\n]*)\|", text)
         if not m:
             raise Missing(f"db-counts.txt ({key} 없음)")
         headers = [h.strip() for h in m[1].split("|")]
         cells = [c.strip() for c in m[2].split("|")]
-        values[key] = int(cells[headers.index(key)])
+        value = cells[headers.index(key)]
+        values[key] = None if value == "NULL" else int(value)
     return values
 
 
@@ -83,7 +89,13 @@ def prom_scalar(doc):
     result = doc.get("data", {}).get("result", [])
     if not result:
         raise Missing("Prometheus 결과 비어 있음")
-    return float(result[0]["value"][1])
+    try:
+        value = float(result[0]["value"][1])
+        if len(result) != 1 or not math.isfinite(value) or doc.get("status", "success") != "success":
+            raise ValueError
+        return value
+    except (IndexError, KeyError, TypeError, ValueError) as e:
+        raise Missing("Prometheus 단일 숫자 증거가 유효하지 않음") from e
 
 
 def fmt_ts(epoch):
@@ -107,12 +119,26 @@ def evaluate(evid):
         add("run", INCONCLUSIVE, f"실행 모드를 확인할 수 없음: {mode}", "run.json")
         return finish(evid, run, checks)
     final_integrity = mode == "integrity" and purpose == "final"
+    live = "harness_sha" in run
+    interruptions = [
+        (name, (evid / name).read_text().strip())
+        for name in ("controller-interruption", "interruption") if (evid / name).is_file()
+    ]
+    interrupted = any(reason for _, reason in interruptions)
+    for name, reason in interruptions:
+        if reason:
+            add("interruption", INCONCLUSIVE, reason, name)
+    if live and (interrupted or run.get("k6_exit_code") not in (0, 99) or not run.get("drain_end_epoch")):
+        if not interrupted:
+            add("execution", INCONCLUSIVE, "k6 종료 코드 또는 원격 drain 완료 시각 누락", "run.json")
+        # 중단 뒤에는 응답을 세지 못한 접수도 있을 수 있다. 부분 파일을 보존한다.
+        return finish(evid, run, checks)
 
     # ---- 사전 점검 ----
     try:
         pre = load_json(evid, "precheck.json")
         expected, actual = pre["expected_md5"], pre["loadgen_md5"]
-        diff = [f for f in K6_FILES if expected.get(f) != actual.get(f)]
+        diff = [f for f in K6_FILES if not expected.get(f) or expected.get(f) != actual.get(f)]
         if diff:
             add("pre_version", FAIL,
                 f"부하 발생기 스크립트가 기준 커밋과 다름: {', '.join(diff)} "
@@ -142,6 +168,8 @@ def evaluate(evid):
             add("pre_baseline", INCONCLUSIVE, "부하 전 기준선 이상: " + ", ".join(problems), "precheck.json")
         else:
             add("pre_baseline", OK, "부하 전 lag 0, Hikari pending 0, ALB healthy = desired", "precheck.json")
+        if live and (not pre.get("checks") or not all(pre["checks"].values())):
+            add("pre_aws", INCONCLUSIVE, "실환경 사전 점검을 통과하지 못함", "precheck.json")
         if pre.get("active_campaigns"):
             add("pre_active_set", NOTE, f"부하 전 active Set에 남은 캠페인: {pre['active_campaigns']}", "precheck.json")
     except (Missing, KeyError) as e:
@@ -161,7 +189,11 @@ def evaluate(evid):
             accepted = k6_count(metrics, "participation_success")
             k6_fail = k6_count(metrics, "participation_fail")
             total = run.get("total_requests")
-            if accepted != total:
+            iterations = metrics.get("iterations", {}).get("count")
+            if live and (iterations != total or k6_count(metrics, "dropped_iterations")):
+                add("k6_target", INCONCLUSIVE,
+                    f"목표 {total}, 완료 iteration {iterations}, 202 {accepted}", "k6-summary.json")
+            elif accepted != total:
                 add("k6_target", FAIL, f"participation_success {accepted} ≠ TOTAL_REQUESTS {total}", "k6-summary.json")
             else:
                 add("k6_target", OK, f"participation_success {accepted}", "k6-summary.json")
@@ -214,14 +246,17 @@ def evaluate(evid):
             add("queue_watch", OK, f"Queue 감시 {fmt_ts(rows[0]['ts'])}부터 {len(rows)}건 기록", "redis-watch.log")
         last = rows[-1]
         peak = max(r["llen"] for r in rows)
+        if live and last["ts"] < run.get("load_end_epoch", float("inf")):
+            raise Missing("부하 종료 이후 Redis 표본 없음")
         if last["llen"] != 0:
             add("queue_final", FAIL, f"마지막 기록 {fmt_ts(last['ts'])}의 LLEN {last['llen']} (최대 {peak})", "redis-watch.log")
         else:
             add("queue_final", OK, f"마지막 기록 {fmt_ts(last['ts'])} LLEN 0 (최대 {peak})", "redis-watch.log")
         if last["inflight"] is not None:
             remaining = last["inflight"]
+            peak_inflight = max(row["inflight"] for row in rows if row["inflight"] is not None)
             add("inflight_final", FAIL if remaining else OK,
-                f"마지막 기록 {fmt_ts(last['ts'])} ZCARD {remaining}", "redis-watch.log")
+                f"마지막 기록 {fmt_ts(last['ts'])} ZCARD {remaining} (최대 {peak_inflight})", "redis-watch.log")
         elif final_integrity:
             add("inflight_final", INCONCLUSIVE, "종료 in-flight 증거 누락", "redis-watch.log")
     except (Missing, KeyError) as e:
@@ -229,14 +264,30 @@ def evaluate(evid):
 
     try:
         drain = load_json(evid, "drain.json")
-        if drain.get("drained"):
-            add("drain", OK, f"부하 종료 후 {drain.get('waited_seconds')}초 안에 LLEN·lag 0", "drain.json")
+        if drain.get("drained") is True:
+            add("drain", OK, f"부하 종료 후 {drain.get('waited_seconds')}초 안에 Queue·in-flight·lag 0", "drain.json")
+        elif drain.get("drained") is None:
+            add("drain", INCONCLUSIVE, "제한 시간 안에 연속 배출 완료를 확인하지 못함", "drain.json")
         else:
             add("drain", FAIL,
                 f"{drain.get('waited_seconds')}초 안에 drain 안 됨 (마지막 LLEN {drain.get('last_llen')}, lag {drain.get('last_lag')})",
                 "drain.json")
     except Missing as e:
         add("drain", INCONCLUSIVE, f"drain 확인 누락: {e}", "drain.json")
+
+    if live:
+        try:
+            peaks = {}
+            for line in (evid / "redis-memory.tsv").read_text().splitlines():
+                _, node, used = line.split()
+                peaks[node] = max(peaks.get(node, 0), int(used))
+            if len(peaks) != run.get("redis_primaries"):
+                raise ValueError("primary 메모리 표본 수 불일치")
+            add("redis_memory", OK,
+                f"primary별 최대 관측값 {', '.join(str(v) for v in sorted(peaks.values(), reverse=True))} bytes "
+                f"(중단 기준 {run.get('redis_guard_bytes')} bytes)", "redis-memory.tsv")
+        except (OSError, ValueError) as e:
+            add("redis_memory", INCONCLUSIVE, f"Redis 메모리 기록 확인 불가: {e}", "redis-memory.tsv")
 
     # ---- Kafka ----
     try:
@@ -248,6 +299,8 @@ def evaluate(evid):
     if final_integrity:
         try:
             published = prom_scalar(load_json(evid, "bridge-published-final.json"))
+            if live and prom_scalar(load_json(evid, "bridge-counter-resets.json")) != 0:
+                raise Missing("측정 구간의 Bridge counter reset을 확인함")
             if not published.is_integer() or published < 0:
                 raise Missing("Kafka 발행 건수가 유효하지 않음")
             if accepted is None:
@@ -260,7 +313,7 @@ def evaluate(evid):
 
     # ---- DB·상태 API ----
     try:
-        db = read_db_counts(evid)
+        db = read_db_counts(evid, live)
         status = load_json(evid, "status.json")["data"]
         api_success = status.get("successCount")
         counts = {"k6 202": accepted, "status API": api_success, "DB SUCCESS": db["success_count"]}
@@ -270,9 +323,21 @@ def evaluate(evid):
             add("db_counts", FAIL, f"건수 불일치: {counts}, DB 전체 행 {db['total_rows']}", "db-counts.txt, status.json")
         else:
             add("db_counts", OK, f"k6 202 = status API = DB SUCCESS = {accepted}", "db-counts.txt, status.json")
-        dups = db["dup_sequence_groups"] + db["dup_user_groups"]
-        add("db_duplicates", FAIL if dups else OK,
-            f"sequence 중복 {db['dup_sequence_groups']}, user 중복 {db['dup_user_groups']}", "db-counts.txt")
+        duplicate_unit = "rows" if live else "groups"
+        dup_sequences, dup_users = (db[f"dup_{key}_{duplicate_unit}"] for key in ("sequence", "user"))
+        add("db_duplicates", FAIL if dup_sequences or dup_users else OK,
+            f"sequence 중복 {dup_sequences}, user 중복 {dup_users}", "db-counts.txt")
+        if live:
+            first, last = db["first_sequence"], db["last_sequence"]
+            if db["total_rows"]:
+                continuous = first == 1 and last == db["total_rows"] and dup_sequences == 0
+                add("db_sequence_range", OK if continuous else FAIL,
+                    f"sequence {first}~{last}, DB 전체 행 {db['total_rows']}", "db-counts.txt")
+            if status.get("failCount") is None:
+                add("status_fail", INCONCLUSIVE, "상태 API failCount 없음", "status.json")
+            else:
+                add("status_fail", FAIL if status["failCount"] else OK, f"failCount {status['failCount']}", "status.json")
+            add("db_dlq", FAIL if db["dlq_rows"] else OK, f"캠페인 DLQ 행 {db['dlq_rows']}", "db-counts.txt")
         if mode == "integrity" and status.get("currentStock") != 0:
             add("stock_final", FAIL, f"종료 후 재고 {status.get('currentStock')}", "status.json")
     except (Missing, KeyError) as e:
@@ -296,6 +361,8 @@ def evaluate(evid):
     # ---- 실행 중 변경 ----
     try:
         acts = load_json(evid, "scaling.json")
+        if live:
+            acts += load_json(evid, "worker-scaling.json")
         # 중간에 중단된 실행은 끝 시각이 없으므로 판정 시각까지 본다.
         start = run["load_start_epoch"]
         end = run.get("drain_end_epoch") or run.get("load_end_epoch") or datetime.now(timezone.utc).timestamp()
@@ -327,6 +394,10 @@ def finish(evid, run, checks):
         verdict = "PASS" if run.get("purpose") == "final" else "VALID"
     result = {"run_id": evid.name, "mode": run.get("mode"), "purpose": run.get("purpose"),
               "verdict": verdict, "checks": checks}
+    if "harness_sha" in run:
+        result["conditions"] = {key: run.get(key) for key in (
+            "expected_app_sha", "loadgen_sha", "harness_sha", "start_condition", "total_requests", "max_vus"
+        )}
     if run.get("purpose") == "fault":
         result.update(judge_fault(run.get("fault", {}), checks, verdict))
     return result
@@ -373,8 +444,9 @@ def write(evid, result):
                 lines.append(f"- {label}: " + "; ".join(result[key]))
     lines += [f"- RUN_ID: `{result['run_id']}`",
               f"- 모드·목적: {result['mode']} / {result['purpose']}",
-              "- 기준: stress-test/TEST_GUIDE.md 8.3 (탐색은 PASS 대신 VALID)", "",
-              "| 항목 | 결과 | 근거 | 출처 |", "| --- | --- | --- | --- |"]
+              "- 기준: stress-test/TEST_GUIDE.md 8.3 (탐색은 PASS 대신 VALID)"]
+    lines.extend(f"- {key}: `{value}`" for key, value in result.get("conditions", {}).items())
+    lines += ["", "| 항목 | 결과 | 근거 | 출처 |", "| --- | --- | --- | --- |"]
     for c in result["checks"]:
         lines.append(f"| {c['id']} | {c['status']} | {c['detail']} | `{c['source']}` |")
     (evid / "verdict.md").write_text("\n".join(lines) + "\n")
@@ -385,7 +457,11 @@ def main():
         print(__doc__.strip().splitlines()[2], file=sys.stderr)
         return 2
     evid = Path(sys.argv[1])
-    result = evaluate(evid)
+    try:
+        result = evaluate(evid)
+    except (AttributeError, KeyError, IndexError, TypeError, ValueError) as e:
+        check = {"id": "invalid_evidence", "status": INCONCLUSIVE, "detail": str(e), "source": "evidence"}
+        result = finish(evid, {}, [check])
     write(evid, result)
     print(f"판정: {result['verdict']}")
     for c in result["checks"]:

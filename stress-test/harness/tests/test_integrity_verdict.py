@@ -81,3 +81,55 @@ class IntegrityVerdictTest(unittest.TestCase):
     def test_missing_publish_evidence_is_inconclusive(self):
         (self.evidence / "bridge-published-final.json").unlink()
         self.assertEqual("INCONCLUSIVE", verdict.evaluate(self.evidence)["verdict"])
+
+
+class LiveIntegrityVerdictTest(unittest.TestCase):
+    def setUp(self):
+        fixture = IntegrityVerdictTest()
+        fixture.setUp()
+        self.addCleanup(fixture.doCleanups)
+        self.evidence = fixture.evidence
+        self.save = fixture.save
+        self.read = lambda name: json.loads((self.evidence / name).read_text())
+        run = self.read("run.json")
+        run.update(harness_sha="fixture", k6_exit_code=99, drain_end_epoch=run["load_end_epoch"] + 4,
+                   redis_primaries=1, redis_guard_bytes=100)
+        self.save("run.json", run)
+        pre = self.read("precheck.json")
+        pre["checks"] = {"fixtures": True}
+        self.save("precheck.json", pre)
+        summary = self.read("k6-summary.json")
+        summary["metrics"]["iterations"] = {"count": 2}
+        self.save("k6-summary.json", summary)
+        self.save("worker-scaling.json", [])
+        self.save("bridge-counter-resets.json", prom_value(0))
+        self.save("status.json", {"data": {"successCount": 2, "currentStock": 0, "failCount": 0}})
+        (self.evidence / "redis-memory.tsv").write_text("1 primary:6379 50\n")
+        (self.evidence / "db-counts.txt").write_text(
+            "| total_rows | success_count | dup_sequence_rows | dup_user_rows | first_sequence | last_sequence |\n"
+            "+------------+---------------+-------------------+---------------+----------------+---------------+\n"
+            "| 2          | 2             | 0                 | 0             | 1              | 2             |\n"
+            "| dlq_rows |\n"
+            "+----------+\n"
+            "| 0        |\n"
+        )
+
+    def test_live_pass_can_have_p95_threshold_exit(self):
+        self.assertEqual("PASS", verdict.evaluate(self.evidence)["verdict"])
+
+    def test_interrupted_load_is_not_compared_against_partial_receipts(self):
+        (self.evidence / "interruption").write_text("redis-memory-guard\n")
+        self.save("bridge-published-final.json", prom_value(3))
+        result = verdict.evaluate(self.evidence)
+        self.assertEqual("INCONCLUSIVE", result["verdict"])
+        self.assertEqual(["interruption"], [check["id"] for check in result["checks"]])
+
+    def test_counter_reset_makes_publish_count_inconclusive(self):
+        self.save("bridge-counter-resets.json", prom_value(1))
+        self.assertEqual("INCONCLUSIVE", verdict.evaluate(self.evidence)["verdict"])
+
+    def test_dropped_iterations_mean_target_was_not_verified(self):
+        summary = self.read("k6-summary.json")
+        summary["metrics"]["dropped_iterations"] = {"count": 1}
+        self.save("k6-summary.json", summary)
+        self.assertEqual("INCONCLUSIVE", verdict.evaluate(self.evidence)["verdict"])
