@@ -74,12 +74,23 @@ ssm_fetch() {
 
   : > "$out.b64"
   while (( offset <= size )); do
-    ssm_run "$instance_id" "tail -c +$offset $tmp.b64 | head -c $chunk" | tr -d '[:space:]' >> "$out.b64"
+    local part
+    if ! part=$(ssm_run "$instance_id" "tail -c +$offset $tmp.b64 | head -c $chunk" | tr -d '[:space:]') ||
+      (( ${#part} != (size - offset + 1 < chunk ? size - offset + 1 : chunk) )); then
+      ssm_run "$instance_id" "rm -f $tmp.b64" >/dev/null || true
+      rm -f "$out.b64"
+      return 1
+    fi
+    printf '%s' "$part" >> "$out.b64"
     offset=$(( offset + chunk ))
     printf '\r  %s: %d/%d bytes' "$(basename "$out")" "$(( offset > size ? size : offset - 1 ))" "$size" >&2
   done
   echo >&2
   ssm_run "$instance_id" "rm -f $tmp.b64" >/dev/null || true
-  base64 -d -i "$out.b64" | gunzip -c > "$out"
+  if ! (set -o pipefail; base64 -d -i "$out.b64" | gunzip -c > "$out.part"); then
+    rm -f "$out.b64" "$out.part"
+    return 1
+  fi
+  mv "$out.part" "$out" || return 1
   rm -f "$out.b64"
 }

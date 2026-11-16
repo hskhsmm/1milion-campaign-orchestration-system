@@ -109,6 +109,8 @@ echo "$SMOKE_RESPONSE"
 
 ## 4. 150만 정합성 테스트
 
+공용 앱 3대 고정 구성(`combined-fixed`)에서는 [정합성 하네스](harness/README.md)로 사전 점검, 새 캠페인 생성, k6 실행, 배출 확인, 증거 수집 및 판정을 연속 실행할 수 있다. 아래는 각 단계를 개별적으로 수행하는 절차다.
+
 ### 4.1 캠페인 생성
 
 ```bash
@@ -161,8 +163,8 @@ ALB 조회 IAM 정책을 아직 적용하지 못했다면, 위 실행 전에 운
 | 구간 | 통과 조건 |
 | --- | --- |
 | API | `participation_success=1,500,000`, `participation_5xx=0`, `participation_fail=0` |
-| Redis | 재고 0, 실제 Queue LLEN 0 |
-| Bridge/Kafka | publish 종료 후 consumer lag 0 |
+| Redis | 재고 0, 실제 Queue LLEN·in-flight ZCARD 0 |
+| Bridge/Kafka | 캠페인 발행 건수와 202 일치, publish 종료 후 consumer lag 0 |
 | DB | `successCount=1,500,000`, `failCount=0` |
 | 정합성 | campaign-user 중복 0, sequence 중복 0 |
 
@@ -336,6 +338,7 @@ Kafka 파티션 수, RDS·Redis 사양, 로그 수준:
 | `status.json` | 상태 API의 `successCount`·`failCount`·재고 | 4.4의 status `curl` 출력 저장 | 비교 목적에 따라 | 필수 |
 | `redis-watch.log` | `LLEN`, `SISMEMBER active:campaigns`, 재고의 1초 단위 기록 | 부하 전 `./ops/scripts/redis-watch-start.sh <id>`, drain 후 `./ops/scripts/redis-watch-fetch.sh --stop "$EVID"` | Queue 비교 시 필수 | 필수 |
 | `kafka-lag-range.json` | 테스트 구간의 관측 lag | 아래 Prometheus 구간 조회 | lag peak 비교 시 필수 | capacity 검증 시 필수 |
+| `bridge-published-final.json` | 캠페인별 최종 Kafka 발행 수 | 배출 후 `sum(bridge_messages_published_total{campaignId=…})` | 해당 시 | integrity 검증 시 필수 |
 | `kafka-lag-final.json` | 종료 후 consumer group lag | 아래 Prometheus 시점 조회 | drain 비교 시 필수 | 필수 |
 | `db-counts.txt` | SUCCESS 건수, sequence·user 중복 | 4.4의 DB 직접 검증 SQL 결과 저장 | 정합성 비교 시 필수 | 필수 |
 | `consistency.json` | 정합성 dry-run 결과(`anomalyCount`) | `POST /api/admin/consistency-recovery`(`dryRun=true`, `autoFix=false`, `campaignId`) 후 `GET .../executions/<id>` 응답 저장 | 필요 시 | 필수 |
@@ -369,7 +372,7 @@ ssm_run "$MCP" "curl -fsSG localhost:9090/api/v1/query --data-urlencode 'query=$
 # 쿼리·구간·step을 manifest.md에 적는다. 최대값은 구간 조회의 샘플 중 관측 최대값이다.
 ```
 
-DB 직접 조회는 전용 스크립트가 없다. `ops/scripts/close-stale-campaigns.sh`와 같은 방식으로 앱 인스턴스에서 `mysql:8.4` 컨테이너를 띄워 4.4의 SELECT만 실행하고, 실행 시각·인스턴스·SQL을 출력과 함께 `db-counts.txt`에 남긴다. 이 스크립트의 `CONFIRM=yes` 경로는 데이터를 바꾸므로 재사용하지 않는다.
+하네스는 DB 직접 조회를 수집한다. 수동 조회 시에는 `ops/scripts/close-stale-campaigns.sh`와 같은 방식으로 앱 인스턴스에서 `mysql:8.4` 컨테이너를 띄워 4.4의 SELECT만 실행하고, 실행 시각·인스턴스·SQL을 출력과 함께 `db-counts.txt`에 남긴다. 이 스크립트의 `CONFIRM=yes` 경로는 데이터를 바꾸므로 재사용하지 않는다.
 
 ### 8.3 최종 검증 판정
 

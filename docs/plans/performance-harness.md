@@ -66,7 +66,7 @@ API의 p95/p99를 낮추면서 Redis Queue가 계속 증가하거나 DB 반영�
 
 ### 4.2 실행별 결과물
 
-먼저 기존 `stress-test/run-test.sh`와 `stress-test/TEST_GUIDE.md`에 직접 연결되는 기록 절차를 사용한다. 실제 실행에서 반복되는 수작업과 누락되는 증거를 확인한 뒤에만 별도 래퍼를 만든다. 다음 결과물은 향후 목표이며 현재 구현 완료를 뜻하지 않는다.
+먼저 기존 `stress-test/run-test.sh`와 `stress-test/TEST_GUIDE.md`에 직접 연결되는 기록 절차를 사용한다. 공용 앱 3대 고정 환경의 정합성 실행은 [정합성 하네스](../../stress-test/harness/README.md)가 순서대로 수행한다. 아래 표는 지속 RPS·전후 비교를 포함하는 전체 목표다.
 
 | 결과물 | 필수 내용 |
 | --- | --- |
