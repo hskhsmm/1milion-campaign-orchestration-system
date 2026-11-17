@@ -41,10 +41,26 @@ Grafana에서 여러 파티션의 lag가 같은 시간대에 상승했다. 하�
 
 표는 10초 간격이며, 발행과 DB 반영은 1분 평균이다. lag가 높았던 구간에도 1분 평균 DB 반영률은 초당 약 5,500건이었다. 지속적인 Consumer 전체 중단을 뒷받침하는 증거는 없었다. 짧은 poll 중단이나 오프셋 커밋 지연은 두 지표만으로 구분할 수 없다. 사후 확인 시 모니터링 서버가 내려가 있어 파티션별 원본과 짧은 구간의 Consumer 카운터를 추가 조회하지 못했다.
 
+## Grafana 캡처 비교
+
+두 화면에서 Kafka lag는 파티션별로 표시된다. 위 표의 최대치는 파티션을 합산한 그룹 lag다. 그래프마다 y축 범위가 다르므로 피크 크기는 표의 수치로 비교한다.
+
+**200만 건 기준선.** 파티션별 lag는 부하 종료 무렵 0으로 돌아왔다. 파티션별 lag와 Redis 메모리 패널을 함께 담았다.
+
+![200만 건 Kafka 파티션별 lag와 Redis 메모리](assets/250m-validation/2026-11-16-200m-05-kafka-lag-redis-memory.jpg)
+
+**250만 건 확장 검증.** 가운데 Kafka lag 피크를 왼쪽 DB 처리 지연과 같은 시간축에서 확인할 수 있다. 아래는 Redis 메모리 패널이다.
+
 ![Consumer DB 지연, Kafka lag, Redis 메모리](assets/250m-validation/2026-11-16-250m-03-consumer-db-latency-kafka-lag-redis-memory.jpg)
+
+**250만 건 API.** 왼쪽은 처리량과 p99, 오른쪽은 p95와 5xx다. 서버 응답 지연은 위 비교표의 k6 클라이언트 지연과 각각 측정 지점이 다르다.
 
 ![API TPS, 서버 응답 지연, 5xx](assets/250m-validation/2026-11-16-250m-01-api-tps-p95-p99-errors.jpg)
 
+**250만 건 Bridge와 Redis Queue.** 위쪽은 Bridge 처리 속도와 사이클 시간, 아래쪽은 캠페인별 Queue 적재량이다.
+
 ![Bridge 드레인과 Redis Queue](assets/250m-validation/2026-11-16-250m-02-bridge-drain-redis-queue.jpg)
+
+**250만 건 Bridge claim.** 테스트 시간대에 옮긴 이벤트 수를 초당 합계로 표시했다.
 
 ![Bridge claim 이벤트 처리량](assets/250m-validation/2026-11-16-250m-08-bridge-claim-events.jpg)
