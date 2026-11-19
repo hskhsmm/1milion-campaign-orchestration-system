@@ -265,6 +265,11 @@ jdbcTemplate.batchUpdate(
 
 150만 건 완주 기록에서 Redis Queue 최대 관측치는 9월 20일 1,065,735건, 11월 15일 캠페인 603에서는 5,439건이었습니다. 여러 차례의 병목 개선과 실행 조건 차이가 함께 반영된 결과입니다. [회차별 처리량·지연·적체 비교](docs/reports/2026-11-16-150m-benchmark-history.md)
 
+초기 실험에서는 DB 커넥션 대기를 확인한 뒤 Redis-first로 전환했습니다. 14차에서는 160만 요청을 보내 최종 DB 150만 건과 5xx 0건을 확인했습니다.
+
+<details>
+<summary>초기 1~14차 실험 상세 결과와 캡처 보기</summary>
+
 ### 전체 결과 추이
 
 | 차수 | 핵심 변경 | TPS | 정합성 | 비고 |
@@ -328,6 +333,8 @@ jdbcTemplate.batchUpdate(
 - 장애 테스트 적정 VUS: **500** (CPU 30% 수준으로 서버 여유 확보, Kafka lag/5xx 효과 명확히 관찰 가능)
 - 안정 운영 조건 탐색: VUS 500→1,000→1,500→2,000 단계적으로 올리며 CPU 70% 이하 구간 확인
 
+</details>
+
 ### 후단 처리량 관측 개선 및 150만 재검증
 
 기존 TPS는 API가 `202 Accepted`를 반환하는 속도만 의미했습니다. 이 지표만으로는 Redis Queue 이후 Bridge, Kafka, Consumer, MySQL 저장 구간의 실제 처리량을 분리해서 보기 어려웠습니다.
@@ -352,6 +359,9 @@ API TPS
 | Redis Queue 최대 적재 | 약 120만 건 |
 | DB 일시 실패 | 0건 |
 
+<details>
+<summary>150만 건 재검증 k6·Grafana 캡처 보기</summary>
+
 ![150만 k6 결과](docs/images/150m-k6-result.png)
 
 ![150만 API TPS 및 응답시간](docs/images/150m-api-tps-latency.png)
@@ -359,6 +369,8 @@ API TPS
 ![150만 Bridge drain 및 Redis Queue](docs/images/150m-bridge-redis-queue.png)
 
 ![150만 Consumer 후단 처리량](docs/images/150m-consumer-backend-tps.png)
+
+</details>
 
 > 이번 재검증을 통해 API 접수 속도와 실제 DB 반영 속도를 분리해서 볼 수 있게 되었고, Redis Queue 적체가 유입량과 후단 처리량의 불균형에서 발생한다는 점을 수치로 확인했습니다.
 
@@ -454,6 +466,9 @@ LPUSH 성공 시 SET, 이후 요청은 EXISTS 체크로 -997 반환 → 409.
 | T06 | RDS 접근 차단 및 복구 | ✅ | SG 3306 삭제/복구, 구조적 허점 2건 발견 및 수정 |
 | T07 | ASG 인스턴스 1대 종료 | ✅ | TPS 80% 급락→3~4분 완전 복구, 5xx 0건, diff=0 |
 
+<details>
+<summary>장애 주입 절차·복구 결과·캡처 보기</summary>
+
 ### T03 — Queue 만원 원자화 검증
 
 MAX_QUEUE_SIZE를 500K로 임시 축소 → Queue를 의도적으로 꽉 채움
@@ -493,6 +508,8 @@ RDS Security Group 3306 포트 삭제로 장애 주입 → 5xx 발생 → 복구
 | TPS 복구 시간 | 3~4분 |
 | 5xx 에러 | 0건 |
 | DB diff | 0 |
+
+</details>
 
 ---
 
@@ -547,7 +564,9 @@ Terraform으로 VPC, ALB, 앱 ASG, ElastiCache, RDS와 Kafka 브로커 EC2를 �
 | `alb.tf` | ALB, Target Group, HTTP Listener |
 | `iam.tf` | GitHub Actions OIDC Role |
 
-**ElastiCache 생성 시 SSM 자동 등록:**
+<details>
+<summary>ElastiCache 엔드포인트 자동 등록 설정 보기</summary>
+
 ```hcl
 resource "aws_ssm_parameter" "redis_cluster_nodes" {
   name  = "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
@@ -556,6 +575,8 @@ resource "aws_ssm_parameter" "redis_cluster_nodes" {
 }
 ```
 `terraform apply` 한 번으로 ElastiCache 엔드포인트가 SSM에 자동 갱신됩니다.
+
+</details>
 
 ### 보안 설계
 
