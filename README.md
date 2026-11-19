@@ -1,6 +1,6 @@
 # 내 맘대로 캠페인 — 선착순 이벤트 시스템
 
-> **Redis-first 선착순 이벤트 시스템 — 14회 부하 실험 · 150만 건 정합성 검증 · AWS 운영 자동화**
+> **Redis-first 선착순 이벤트 시스템 — AWS 앱 3대에서 200만 건 정합성 검증 · 전송 장애 복구 · 부하 테스트 자동화**
 >
 > *[event-driven-batch-kafka-system (v1, 10만 트래픽)](https://github.com/hskhsmm/event-driven-batch-kafka-system) 의 확장 프로젝트입니다.*
 
@@ -20,10 +20,11 @@
 ## 목차
 
 - [프로젝트 소개](#프로젝트-소개)
+- [200만 건 기준선과 250만 건 검증](#200만-건-기준선과-250만-건-검증)
 - [v1 vs v3 비교](#v1-vs-v3-비교)
 - [전체 아키텍처](#전체-아키텍처)
 - [핵심 설계 결정](#핵심-설계-결정)
-- [부하 테스트 — 14차 반복 실험](#부하-테스트--14차-반복-실험)
+- [초기 부하 테스트 — 14차 반복 실험](#초기-부하-테스트--14차-반복-실험)
 - [핵심 문제 발견 및 해결](#핵심-문제-발견-및-해결)
 - [장애 시나리오 테스트 T01~T07](#장애-시나리오-테스트-t01t07)
 - [인프라 구성](#인프라-구성)
@@ -53,27 +54,38 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
 | 방향 | 내용 |
 |------|------|
 | **구조적 전환** | 일반 접수 응답 경로에서 DB 쓰기 분리 → Redis-first v3 |
-| **인프라 코드화** | 전체 AWS 인프라를 Terraform으로 관리 |
-| **관측·운영 보조** | MCP 서버로 지표 조회·Slack 알림, AI를 활용한 원인 가설 정리 |
+| **전달 복구** | Kafka 성공 응답 전까지 Redis in-flight에 보관하고, 만료 건은 Queue로 복구 |
+| **드레인 개선** | Redis claim을 최대 10건씩 수행하고, Kafka 성공 건에 대한 Redis 정리도 묶어서 실행 |
+| **인프라 코드화** | Terraform으로 AWS 리소스를 정의하고, Ansible과 `make env-up`·`env-down`으로 테스트 환경 운영 |
+| **검증 자동화** | k6 부하 조건, Prometheus 지표, Kafka 발행, MySQL 건수를 하네스에서 수집·대조 |
 
-### 최종 결과
+## 200만 건 기준선과 250만 건 검증
 
-| 지표 | 값 |
-|------|----|
-| 평균 API TPS (202 응답 기준) | **~3,737/s** |
-| 피크 API TPS (202 응답 기준) | **~4,800/s** |
-| 총 처리 정합성 | **1,500,000건 (diff=0)** |
-| 5xx 에러 | **0건** |
-| v1 대비 TPS 향상 | **246 → 3,737 (약 15배)** |
-| 장애 테스트 | **7종 장애 시나리오 실행·복구 검증** |
+**HTTP 202 접수, Kafka 발행, MySQL 성공이 모두 2,000,000건으로 일치했습니다.** AWS 앱 `t3.small` 3대(`combined-fixed`)와 Kafka 브로커 3대를 사용했습니다. 직전 150만 건 실행 후 별도 캠페인에서 1만 건을 예열했고, `terraform-mcp` EC2에서 k6 `shared-iterations`, 3,000 VU로 본시험을 실행했습니다.
 
-> 2026-09-20 ASG 3대 재검증에서는 API 1분 rate 피크 `5,336/s`, Bridge 피크 `4,546/s`, Consumer DB 성공 경로 피크 `4,518/s`를 각각 관측했다. 이는 서로 다른 시점의 피크이며 지속 가능한 end-to-end TPS를 의미하지 않는다. 상세 조건과 해석은 [150만 건 AWS 복구·재검증 보고서](docs/reports/2026-09-20-aws-recovery-150m-validation.md)를 참조한다.
+| 지표 | 200만 건 대표 실행 (11월 16일) |
+| --- | ---: |
+| k6 평균 요청 완료율 | **5,712건/s** |
+| Grafana 참여 API 피크 (전체 상태 코드, 1분 rate) | **약 5,800건/s** |
+| k6 클라이언트 p95 / p99 | 1,027ms / 1,233ms |
+| Grafana 서버 p95 / p99 구간 피크 | 151ms / 177ms |
+| Redis Queue / Kafka 그룹 lag 최대 | 48,346건 / 1,041건 |
+| 대상 Redis primary 메모리 최대 / 하네스 중단 기준 | 254.8MB / 342MB |
+| DB 중복 / DLQ / HTTP 5xx | 0건 / 0건 / 0건 |
+
+Grafana 피크는 [참여 API 패널 캡처](docs/reports/assets/250m-validation/2026-11-16-200m-api-tps.jpg)에서 읽은 근삿값입니다. k6 평균과 Grafana 피크는 집계 구간이 다릅니다. k6 클라이언트 p95는 1초 목표를 27ms 초과했습니다. [200만·250만 검증 보고서](docs/reports/2026-11-16-250m-integrity-validation.md)
+
+**250만 건은 시작 조건에 따라 결과가 달랐습니다.** 11월 16일 회차에서는 250만 건 모두 DB에 반영했고, Redis 사용량은 최대 328.2MB로 342MB 중단 기준까지 13.8MB가 남았습니다. 새 앱을 기동한 뒤 2만 건씩 두 번 예열한 재시험은 Redis 사용량이 중단 기준을 넘으면서 멈췄습니다. 그때까지 서버가 접수한 2,429,716건은 Kafka 발행 및 DB 저장 건수와 일치했습니다. [반복 검증](docs/reports/2026-11-17-2m-2.5m-revalidation.md), [중단 회차 기록](https://github.com/hskhsmm/1milion-campaign-orchestration-system/pull/134)
+
+하네스는 실행별 배포 SHA, 앱 구성, 부하·예열 조건과 지표를 기록합니다. 총량 시험에서는 접수·발행·DB 정합성과 적체 해소를 확인합니다. 지속 도착률에서 처리량과 지연을 측정하는 시험은 별도로 실행합니다. [하네스 실행 가이드](stress-test/TEST_GUIDE.md)
 
 ---
 
 ## v1 vs v3 비교
 
-| 항목 | v1 (10만 트래픽) | v3 (150만 트래픽) |
+초기 구조 전환의 효과는 14차 150만 건 실험에서 확인했습니다.
+
+| 항목 | v1 (10만 트래픽) | v3 (초기 150만 검증) |
 |------|-----------------|------------------|
 | 목표 트래픽 | 10만 건 | **150만 건** |
 | API 응답 경로 | Redis DECR → **DB PENDING INSERT** → LPUSH | Redis Lua (검증·차감·Queue 적재) → 202 (**DB 미접촉**) |
@@ -90,18 +102,20 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
 ---
 
 ## 전체 아키텍처
+아래 그림은 초기 배포 구조를 보여줍니다. 이어지는 흐름은 현재의 in-flight와 DLQ 처리까지 포함합니다.
+
 <img width="923" height="775" alt="image" src="https://github.com/user-attachments/assets/0062b1a8-ca04-4304-84dc-07a384196dd9" />
 
 
 ```
-[클라이언트 160만 요청]
+[클라이언트 참여 요청]
          |
          | POST /api/campaigns/{id}/participation
          v
 [ALB — alb-batch-kafka-api]
          |
          v
-[Spring Boot App — ASG (t3.small × 2~3대)]
+[Spring Boot App — ASG (대표 검증: t3.small × 3대 고정)]
          |
          |-- 1. RateLimitService   SET NX EX 10  (10초 내 중복 요청 차단)
          |-- 2. Redis Lua          단일 원자 실행 (check-decr-enqueue.lua)
@@ -121,8 +135,9 @@ DB 쓰기를 응답 경로에서 분리한 뒤, 수평 확장과 후단 처리 �
          v
 [ParticipationBridge — @Scheduled 100ms]
   SMEMBERS active:campaigns
-  Lua로 queue → bridge:inflight claim 원자 이동 (동적 batchSize: 500/1000/2000)
-  Kafka publish (userId 파티션 키) → 성공 시 claim 제거, 실패·종료 시 5분 뒤 Queue 복귀
+  Lua로 Queue → Redis in-flight 원자 이동 (대표 검증: 호출당 최대 10건)
+  Kafka publish (userId 파티션 키) → 성공한 claim을 묶어서 제거
+  실패·프로세스 종료로 남은 claim은 만료 후 Queue로 복구
          |
          v
 [Kafka — campaign-participation-topic]
@@ -208,7 +223,8 @@ v1에서 Consumer가 메시지를 1건씩 INSERT하던 것을 batchUpdate로 전
 ```java
 // DB 왕복 N→1: rewriteBatchedStatements=true
 jdbcTemplate.batchUpdate(
-    "INSERT IGNORE INTO participation_history (campaign_id, user_id, sequence, status, created_at) VALUES (?, ?, ?, 'SUCCESS', NOW())",
+    "INSERT INTO participation_history (campaign_id, user_id, sequence, status, created_at) "
+        + "VALUES (?, ?, ?, 'SUCCESS', NOW()) ON DUPLICATE KEY UPDATE id = id",
     batchArgs
 );
 ```
@@ -218,6 +234,8 @@ jdbcTemplate.batchUpdate(
 | DB 왕복 | N번 (건당 1회) | 1번 (배치) |
 | Consumer 지연 | 200ms | **7.5ms** |
 | Kafka lag | 9K 누적 | **거의 0** |
+
+현재 Consumer는 일시적인 DB 오류를 재시도하고, 잘못된 메시지는 DLQ 테이블에 저장합니다. Spring Batch Replay는 운영자가 선택한 재처리 대상만 기존 순번 그대로 다시 발행합니다. [DLQ Replay 운영 가이드](docs/runbooks/dlq-replay.md)
 
 ### 4. 파티션 키: campaignId → userId
 
@@ -241,7 +259,16 @@ jdbcTemplate.batchUpdate(
 
 ---
 
-## 부하 테스트 — 14차 반복 실험
+## 초기 부하 테스트 — 14차 반복 실험
+
+아래 수치는 초기 구조 전환 과정의 기록입니다. 최신 200만 건 시험과는 부하 및 예열 조건이 다릅니다. [150만 건 검증 비교](docs/reports/2026-11-16-150m-benchmark-history.md)
+
+150만 건 완주 기록에서 Redis Queue 최대 관측치는 9월 20일 1,065,735건, 11월 15일 캠페인 603에서는 5,439건이었습니다. 여러 차례의 병목 개선과 실행 조건 차이가 함께 반영된 결과입니다. [회차별 처리량·지연·적체 비교](docs/reports/2026-11-16-150m-benchmark-history.md)
+
+초기 실험에서는 DB 커넥션 대기를 확인한 뒤 Redis-first로 전환했습니다. 14차에서는 160만 요청을 보내 최종 DB 150만 건과 5xx 0건을 확인했습니다.
+
+<details>
+<summary>초기 1~14차 실험 상세 결과와 캡처 보기</summary>
 
 ### 전체 결과 추이
 
@@ -286,7 +313,7 @@ jdbcTemplate.batchUpdate(
 
 ### ASG 3대 CPU 97%
 
-TPS 3,737/s는 t3.small 3대를 CPU 97%까지 포화시키는 수치입니다.
+14차 실험에서 t3.small 앱 3대의 CPU가 97%에 이르렀을 때 평균 API TPS는 3,737/s였습니다.
 이 실험에서는 앱 CPU가 추가 확장 여부를 판단할 병목으로 관측됐습니다.
 
 ![ASG CPU 97%](docs/images/14th-asg-cpu-97.png)
@@ -305,6 +332,8 @@ TPS 3,737/s는 t3.small 3대를 CPU 97%까지 포화시키는 수치입니다.
 - VUS=3,000의 p95 2.15s는 서버를 한계까지 밀어붙인 스트레스 테스트 결과 — 정상 운영 목표 수치가 아님
 - 장애 테스트 적정 VUS: **500** (CPU 30% 수준으로 서버 여유 확보, Kafka lag/5xx 효과 명확히 관찰 가능)
 - 안정 운영 조건 탐색: VUS 500→1,000→1,500→2,000 단계적으로 올리며 CPU 70% 이하 구간 확인
+
+</details>
 
 ### 후단 처리량 관측 개선 및 150만 재검증
 
@@ -330,6 +359,9 @@ API TPS
 | Redis Queue 최대 적재 | 약 120만 건 |
 | DB 일시 실패 | 0건 |
 
+<details>
+<summary>150만 건 재검증 k6·Grafana 캡처 보기</summary>
+
 ![150만 k6 결과](docs/images/150m-k6-result.png)
 
 ![150만 API TPS 및 응답시간](docs/images/150m-api-tps-latency.png)
@@ -337,6 +369,8 @@ API TPS
 ![150만 Bridge drain 및 Redis Queue](docs/images/150m-bridge-redis-queue.png)
 
 ![150만 Consumer 후단 처리량](docs/images/150m-consumer-backend-tps.png)
+
+</details>
 
 > 이번 재검증을 통해 API 접수 속도와 실제 DB 반영 속도를 분리해서 볼 수 있게 되었고, Redis Queue 적체가 유입량과 후단 처리량의 불균형에서 발생한다는 점을 수치로 확인했습니다.
 
@@ -432,6 +466,9 @@ LPUSH 성공 시 SET, 이후 요청은 EXISTS 체크로 -997 반환 → 409.
 | T06 | RDS 접근 차단 및 복구 | ✅ | SG 3306 삭제/복구, 구조적 허점 2건 발견 및 수정 |
 | T07 | ASG 인스턴스 1대 종료 | ✅ | TPS 80% 급락→3~4분 완전 복구, 5xx 0건, diff=0 |
 
+<details>
+<summary>장애 주입 절차·복구 결과·캡처 보기</summary>
+
 ### T03 — Queue 만원 원자화 검증
 
 MAX_QUEUE_SIZE를 500K로 임시 축소 → Queue를 의도적으로 꽉 채움
@@ -472,6 +509,8 @@ RDS Security Group 3306 포트 삭제로 장애 주입 → 5xx 발생 → 복구
 | 5xx 에러 | 0건 |
 | DB diff | 0 |
 
+</details>
+
 ---
 
 ## 인프라 구성
@@ -495,7 +534,8 @@ VPC (172.31.0.0/16)
 │   └── Target Group → batch-kafka-app:8080
 │
 ├── ASG (batch-kafka-app-asg)
-│   ├── min=2, max=3
+│   ├── combined: min=2, desired=3, max=4
+│   ├── combined-fixed: 앱 3대 고정 (200만 건 기준선)
 │   ├── Target Tracking: CPU 60% (scale-in 비활성)
 │   └── CodeDeploy OneAtATime 순차 배포
 │
@@ -509,7 +549,7 @@ VPC (172.31.0.0/16)
 
 ### Terraform 구성
 
-전체 AWS 인프라를 Terraform으로 코드화했습니다.
+Terraform으로 VPC, ALB, 앱 ASG, ElastiCache, RDS와 Kafka 브로커 EC2를 정의했습니다. Kafka 브로커 설정과 데이터까지 포함한 클러스터 재생성은 별도 작업입니다.
 
 | 파일 | 관리 리소스 |
 |------|------------|
@@ -524,7 +564,9 @@ VPC (172.31.0.0/16)
 | `alb.tf` | ALB, Target Group, HTTP Listener |
 | `iam.tf` | GitHub Actions OIDC Role |
 
-**ElastiCache 생성 시 SSM 자동 등록:**
+<details>
+<summary>ElastiCache 엔드포인트 자동 등록 설정 보기</summary>
+
 ```hcl
 resource "aws_ssm_parameter" "redis_cluster_nodes" {
   name  = "/batch-kafka/prod/SPRING_DATA_REDIS_CLUSTER_NODES"
@@ -533,6 +575,8 @@ resource "aws_ssm_parameter" "redis_cluster_nodes" {
 }
 ```
 `terraform apply` 한 번으로 ElastiCache 엔드포인트가 SSM에 자동 갱신됩니다.
+
+</details>
 
 ### 보안 설계
 
