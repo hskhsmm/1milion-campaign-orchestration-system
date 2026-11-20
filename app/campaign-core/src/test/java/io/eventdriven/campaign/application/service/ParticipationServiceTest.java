@@ -4,6 +4,9 @@ import io.eventdriven.campaign.api.exception.business.DuplicateParticipationExce
 import io.eventdriven.campaign.api.exception.business.QueueFullException;
 import io.eventdriven.campaign.api.exception.business.RateLimitExceededException;
 import io.eventdriven.campaign.api.exception.business.StockExhaustedException;
+import io.eventdriven.campaign.api.exception.common.InfrastructureException;
+import io.eventdriven.campaign.api.exception.infrastructure.ParticipationResultUnknownException;
+import io.eventdriven.campaign.api.exception.infrastructure.ParticipationUnavailableException;
 import io.eventdriven.campaign.domain.entity.CampaignStatus;
 import io.eventdriven.campaign.domain.repository.CampaignRepository;
 import org.junit.jupiter.api.DisplayName;
@@ -12,7 +15,11 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.dao.QueryTimeoutException;
+import org.springframework.data.redis.RedisConnectionFailureException;
+import org.springframework.http.HttpStatus;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatCode;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.mockito.Mockito.*;
@@ -85,6 +92,67 @@ class ParticipationServiceTest {
 
         assertThatThrownBy(() -> participationService.participate(CAMPAIGN_ID, USER_ID))
                 .isInstanceOf(StockExhaustedException.class);
+    }
+
+    @Test
+    @DisplayName("Lua 타임아웃 → 결과 불명 503, Rate Limit 해제, 캠페인 종료 미호출")
+    void participate_luaTimeout_resultUnknown() {
+        when(rateLimitService.isAllowed(CAMPAIGN_ID, USER_ID)).thenReturn(true);
+        when(redisStockService.checkDecrEnqueue(CAMPAIGN_ID, USER_ID))
+                .thenThrow(new QueryTimeoutException("Redis command timed out"));
+
+        assertThatThrownBy(() -> participationService.participate(CAMPAIGN_ID, USER_ID))
+                .isInstanceOf(ParticipationResultUnknownException.class)
+                .satisfies(e -> {
+                    InfrastructureException ex = (InfrastructureException) e;
+                    assertThat(ex.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(ex.getCode()).isEqualTo("PARTICIPATION_007");
+                });
+
+        verify(rateLimitService).release(CAMPAIGN_ID, USER_ID);
+        verifyNoInteractions(campaignRepository);
+    }
+
+    @Test
+    @DisplayName("Lua 연결 실패도 결과 불명으로 처리")
+    void participate_luaConnectionFailure_resultUnknown() {
+        when(rateLimitService.isAllowed(CAMPAIGN_ID, USER_ID)).thenReturn(true);
+        when(redisStockService.checkDecrEnqueue(CAMPAIGN_ID, USER_ID))
+                .thenThrow(new RedisConnectionFailureException("connection lost"));
+
+        assertThatThrownBy(() -> participationService.participate(CAMPAIGN_ID, USER_ID))
+                .isInstanceOf(ParticipationResultUnknownException.class);
+    }
+
+    @Test
+    @DisplayName("Rate Limit 해제까지 실패해도 결과 불명 응답을 유지")
+    void participate_luaTimeout_releaseFailure_keepsResultUnknown() {
+        when(rateLimitService.isAllowed(CAMPAIGN_ID, USER_ID)).thenReturn(true);
+        when(redisStockService.checkDecrEnqueue(CAMPAIGN_ID, USER_ID))
+                .thenThrow(new QueryTimeoutException("Redis command timed out"));
+        doThrow(new QueryTimeoutException("Redis command timed out"))
+                .when(rateLimitService).release(CAMPAIGN_ID, USER_ID);
+
+        assertThatThrownBy(() -> participationService.participate(CAMPAIGN_ID, USER_ID))
+                .isInstanceOf(ParticipationResultUnknownException.class);
+    }
+
+    @Test
+    @DisplayName("Rate Limit 타임아웃 → 미접수 503, Lua 호출 없음")
+    void participate_rateLimitTimeout_unavailableWithoutLua() {
+        when(rateLimitService.isAllowed(CAMPAIGN_ID, USER_ID))
+                .thenThrow(new QueryTimeoutException("Redis command timed out"));
+
+        assertThatThrownBy(() -> participationService.participate(CAMPAIGN_ID, USER_ID))
+                .isInstanceOf(ParticipationUnavailableException.class)
+                .satisfies(e -> {
+                    InfrastructureException ex = (InfrastructureException) e;
+                    assertThat(ex.getHttpStatus()).isEqualTo(HttpStatus.SERVICE_UNAVAILABLE);
+                    assertThat(ex.getCode()).isEqualTo("PARTICIPATION_005");
+                });
+
+        verify(rateLimitService).release(CAMPAIGN_ID, USER_ID);
+        verifyNoInteractions(redisStockService);
     }
 
     @Test
